@@ -17,7 +17,9 @@ All the clockfaces from upstream are still here (Mario, Time in Words, World Map
 - An ESP32
 - A power supply of 3A or more
 
-Wire the matrix to the ESP32 as described by the [ESP32-HUB75-MatrixPanel-I2S-DMA](https://github.com/mrfaptastic/ESP32-HUB75-MatrixPanel-I2S-DMA#2-wiring-esp32-with-the-led-matrix-panel) library, which Clockwise uses. Upstream's [wiring diagram](https://github.com/jnthas/clockwise/blob/gh-pages/static/images/display_esp32_wiring_bb.png) shows the default connections.
+Wire the matrix to the ESP32 as described by the [ESP32-HUB75-MatrixPanel-I2S-DMA](https://github.com/mrfaptastic/ESP32-HUB75-MatrixPanel-I2S-DMA#2-wiring-esp32-with-the-led-matrix-panel) library, which Clockwise uses. The default connections are shown below (diagram from upstream Clockwise).
+
+[![Wiring: ESP32 to HUB75 panel](docs/images/display_esp32_wiring_thumb.png)](docs/images/display_esp32_wiring_bb.png)
 
 Ready-made options: Brian Lough's [ESP32 Trinity](https://github.com/witnessmenow/ESP32-Trinity) (just plug in the board), [Alexvanheu's PCB](https://github.com/Alexvanheu/Mario-Clock-PCB-ESP32) or hallard's [ESP32 D1 Mini matrix shield](https://github.com/hallard/WeMos-Matrix-Shield-DMA). The `3d-files/` folder has frame parts for printing around a 64x64 P3 panel.
 
