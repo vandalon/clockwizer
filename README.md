@@ -134,6 +134,10 @@ To build and publish, use `firmware/update-fw.sh`:
 
 Edit the `SERVER` and `PANELS` lines at the top of the script for your own server and clocks.
 
+## More documentation
+
+The [documentation](documentation/README.md) folder has the details: [getting started](documentation/getting-started.md), the [web settings page](documentation/web-ui.md), every [clockface](documentation/clockfaces.md), [updating firmware](documentation/updating-firmware.md), the [HTTP and telnet interface](documentation/control-api.md), [troubleshooting](documentation/troubleshooting.md) and [development](documentation/development.md).
+
 ## Credits and license
 
 Clockwise is by Jonathas Barbosa ([@jnthas](https://github.com/jnthas)); the clockfaces keep the credits of their authors in their own folders. Clockwizer is released under the same [MIT license](LICENSE).
