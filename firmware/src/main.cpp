@@ -448,6 +448,34 @@ static String fetchLatestMd5() {
   return md5;
 }
 
+// The md5 lookup blocks on the network (seconds when the update server is busy), so it runs in
+// its own task and the main loop, which animates the clockface, just polls for the result.
+enum Md5Fetch { MD5_IDLE, MD5_RUNNING, MD5_DONE };
+static volatile Md5Fetch md5Fetch = MD5_IDLE;
+static String md5Result;               // written by the task before it sets MD5_DONE
+static bool md5ForValidation = false;  // what the running fetch is for: proving a new build, or an update check
+static bool md5IgnoreSkips = false;
+static bool checkPending = false;      // an update check was asked for and waits for the fetch task
+static bool checkPendingForce = false;
+
+static void md5Task(void *) {
+  md5Result = fetchLatestMd5();
+  md5Fetch = MD5_DONE;
+  vTaskDelete(NULL);
+}
+
+static bool startMd5Fetch(bool forValidation, bool ignoreSkips) {
+  if (md5Fetch != MD5_IDLE) return false;
+  md5ForValidation = forValidation;
+  md5IgnoreSkips = ignoreSkips;
+  md5Fetch = MD5_RUNNING;
+  if (xTaskCreate(md5Task, "md5fetch", 10240, NULL, 1, NULL) != pdPASS) {
+    md5Fetch = MD5_IDLE;
+    return false;
+  }
+  return true;
+}
+
 // A new firmware must prove itself before the bootloader keeps it: it has to
 // run and be able to fetch version info from the update server, the same way
 // checkForUpdate() does. A build that can't update itself would be stuck on
@@ -461,13 +489,7 @@ void checkFirmwareValid(int64_t now) {
   }
   if (now > VALIDATE_AFTER_MS && now >= validateDue && wifi.isConnected()) {
     validateDue = now + VALIDATE_RETRY_MS;
-    if (fetchLatestMd5().length() == 32) {
-      esp_ota_mark_app_valid_cancel_rollback();
-      fwValidated = true;
-      TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware confirmed");
-      return;
-    }
-    TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware can't reach the update server yet");
+    startMd5Fetch(true, false);  // the result is handled in pollMd5Fetch()
   }
   if (now - wifiUpAt > ROLLBACK_AFTER_MS) {
     TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware could not check for updates, rolling back");
@@ -488,8 +510,7 @@ static bool inUpdateQuietHours() {
 // Compare the running firmware with the one on the update server and install
 // it when they differ.
 // ignoreSkips = telnet 'X': also retry builds that failed or rolled back.
-void checkForUpdate(bool ignoreSkips = false) {
-  String md5 = fetchLatestMd5();
+static void applyUpdateCheck(const String &md5, bool ignoreSkips) {
   String &status = ClockwiseWebServer::getInstance()->update_status;  // what the web UI shows
 
   if (md5.length() != 32) {
@@ -536,9 +557,42 @@ void checkForUpdate(bool ignoreSkips = false) {
   prefs.end();
 }
 
+// Asks for an update check; the fetch runs in the background and pollMd5Fetch() finishes the job.
+void checkForUpdate(bool ignoreSkips = false) {
+  checkPending = true;
+  checkPendingForce = checkPendingForce || ignoreSkips;
+}
+
+// Called every loop: starts a wanted check and handles a finished fetch.
+static void pollMd5Fetch() {
+  if (md5Fetch == MD5_IDLE && checkPending) {
+    if (startMd5Fetch(false, checkPendingForce)) {
+      checkPending = false;
+      checkPendingForce = false;
+    }
+    return;
+  }
+  if (md5Fetch != MD5_DONE) return;
+  String md5 = md5Result;
+  bool forValidation = md5ForValidation, ignoreSkips = md5IgnoreSkips;
+  md5Fetch = MD5_IDLE;
+  if (forValidation) {
+    if (md5.length() == 32) {
+      esp_ota_mark_app_valid_cancel_rollback();
+      fwValidated = true;
+      TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware confirmed");
+    } else {
+      TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware can't reach the update server yet");
+    }
+    return;
+  }
+  applyUpdateCheck(md5, ignoreSkips);
+}
+
 void loop() {
     int64_t now = millis();  // Keep this single now declaration
     if (!fwValidated) checkFirmwareValid(now);
+    pollMd5Fetch();
 #ifdef CW_TEST_CRASH
     if (now > 10000) abort(); // rollback test build: die before it can be confirmed
 #endif
@@ -567,7 +621,7 @@ void loop() {
           TelnetStream.println(currentTimeWithSeconds + " [INFO] Web UI asked for a firmware update check...");
           checkForUpdate();
         }
-        if (ClockwiseWebServer::getInstance()->face_requested.length() > 0) {
+        if (ClockwiseWebServer::getInstance()->face_requested.length() > 0 && md5Fetch == MD5_IDLE) {  // not while a fetch holds the heap
           String id = ClockwiseWebServer::getInstance()->face_requested;
           ClockwiseWebServer::getInstance()->face_requested = "";
           updateFirmware(id);
