@@ -79,6 +79,36 @@ if [ $GITHUB -eq 1 ]; then
 	fi
 	cp "$STAGE"/* "$PAGES/"
 	touch "$PAGES/.nojekyll"
+
+	# The web flasher: the page, the list of faces and a manifest per face. A flash from scratch
+	# needs the bootloader, partition table and boot_app0 as well, which all builds share.
+	cp -R ../docs/. "$PAGES/"
+	mkdir -p "$PAGES/flash"
+	cp ".pio/build/cw-cf-0x${FACES[0]}/bootloader.bin" ".pio/build/cw-cf-0x${FACES[0]}/partitions.bin" "$PAGES/flash/"
+	cp ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin "$PAGES/flash/"
+	VERSION=$(sed -n 's/.*CW_FW_VERSION="\\"\([^\\]*\)\\"".*/\1/p' platformio.ini | head -1)
+	python3 - "$PAGES" "$VERSION" <<'PYEOF'
+import json, os, sys
+pages, version = sys.argv[1:3]
+for face in json.load(open(os.path.join(pages, "faces.json"))):
+    name = "cw-cf-" + face["id"]
+    if not os.path.exists(os.path.join(pages, name + ".bin")):
+        continue
+    manifest = {
+        "name": "Clockwizer " + face["name"],
+        "version": version,
+        "builds": [{
+            "chipFamily": "ESP32",
+            "parts": [
+                {"path": "flash/bootloader.bin", "offset": 0x1000},
+                {"path": "flash/partitions.bin", "offset": 0x8000},
+                {"path": "flash/boot_app0.bin", "offset": 0xE000},
+                {"path": name + ".bin", "offset": 0x10000},
+            ],
+        }],
+    }
+    json.dump(manifest, open(os.path.join(pages, "manifest-" + name + ".json"), "w"), indent=2)
+PYEOF
 	cd "$PAGES"
 	git add -A
 	if git diff --cached --quiet && git rev-parse -q --verify HEAD > /dev/null; then

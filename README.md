@@ -58,7 +58,7 @@ The clockface folders are in `firmware/clockfaces/`, shared code in `firmware/li
 
 ### Web flasher
 
-Flashing from the browser (no tools needed) is planned for this fork. The upstream flasher at [clockwise.page](https://clockwise.page) only offers the original clockfaces.
+No tools needed: open **https://vandalon.github.io/clockwizer/** in Chrome or Edge on a computer, plug in the ESP32, pick a clockface and press *Connect and install*. It writes the whole flash, so it also works for a blank ESP32 or for moving an older Clockwise to this firmware, and it offers to set up WiFi when it's done. The page and its libraries are hosted in this repository (`docs/`), and published together with the firmware by `update-fw.sh -g`.
 
 ## Using the clock from your phone
 
