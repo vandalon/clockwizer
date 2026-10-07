@@ -1,0 +1,1366 @@
+#include "FootballTicker.h"
+#include "GoalAnimation.h"
+#include "TeamColors.h"
+
+#include <algorithm>
+#include <ArduinoJson.h>
+#include <Fonts/Picopixel.h>
+#include <HTTPClient.h>
+#include <TelnetStream.h>
+#include <mutex>
+#include <WiFi.h>
+#include <Preferences.h>
+#include <ezTime.h>
+
+#include <CWPreferences.h>
+#include "FootballCatalog.h"
+
+// Which competitions and favourite teams to follow is set on the settings page (see FootballCatalog.h
+// for what can be chosen). Matches are drawn in their competition's colour.
+static const char *PREF_LEAGUES = "fbLeagues";    // ESPN codes, comma separated
+static const char *PREF_FAVOURITES = "fbTeams";   // "id:abbreviation:c" (club) or ":n" (national team), comma separated
+static const size_t MAX_LEAGUES = 10, MAX_FAVOURITES = 8;  // every one is a download
+
+static const FootballLeague *findLeague(const String &code) {
+  for (const auto &league : FOOTBALL_LEAGUES)
+    if (code == league.code) return &league;
+  return nullptr;
+}
+
+// A favourite's matches in the competition's colour; the Netherlands and Germany keep their own
+static uint16_t favouriteColor(const String &abbreviation, bool national, const String &league) {
+  if (national && abbreviation == "NED") return 0xFC00;  // orange
+  if (national && abbreviation == "GER") return 0xFEA0;  // gold; black wouldn't show
+  const FootballLeague *known = findLeague(league);
+  return known ? known->color : 0xFFFF;
+}
+
+static std::vector<String> splitList(const String &list) {
+  std::vector<String> out;
+  int start = 0;
+  while (start <= (int)list.length()) {
+    int end = list.indexOf(',', start);
+    if (end < 0) end = list.length();
+    String item = list.substring(start, end);
+    item.trim();
+    if (!item.isEmpty()) out.push_back(item);
+    start = end + 1;
+  }
+  return out;
+}
+
+// The short code of a competition for faces that name it: the league's label from the catalog.
+// Matches of the national teams in any other competition are "INT".
+static const char *competitionCode(const char *league, bool nationalTeam) {
+  for (const auto &entry : FOOTBALL_LEAGUES)
+    if (strcmp(entry.code, league) == 0) return entry.label;
+  return nationalTeam ? "INT" : "";
+}
+
+// ESPN's "rrggbb" as RGB565, 0 when missing
+static uint16_t hexColor(const char *hex) {
+  if (!hex || strlen(hex) != 6) return 0;
+  long v = strtol(hex, nullptr, 16);
+  return ((v >> 19) & 0x1F) << 11 | ((v >> 10) & 0x3F) << 5 | ((v >> 3) & 0x1F);
+}
+
+// Bright enough to show on the LEDs
+static bool visible(uint16_t c) { return (c >> 11) >= 8 || ((c >> 5) & 63) >= 16 || (c & 31) >= 8; }
+
+// Bright enough for small two-tone details
+static bool showsAsDetail(uint16_t c) { return (c >> 11) >= 12 || ((c >> 5) & 63) >= 24 || (c & 31) >= 12; }
+
+// A team's home kit. Known teams come from TeamColors; for others ESPN's
+// colours are used. ESPN's second colour is sometimes the away kit (Germany's
+// turquoise) but for teams not in the table it's the best there is. Black
+// doesn't show on the LEDs, so a dark colour falls back to white or none.
+static TeamKit clubKit(const String &team, const char *league, const char *main, const char *alt) {
+  TeamKit kit;
+  if (lookupTeamKit(team, league, kit)) return kit;
+  uint16_t a = hexColor(main), b = hexColor(alt);
+  kit.shirt = visible(a) ? a : visible(b) ? b : 0xFFFF;
+  kit.shorts = visible(b) && b != kit.shirt ? b : 0xFFFF;
+  kit.second = showsAsDetail(b) && b != kit.shirt ? b : 0;
+  return kit;
+}
+
+static const uint16_t LIVE_COLOR = 0x0280;       // dim green playing-time bar
+static const uint16_t FINISHED_COLOR = 0x2104;   // dim grey full-time bar
+static const uint16_t HALF_TIME_COLOR = 0x0140;  // darker green half-time bar
+
+// Which live match to show in a slot (the "next live match every" setting). Live favourites come first in the list and get every
+// other slot (taking turns when there are several), so one is always back within a few seconds; the
+// other matches share the slots in between.
+static size_t pageAt(const std::vector<FootballTicker::Entry> &entries, unsigned long slot) {
+  size_t favourites = 0;
+  while (favourites < entries.size() && entries[favourites].live && entries[favourites].favourite) favourites++;
+  if (favourites == 0 || favourites == entries.size()) return slot % entries.size();
+  if (slot % 2 == 0) return (slot / 2) % favourites;
+  return favourites + (slot / 2) % (entries.size() - favourites);
+}
+
+// Matches that finished today stay on the ticker for the rest of the day, but
+// only while no match is live, and at most MAX_SHOWN of them.
+static const size_t MAX_SHOWN = 12;
+static const unsigned long RACE_SLIDE_MS = 600;  // places swapping in the F1 row
+// End of a match we only saw after it finished: kick-off + 2 halves, half
+// time and stoppage time
+static const time_t TYPICAL_MATCH_SECS = 115 * 60;
+static const int16_t CHAR_WIDTH = 6;        // default 5x7 font + 1px spacing
+
+static const unsigned long LIVE_REFRESH_MS = 10 * 1000UL;  // also how fast goals show up
+// Competitions without a match on are downloaded less often, to keep the
+// load on ESPN's (unofficial, unmetered) feed low during live matches
+static const unsigned long QUIET_BOARD_MS = 60 * 60 * 1000UL;
+static const unsigned long BOARD_RETRY_MS = 5 * 60 * 1000UL;  // after a failed download of a coming or past board
+static const unsigned long KICKOFF_REFRESH_MS = 60 * 1000UL;
+static const unsigned long TODAY_REFRESH_MS = 10 * 60 * 1000UL;
+static const unsigned long IDLE_REFRESH_MS = 30 * 60 * 1000UL;
+static const unsigned long RETRY_MS = 30 * 1000UL;
+static const unsigned long NATIONAL_CHECK_MS = 3 * 60 * 60 * 1000UL;
+static const unsigned long CONFIG_POLL_MS = 2 * 1000UL;
+static const unsigned long GOAL_EXPIRY_MS = 2 * 60 * 1000UL;
+static const unsigned long SUB_REFRESH_MS = 45 * 1000UL;  // how often a live match's summary is read for substitutions
+// Extras (begin(..., extras = true)): the coming matchdays and the league tables change slowly
+static const unsigned long NEXT_REFRESH_MS = 60 * 60 * 1000UL;
+static const unsigned long TABLES_REFRESH_MS = 3 * 60 * 60 * 1000UL;
+static const int NEXT_EXTRA_DAYS = 2;  // ESPN's undated board is one day: this many days after it are added
+// Downloads that aren't urgent (a quiet league, the coming matches) go one league at a time, this far apart
+static const unsigned long STAGGER_MS = 15 * 1000UL;
+static const unsigned long FIRST_STAGGER_MS = 2 * 1000UL;  // leagues or teams that have no data yet follow each other quickly
+static const uint32_t TASK_STACK_BYTES = 14336;  // a busy evening needs more than a quiet one (the retry without events)
+static const uint32_t MIN_FREE_BLOCK = 10000;    // below this largest free block a refresh is skipped: an out of memory aborts the chip
+static const size_t MAX_UPCOMING = 24;  // a Champions League evening kicks off nine at once
+
+// Feeds the HTTP stream to ArduinoJson without busy-waiting. Stream's own
+// timed read spins while waiting for data, which starves the idle task on
+// core 0 and trips the task watchdog during a slow download.
+struct YieldingReader {
+  Stream &stream;
+  unsigned long timeoutMs;
+  size_t count = 0;
+
+  YieldingReader(Stream &s, unsigned long timeout) : stream(s), timeoutMs(timeout) {}
+
+  int read() {
+    if (++count % 1024 == 0) vTaskDelay(1);
+    unsigned long start = millis();
+    do {
+      int c = stream.read();
+      if (c >= 0) return c;
+      vTaskDelay(1);
+    } while (millis() - start < timeoutMs);
+    return -1;
+  }
+
+  size_t readBytes(char *buffer, size_t length) {
+    size_t n = 0;
+    for (; n < length; n++) {
+      int c = read();
+      if (c < 0) break;
+      buffer[n] = c;
+    }
+    return n;
+  }
+};
+
+// The debug messages go to the serial port and the telnet server. One lock: the ticker task and the clock loop
+// both write to the telnet stream.
+static void logf(const char *format, ...) {
+  static std::mutex lock;
+  char line[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(line, sizeof(line), format, args);
+  va_end(args);
+  std::lock_guard<std::mutex> guard(lock);
+  Serial.print(line);
+  TelnetStream.print(line);
+}
+
+static time_t parseEspnDate(const char *date) {
+  int y, mo, d, h, mi;
+  if (sscanf(date, "%d-%d-%dT%d:%d", &y, &mo, &d, &h, &mi) != 5) return 0;
+  return ezt::makeTime(h, mi, 0, d, mo, y);
+}
+
+void FootballTicker::setResultWindow(uint32_t secs) {
+  if (secs == _resultWindowSecs) return;
+  _resultWindowSecs = secs;
+  _footballNextAt = 0;  // download again now: a longer window needs the boards of the days before
+}
+
+void FootballTicker::begin(CWDateTime *dateTime, bool withRace, bool extras, uint32_t resultWindowSecs) {
+  if (_started) return;
+  _started = true;
+  _withRace = withRace;
+  _extras = extras;
+  _resultWindowSecs = resultWindowSecs;
+  _dateTime = dateTime;
+  loadConfig();
+  _doc = new DynamicJsonDocument(16384);  // a full Champions League evening needs ~7KB, a Formula 1 weekend ~10KB
+  // Core 0, so fetching never stalls the display loop on core 1
+  xTaskCreatePinnedToCore(task, "football", TASK_STACK_BYTES, this, 1, nullptr, 0);
+}
+
+extern volatile bool firmwareUpdating;  // main.cpp
+
+void FootballTicker::task(void *self) {
+  FootballTicker *ticker = static_cast<FootballTicker *>(self);
+  for (;;) {
+    if (firmwareUpdating) {  // the update has the network and the heap to itself
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    }
+    unsigned long wait = RETRY_MS;
+    if (ESP.getMaxAllocHeap() < MIN_FREE_BLOCK) {
+      // C++ exceptions are on: a failed allocation that nobody catches restarts the clock. Wait for the heap to recover.
+      logf("[Football] heap too low, skipping a refresh (free %u, largest block %u)\n", ESP.getFreeHeap(),
+           ESP.getMaxAllocHeap());
+    } else {
+      try {
+        ticker->dropOldDay();
+        wait = ticker->refresh();
+        if (ticker->_withRace) wait = std::min(wait, ticker->refreshRace());
+      } catch (const std::exception &e) {  // std::bad_alloc: keep the data of the last round
+        logf("[Football] out of memory in a refresh (%s), heap free %u, largest block %u\n", e.what(), ESP.getFreeHeap(),
+             ESP.getMaxAllocHeap());
+        ticker->_fetching = false;
+        ticker->_footballNextAt = millis() + RETRY_MS;
+        wait = RETRY_MS;
+      }
+    }
+    wait = std::min(wait, CONFIG_POLL_MS);  // a change on the settings page is picked up within seconds
+    vTaskDelay(pdMS_TO_TICKS(wait));
+  }
+}
+
+// How long until the next local midnight, when the day's scores are dropped
+static unsigned long untilMidnightMs(time_t localNow) {
+  return (SECS_PER_DAY - localNow % SECS_PER_DAY + 2) * 1000UL;
+}
+
+// At the first moment of a new local day all scores go, finished matches and
+// F1 results included, so the clock shows its date until today's matches are
+// known. Wiped even if the new downloads fail, so yesterday never lingers.
+void FootballTicker::dropOldDay() {
+  if (ezt::timeStatus() == timeNotSet) return;
+  uint32_t todayNr = _dateTime->localNow() / SECS_PER_DAY;
+  if (todayNr == _day) return;
+  _day = todayNr;
+  std::lock_guard<std::mutex> guard(_lock);
+  if (!_resultWindowSecs) _entries.clear();  // with a result window, older matches stay
+  _results.clear();
+  _race = Race();
+}
+
+// Fetches today's matches, updates the ticker and looks for goals.
+// Returns how long to wait before the next refresh.
+unsigned long FootballTicker::refresh() {
+  if (WiFi.status() != WL_CONNECTED) setStatus(FAILED);
+  if (WiFi.status() != WL_CONNECTED || ezt::timeStatus() != timeSet)
+    return 10 * 1000UL;
+  // Other leagues or favourites chosen: start over with what is followed now
+  if (loadConfig()) {
+    _boards.clear();
+    _footballNextAt = 0;
+    _nationalCheckedAt = 0;
+  }
+  // The task also wakes up for the F1 timer: only refresh when football is due
+  unsigned long start = millis();
+  if (_footballNextAt && (long)(start - _footballNextAt) < 0) return _footballNextAt - start;
+
+  time_t today = _dateTime->localNow();
+  uint32_t todayNr = today / SECS_PER_DAY;
+  _quietFetched = false;
+  _deferred = false;
+  _deferredFirst = false;
+  checkFavourites(today);
+
+  // Favourites first: a match that is also in one of the followed leagues is then skipped as a
+  // duplicate, so it keeps the favourite's colour. A club whose league is followed anyway is on
+  // that league's board already.
+  std::vector<String> keys;
+  bool ok = true;
+  for (Favourite &fav : _favourites) {
+    if (fav.day != todayNr || (!fav.national && followsLeague(fav.league))) continue;
+    String key = fav.league + "/" + fav.abbreviation;
+    ok &= updateBoard(key, fav.league.c_str(), today, fav.abbreviation.c_str(),
+                      favouriteColor(fav.abbreviation, fav.national, fav.league), fav.abbreviation.c_str());
+    keys.push_back(key);
+  }
+  for (const FootballLeague *league : _leagues) {
+    ok &= updateBoard(league->code, league->code, today, league->label, league->color, nullptr);
+    keys.push_back(league->code);
+  }
+  if (!ok) {  // keep showing the previous data
+    setStatus(FAILED);
+    _footballNextAt = millis() + RETRY_MS;
+    return RETRY_MS;
+  }
+  // With a result window, the finished matches of the days before as well. A failed download
+  // only means fewer old results, so it doesn't hold up the rest.
+  if (_resultWindowSecs) {
+    int days = (_resultWindowSecs + SECS_PER_DAY - 1) / SECS_PER_DAY;
+    for (int d = 1; d <= days; d++)
+      for (const FootballLeague *league : _leagues) {
+        String key = String(league->code) + "<" + d;
+        updatePastBoard(key, league->code, today - d * SECS_PER_DAY, league->label, league->color);
+        keys.push_back(key);
+      }
+  }
+
+  // Pointers into the boards: copying every match (strings, goals and cards) each round costs too much heap.
+  // The boards aren't touched again until the next round.
+  MatchList matches;
+  for (const String &key : keys) {
+    for (Match &m : _boards[key].matches) {
+      bool duplicate = false;  // e.g. the Netherlands playing Germany
+      for (const Match *o : matches)
+        if (o->kickoff == m.kickoff && o->home == m.home && o->away == m.away) duplicate = true;
+      if (!duplicate) matches.push_back(&m);
+    }
+  }
+
+  time_t nowUtc = ezt::now();
+  trackEndTimes(matches, nowUtc);
+  detectGoals(matches);
+  detectCards(matches);
+  checkSubstitutions(matches);
+
+  // Extras: the league tables and the coming matchdays (ESPN's scoreboard without a date)
+  std::vector<const Match *> coming;  // pointers into the boards: copies of the matches cost too much heap
+  if (_extras) {
+    bool fetched = false;  // one league per round: the others follow STAGGER_MS later
+    for (const FootballLeague *league : _leagues) {
+      Board &next = _boards[String("next/") + league->code];
+      if (!next.fetchedAt || (!_anyLive && millis() - next.fetchedAt >= NEXT_REFRESH_MS)) {
+        if (fetched) {
+          _deferred = true;
+          _deferredFirst |= !next.fetchedAt;
+        }
+        else {
+          fetched = true;
+          updateNextBoard(league->code, league->label, league->color);
+        }
+      }
+      for (const Match &m : _boards[String("next/") + league->code].matches)
+        if (m.state == 'p' && m.kickoff > nowUtc) coming.push_back(&m);
+    }
+    // Favourites outside the followed leagues: their next match, from the day it is on
+    for (const Favourite &fav : _favourites) {
+      if (fav.nextLeague.isEmpty() || fav.nextKickoff <= nowUtc || (!fav.national && followsLeague(fav.nextLeague))) continue;
+      String key = "next/" + fav.nextLeague + "/" + fav.abbreviation;
+      Board &next = _boards[key];
+      if (!next.fetchedAt || (!_anyLive && millis() - next.fetchedAt >= NEXT_REFRESH_MS)) {
+        if (fetched) {
+          _deferred = true;
+          _deferredFirst |= !next.fetchedAt;
+        }
+        else {
+          fetched = true;
+          updateNextFavouriteBoard(fav, key);
+        }
+      }
+      for (const Match &m : _boards[key].matches) {
+        bool known = false;  // the same match can come with a league too
+        for (const Match *o : coming) known |= o->kickoff == m.kickoff && o->home == m.home && o->away == m.away;
+        if (m.state == 'p' && m.kickoff > nowUtc && !known) coming.push_back(&m);
+      }
+    }
+    refreshTables(matches, coming);
+  }
+
+  buildEntries(matches, nowUtc);
+  buildOverview(matches, coming, nowUtc);
+
+  bool live = false, kickoffSoon = false, laterToday = false;
+  for (const Match *mp : matches) {
+    const Match &m = *mp;
+    if (m.state == 'i') live = true;
+    if (m.state == 'p') {
+      if (m.kickoff < nowUtc + 15 * 60) kickoffSoon = true;
+      else laterToday = true;
+    }
+  }
+  _anyLive = live;
+  unsigned long wait = IDLE_REFRESH_MS;
+  if (live) wait = LIVE_REFRESH_MS;
+  else if (kickoffSoon) wait = KICKOFF_REFRESH_MS;
+  else if (laterToday) wait = TODAY_REFRESH_MS;
+  wait = std::min(wait, untilMidnightMs(today));  // yesterday's scores go at midnight
+  if (_deferred) wait = std::min(wait, _deferredFirst ? FIRST_STAGGER_MS : STAGGER_MS);
+  logf("[Football] refreshed, heap free %u, largest block %u, stack left %u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+       (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+  setStatus(OK);
+  _footballNextAt = millis() + wait;
+  return wait;
+}
+
+// The 2026 grid by surname, as ESPN spells it: the driver's code and team colour
+#define RGB565(r, g, b) ((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3))
+static const struct { const char *surname, *code; uint16_t color; } DRIVERS[] = {
+  {"Verstappen", "VER", RGB565(54, 113, 255)},  {"Hadjar", "HAD", RGB565(54, 113, 255)},      // Red Bull
+  {"Russell", "RUS", RGB565(39, 244, 210)},     {"Antonelli", "ANT", RGB565(39, 244, 210)},   // Mercedes
+  {"Leclerc", "LEC", RGB565(232, 0, 45)},       {"Hamilton", "HAM", RGB565(232, 0, 45)},      // Ferrari
+  {"Norris", "NOR", RGB565(255, 128, 0)},       {"Piastri", "PIA", RGB565(255, 128, 0)},      // McLaren
+  {"Alonso", "ALO", RGB565(34, 153, 113)},      {"Stroll", "STR", RGB565(34, 153, 113)},      // Aston Martin
+  {"Gasly", "GAS", RGB565(255, 135, 188)},      {"Colapinto", "COL", RGB565(255, 135, 188)},  // Alpine
+  {"Albon", "ALB", RGB565(100, 196, 255)},      {"Sainz", "SAI", RGB565(100, 196, 255)},      // Williams
+  {"Lawson", "LAW", RGB565(170, 190, 255)},     {"Lindblad", "LIN", RGB565(170, 190, 255)},   // Racing Bulls
+  {"H\xC3\xBClkenberg", "HUL", RGB565(210, 50, 0)}, {"Bortoleto", "BOR", RGB565(210, 50, 0)},  // Audi
+  {"Ocon", "OCO", RGB565(255, 255, 255)},       {"Bearman", "BEA", RGB565(255, 255, 255)},    // Haas
+  {"P\xC3\xA9rez", "PER", RGB565(255, 215, 0)},   {"Bottas", "BOT", RGB565(255, 215, 0)},     // Cadillac
+};
+
+static uint16_t driverColor(const char *code) {
+  for (const auto &driver : DRIVERS)
+    if (strcmp(driver.code, code) == 0) return driver.color;
+  return 0xFFFF;
+}
+
+// Downloads the Formula 1 scoreboard when due. Returns how long until the next
+// download is due.
+unsigned long FootballTicker::refreshRace() {
+  if (WiFi.status() != WL_CONNECTED || ezt::timeStatus() != timeSet) return 10 * 1000UL;
+  unsigned long now = millis();
+  if (_raceNextAt && (long)(now - _raceNextAt) < 0) return _raceNextAt - now;
+  unsigned long wait = fetchRace();
+  _raceNextAt = millis() + wait;
+  return wait;
+}
+
+// The current Grand Prix weekend: the session being run, with its top three and
+// flag, and the top three of every session that finished today. Returns how
+// long to wait before the next download.
+unsigned long FootballTicker::fetchRace() {
+  StaticJsonDocument<512> filter;
+  JsonObject competition = filter["events"][0]["competitions"].createNestedObject();
+  filter["events"][0]["id"] = true;
+  competition["id"] = true;
+  competition["type"]["abbreviation"] = true;
+  competition["date"] = true;
+  competition["status"]["type"]["state"] = true;
+  JsonObject driver = competition["competitors"].createNestedObject();
+  driver["order"] = true;
+  driver["athlete"]["shortName"] = true;
+
+  if (!getJson("http://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard", filter)) return RETRY_MS;
+
+  time_t nowUtc = ezt::now();
+  time_t localNow = _dateTime->localNow();
+  Race live;                  // the session being run
+  std::vector<Race> results;  // the sessions finished today, in order
+  time_t nextStart = 0;
+  String eventId = (*_doc)["events"][0]["id"] | "", liveId;
+
+  for (JsonObject c : (*_doc)["events"][0]["competitions"].as<JsonArray>()) {
+    String state = c["status"]["type"]["state"] | "";
+    time_t date = parseEspnDate(c["date"] | "");
+    if (state == "pre") {
+      if (date > nowUtc && (nextStart == 0 || date < nextStart)) nextStart = date;
+      continue;
+    }
+    bool running = state == "in";
+    if (!running && (state != "post" || _dateTime->utcToLocal(date) / SECS_PER_DAY != localNow / SECS_PER_DAY))
+      continue;
+
+    Race r;
+    r.live = running;
+    String type = c["type"]["abbreviation"] | "";
+    if (type.startsWith("FP")) r.tag = 'P';
+    else if (type == "Qual" || type == "SS") r.tag = 'Q';  // SS: sprint qualifying
+    else if (type == "SR") r.tag = 'S';
+    for (int i = 0; i < 3; i++) r.color[i] = 0xFFFF;
+    for (JsonObject d : c["competitors"].as<JsonArray>()) {
+      int order = d["order"] | 0;
+      if (order < 1 || order > 3) continue;
+      // "M. Verstappen" -> "VER", in the team's colour; unknown drivers white
+      String name = d["athlete"]["shortName"] | "";
+      name = name.substring(name.lastIndexOf(' ') + 1, name.length());
+      String code = name.substring(0, 3);
+      code.toUpperCase();
+      for (const auto &driver : DRIVERS)
+        if (name == driver.surname) {
+          code = driver.code;
+          r.color[order - 1] = driver.color;
+        }
+      r.top[order - 1] = code;
+    }
+    if (running) {
+      live = r;
+      liveId = c["id"] | "";
+    } else {
+      results.push_back(r);
+    }
+  }
+
+  // The flag is in the session's own status: a safety car shows as yellow, a red flag as red
+  if (live.live && !eventId.isEmpty() && !liveId.isEmpty()) {
+    char url[160];
+    snprintf(url, sizeof(url),
+             "http://sports.core.api.espn.com/v2/sports/racing/leagues/f1/events/%s/competitions/%s/status",
+             eventId.c_str(), liveId.c_str());
+    StaticJsonDocument<64> flagFilter;
+    flagFilter["flag"] = true;
+    if (getJson(url, flagFilter)) {
+      String name = (*_doc)["flag"] | "";
+      name.toUpperCase();
+      if (name.indexOf("RED") >= 0) live.flag = 'r';
+      else if (name.indexOf("YELLOW") >= 0 || name.indexOf("SAFETY") >= 0 || name.indexOf("CAUTION") >= 0 ||
+               name == "SC" || name == "VSC") live.flag = 'y';
+      logf("[F1] flag: %s\n", name.c_str());
+    }
+  }
+  logf("[F1] %s %c %s %s %s, %d finished today\n", live.live ? "live" : "no session running",
+                live.tag ? live.tag : 'R', live.top[0].c_str(), live.top[1].c_str(), live.top[2].c_str(),
+                results.size());
+
+  {
+    std::lock_guard<std::mutex> guard(_lock);
+    _race = live;
+    _results.swap(results);
+  }
+
+  unsigned long wait = IDLE_REFRESH_MS;
+  if (live.live) {
+    wait = LIVE_REFRESH_MS;
+  } else if (nextStart > nowUtc) {
+    // Be there when it starts
+    if (nextStart - nowUtc < 15 * 60) wait = KICKOFF_REFRESH_MS;
+    else wait = std::min(IDLE_REFRESH_MS, (unsigned long)(nextStart - nowUtc - 14 * 60) * 1000UL);
+  }
+  return std::min(wait, untilMidnightMs(localNow));
+}
+
+// Reads the followed leagues and favourite teams from the settings. Returns true when they changed.
+bool FootballTicker::loadConfig() {
+  Preferences prefs;
+  prefs.begin("clockwise", true);
+  String leagues = prefs.getString(PREF_LEAGUES, CW_DEFAULT_FOOTBALL_LEAGUES);
+  String favourites = prefs.getString(PREF_FAVOURITES, CW_DEFAULT_FOOTBALL_TEAMS);
+  _pageMs = constrain(prefs.getUInt("matchSecs", 8), 3, 60) * 1000UL;
+  prefs.end();
+  String config = leagues + "|" + favourites;
+  if (config == _config) return false;
+  _config = config;
+
+  _leagues.clear();
+  for (const String &code : splitList(leagues)) {
+    const FootballLeague *league = findLeague(code);
+    if (league && _leagues.size() < MAX_LEAGUES) _leagues.push_back(league);
+  }
+  _favourites.clear();
+  for (const String &item : splitList(favourites)) {
+    int first = item.indexOf(':'), last = item.lastIndexOf(':');
+    if (first <= 0 || last <= first || _favourites.size() >= MAX_FAVOURITES) continue;
+    Favourite fav;
+    fav.id = item.substring(0, first);
+    fav.abbreviation = item.substring(first + 1, last);
+    fav.national = item.substring(last + 1) == "n";
+    _favourites.push_back(fav);
+  }
+  logf("[Football] Following %d leagues and %d favourites\n", _leagues.size(), _favourites.size());
+  return true;
+}
+
+bool FootballTicker::followsLeague(const String &code) {
+  for (const FootballLeague *league : _leagues)
+    if (code == league->code) return true;
+  return false;
+}
+
+bool FootballTicker::isFavourite(const String &abbreviation) {
+  for (const Favourite &fav : _favourites)
+    if (fav.abbreviation == abbreviation) return true;
+  return false;
+}
+
+bool FootballTicker::nationalFavourite(const char *abbreviation) {
+  for (const Favourite &fav : _favourites)
+    if (fav.national && fav.abbreviation == abbreviation) return true;
+  return false;
+}
+
+// Every few hours, see whether the favourites play today and in which
+// competition. A match day, once found, sticks until the day is over.
+void FootballTicker::checkFavourites(time_t today) {
+  if (_nationalCheckedAt != 0 && millis() - _nationalCheckedAt < NATIONAL_CHECK_MS) return;
+
+  bool ok = true;
+  for (Favourite &fav : _favourites) {
+    String league;
+    time_t kickoff;
+    if (!fetchNextMatch(fav.id.c_str(), league, kickoff)) {
+      ok = false;
+      continue;
+    }
+    fav.nextLeague = league;
+    fav.nextKickoff = kickoff;
+    bool playsToday = _dateTime->utcToLocal(kickoff) / SECS_PER_DAY == today / SECS_PER_DAY;
+    if (playsToday && !league.isEmpty()) {
+      fav.league = league;
+      fav.day = today / SECS_PER_DAY;
+    }
+    logf("[Football] %s next match: %s, %s\n", fav.abbreviation.c_str(), league.c_str(),
+                  playsToday ? "today" : "not today");
+  }
+  if (ok) _nationalCheckedAt = millis();
+}
+
+bool FootballTicker::fetchNextMatch(const char *teamId, String &league, time_t &kickoff) {
+  char url[96];
+  snprintf(url, sizeof(url), "http://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/%s", teamId);
+
+  StaticJsonDocument<256> filter;
+  JsonObject event = filter["team"]["nextEvent"].createNestedObject();
+  event["date"] = true;
+  event["league"]["slug"] = true;
+
+  if (!getJson(url, filter)) return false;
+  JsonObject next = (*_doc)["team"]["nextEvent"][0];
+  league = next["league"]["slug"] | "";
+  kickoff = parseEspnDate(next["date"] | "");
+  return true;
+}
+
+// Downloads a competition's scoreboard if it has a match on or about to start,
+// hasn't been downloaded today, or not for QUIET_BOARD_MS. Returns false if a
+// needed download failed and there's no data for today to fall back on.
+bool FootballTicker::updateBoard(const String &key, const char *league, time_t today, const char *label,
+                                 uint16_t color, const char *onlyTeam) {
+  Board &board = _boards[key];
+  uint32_t todayNr = today / SECS_PER_DAY;
+  time_t nowUtc = ezt::now();
+
+  bool busy = false;
+  for (const Match &m : board.matches)
+    if (m.state == 'i' || (m.state == 'p' && m.kickoff < nowUtc + 15 * 60)) busy = true;
+  if (board.day == todayNr && !busy && millis() - board.fetchedAt < QUIET_BOARD_MS) return true;
+  if (board.day == todayNr && !busy) {  // only refreshing: one such board per round, so they don't all come at once
+    if (_anyLive) return true;  // nothing but the live matches while a match is on, to keep it smooth
+    if (_quietFetched) {
+      _deferred = true;
+      return true;
+    }
+    _quietFetched = true;
+  }
+
+  std::vector<Match> matches;
+  if (!fetchScoreboard(league, today, label, color, onlyTeam, matches)) return board.day == todayNr;
+  if (onlyTeam) {
+    // ESPN files a match under its US Eastern date, which starts at 06:00 in
+    // Europe: a national team playing abroad overnight (00:00-06:00 here) is
+    // under yesterday's date. Look there too, and keep what is on today.
+    if (!fetchScoreboard(league, today - SECS_PER_DAY, label, color, onlyTeam, matches)) return board.day == todayNr;
+    matches.erase(std::remove_if(matches.begin(), matches.end(),
+                                 [&](const Match &m) {
+                                   return m.state != 'i' && _dateTime->utcToLocal(m.kickoff) / SECS_PER_DAY != todayNr;
+                                 }),
+                  matches.end());
+  }
+  logf("[Football] Downloaded %s\n", key.c_str());
+  board.matches.swap(matches);
+  board.day = todayNr;
+  board.fetchedAt = millis();
+  return true;
+}
+
+// A finished day's scoreboard, for the result window: downloaded once, again only while a
+// match of that day was still going
+bool FootballTicker::updatePastBoard(const String &key, const char *league, time_t day, const char *label,
+                                     uint16_t color) {
+  Board &board = _boards[key];
+  uint32_t dayNr = day / SECS_PER_DAY;
+  bool allFinished = std::all_of(board.matches.begin(), board.matches.end(), [](const Match &m) { return m.state == 'f'; });
+  if (board.day == dayNr && (allFinished || _anyLive || millis() - board.fetchedAt < BOARD_RETRY_MS)) return true;
+  std::vector<Match> matches;
+  if (!fetchScoreboard(league, day, label, color, nullptr, matches)) return false;
+  logf("[Football] Downloaded %s\n", key.c_str());
+  board.matches.swap(matches);
+  board.day = dayNr;
+  board.fetchedAt = millis();
+  return true;
+}
+
+// The coming matches of a competition: ESPN's scoreboard without a date, which is only the first day
+// with matches (a round runs from Friday to Sunday), plus the NEXT_EXTRA_DAYS days after it
+bool FootballTicker::updateNextBoard(const char *league, const char *label, uint16_t color) {
+  Board &board = _boards[String("next/") + league];
+  if (board.fetchedAt && millis() - board.fetchedAt < NEXT_REFRESH_MS) return true;
+  std::vector<Match> matches;
+  if (!fetchScoreboard(league, 0, label, color, nullptr, matches, false)) {
+    board.fetchedAt = millis() - NEXT_REFRESH_MS + BOARD_RETRY_MS;  // try again in a few minutes
+    return false;
+  }
+  if (!matches.empty()) {
+    time_t first = matches[0].kickoff;
+    for (const Match &m : matches) first = std::min(first, m.kickoff);
+    time_t day = _dateTime->utcToLocal(first) / SECS_PER_DAY * SECS_PER_DAY;
+    for (int d = 1; d <= NEXT_EXTRA_DAYS; d++) {
+      delay(500);  // not in a burst
+      std::vector<Match> more;
+      if (!fetchScoreboard(league, day + d * SECS_PER_DAY, label, color, nullptr, more, false)) break;  // fewer days will do
+      for (const Match &m : more) {
+        bool known = false;  // ESPN's dates are US Eastern: a match can show on two days
+        for (const Match &o : matches) known |= o.kickoff == m.kickoff && o.home == m.home && o.away == m.away;
+        if (!known) matches.push_back(m);
+      }
+    }
+  }
+  logf("[Football] Downloaded next/%s (%u matches)\n", league, (unsigned)matches.size());
+  board.matches.swap(matches);
+  board.fetchedAt = millis();
+  return true;
+}
+
+// A favourite's next match: its competition's scoreboard of the day it is on, only that team's matches
+bool FootballTicker::updateNextFavouriteBoard(const Favourite &fav, const String &key) {
+  Board &board = _boards[key];
+  uint16_t color = favouriteColor(fav.abbreviation, fav.national, fav.nextLeague);
+  time_t local = _dateTime->utcToLocal(fav.nextKickoff);
+  time_t day = local / SECS_PER_DAY * SECS_PER_DAY;
+  std::vector<Match> matches;
+  bool ok = fetchScoreboard(fav.nextLeague.c_str(), day, fav.abbreviation.c_str(), color, fav.abbreviation.c_str(), matches, false);
+  if (ok && local - day < 6 * 3600) {  // ESPN files these under the day before (US Eastern)
+    delay(500);
+    ok = fetchScoreboard(fav.nextLeague.c_str(), day - SECS_PER_DAY, fav.abbreviation.c_str(), color, fav.abbreviation.c_str(),
+                         matches, false);
+  }
+  if (!ok) {
+    board.fetchedAt = millis() - NEXT_REFRESH_MS + BOARD_RETRY_MS;  // try again in a few minutes
+    return false;
+  }
+  logf("[Football] Downloaded %s\n", key.c_str());
+  board.matches.swap(matches);
+  board.fetchedAt = millis();
+  return true;
+}
+
+// The tables of the competitions with a match today or coming up: a league is one table, the
+// Nations League, a World Cup or a qualifying round have groups. ESPN lists each in order, so a
+// team's place is its position in that list (teams level on points get consecutive places).
+// Competitions without a table (cups, friendlies) simply have none.
+void FootballTicker::refreshTables(const MatchList &matches, const std::vector<const Match *> &coming) {
+  std::vector<String> leagues;
+  auto add = [&](const Match &m) {
+    if (!m.league.isEmpty() && std::find(leagues.begin(), leagues.end(), m.league) == leagues.end())
+      leagues.push_back(m.league);
+  };
+  for (const Match *m : matches) add(*m);
+  for (const Match *m : coming) add(*m);
+
+  StaticJsonDocument<256> filter;
+  filter["children"][0]["standings"]["entries"][0]["team"]["abbreviation"] = true;
+  for (const String &league : leagues) {
+    auto at = _tablesAt.find(league);
+    if (at != _tablesAt.end() && millis() - at->second < TABLES_REFRESH_MS) continue;
+    _tablesAt[league] = millis();  // also after a failure: a missing table only means no places
+    char url[112];
+    snprintf(url, sizeof(url), "http://site.api.espn.com/apis/v2/sports/soccer/%s/standings", league.c_str());
+    if (!getJson(url, filter)) continue;
+    std::vector<std::vector<String>> groups;
+    for (JsonObject child : (*_doc)["children"].as<JsonArray>()) {
+      std::vector<String> teams;
+      for (JsonObject e : child["standings"]["entries"].as<JsonArray>()) teams.push_back(e["team"]["abbreviation"] | "");
+      if (!teams.empty()) groups.push_back(teams);
+    }
+    logf("[Football] Table %s: %d groups\n", league.c_str(), groups.size());
+    _tables[league].swap(groups);
+  }
+}
+
+// The places of both teams, only when they are in the same group: in a knockout round the
+// teams come from different groups, and their group places mean nothing there
+void FootballTicker::tablePositions(const Match &m, uint8_t &homePos, uint8_t &awayPos) {
+  homePos = awayPos = 0;
+  auto table = _tables.find(m.league);
+  if (table == _tables.end()) return;
+  for (const auto &group : table->second) {
+    auto home = std::find(group.begin(), group.end(), m.home), away = std::find(group.begin(), group.end(), m.away);
+    if (home == group.end() || away == group.end()) continue;
+    homePos = home - group.begin() + 1;
+    awayPos = away - group.begin() + 1;
+    return;
+  }
+}
+
+// The last word of a name, plain letters only (the display has no accents), at most 10
+static void surname(const char *fullName, char *out) {
+  const char *last = strrchr(fullName, ' ');
+  last = last ? last + 1 : fullName;
+  int n = 0;
+  for (; *last && n < 10; last++)
+    if (isalpha((unsigned char)*last) || *last == '-' || *last == '\'') out[n++] = *last;
+  out[n] = 0;
+}
+
+// localDay = 0: no date, which gets the coming matchday. withEvents (and extras) also reads
+// the goals and cards; when they don't fit in _doc, the scoreboard is read again without them.
+bool FootballTicker::fetchScoreboard(const char *league, time_t localDay, const char *label, uint16_t color,
+                                     const char *onlyTeam, std::vector<Match> &out, bool withEvents) {
+  char url[128];
+  if (localDay) {
+    tmElements_t day;
+    ezt::breakTime(localDay, day);
+    snprintf(url, sizeof(url),
+             "http://site.api.espn.com/apis/site/v2/sports/soccer/%s/scoreboard?dates=%04d%02d%02d",
+             league, day.Year + 1970, day.Month, day.Day);
+  } else {
+    snprintf(url, sizeof(url), "http://site.api.espn.com/apis/site/v2/sports/soccer/%s/scoreboard", league);
+  }
+  withEvents &= _extras;
+
+  // A busy evening may not fit in _doc with the goals and cards: then the scoreboard is read again without
+  // them, the scores matter more. A loop, not a recursive call: the filter stays on the stack of the caller.
+  for (;;) {
+    bool ok;
+    {
+      StaticJsonDocument<1024> filter;
+      JsonObject event = filter["events"].createNestedObject();
+      event["id"] = true;
+      event["date"] = true;
+      event["status"]["type"]["state"] = true;
+      event["status"]["type"]["name"] = true;
+      event["status"]["type"]["shortDetail"] = true;
+      JsonObject team = event["competitions"][0]["competitors"].createNestedObject();
+      team["homeAway"] = true;
+      team["score"] = true;
+      team["team"]["abbreviation"] = true;
+      team["team"]["color"] = true;
+      team["team"]["alternateColor"] = true;
+      if (withEvents) {
+        team["id"] = true;
+        JsonObject detail = event["competitions"][0]["details"].createNestedObject();
+        detail["clock"]["value"] = true;
+        detail["team"]["id"] = true;
+        detail["scoringPlay"] = true;
+        detail["yellowCard"] = true;
+        detail["redCard"] = true;
+        JsonObject player = detail["athletesInvolved"].createNestedObject();
+        player["jersey"] = true;
+        player["displayName"] = true;
+      }
+      ok = getJson(url, filter);
+    }
+    if (ok) break;
+    if (!withEvents || !_lastNoMemory) return false;
+    withEvents = false;
+  }
+
+  for (JsonObject e : (*_doc)["events"].as<JsonArray>()) {
+    String status = e["status"]["type"]["name"] | "";
+    if (status == "STATUS_POSTPONED" || status == "STATUS_CANCELED" || status == "STATUS_ABANDONED")
+      continue;
+
+    Match m;
+    m.label = label;
+    m.league = league;
+    m.competition = competitionCode(league, onlyTeam != nullptr && nationalFavourite(onlyTeam));
+    m.color = color;
+    m.kickoff = parseEspnDate(e["date"] | "");
+    if (m.kickoff == 0) continue;
+    m.id = e["id"] | "";
+
+    String state = e["status"]["type"]["state"] | "";
+    m.state = state == "in" ? 'i' : state == "post" ? 'f' : 'p';
+    m.detail = e["status"]["type"]["shortDetail"] | "";
+
+    String homeId;
+    for (JsonObject c : e["competitions"][0]["competitors"].as<JsonArray>()) {
+      bool home = strcmp(c["homeAway"] | "", "home") == 0;
+      (home ? m.home : m.away) = c["team"]["abbreviation"] | "?";
+      (home ? m.homeKit : m.awayKit) =
+          clubKit(home ? m.home : m.away, league, c["team"]["color"], c["team"]["alternateColor"]);
+      (home ? m.homeScore : m.awayScore) = atoi(c["score"] | "0");
+      if (home) homeId = c["id"] | "";
+    }
+
+    // Goals and cards: the clock is in seconds, "6'" is anywhere in the 6th minute
+    for (JsonObject d : e["competitions"][0]["details"].as<JsonArray>()) {
+      char kind = (d["redCard"] | false) ? 'r' : (d["yellowCard"] | false) ? 'y' : (d["scoringPlay"] | false) ? 'g' : 0;
+      if (!kind) continue;
+      int minute = std::min(120, (int)(d["clock"]["value"] | 0.0f) / 60 + 1);
+      Event event = {(uint8_t)minute, kind, homeId == (d["team"]["id"] | ""), 0, ""};
+      if (kind != 'g') {
+        JsonObject player = d["athletesInvolved"][0];
+        event.number = atoi(player["jersey"] | "0");
+        surname(player["displayName"] | "", event.name);
+      }
+      m.events.push_back(event);
+    }
+
+    if (onlyTeam && m.home != onlyTeam && m.away != onlyTeam) continue;
+    out.push_back(m);
+  }
+  return true;
+}
+
+// Downloads url into _doc, keeping only the fields in filter
+bool FootballTicker::updating() {
+  return _fetching || (_fetchEnded && millis() - _fetchEnded < 1500);
+}
+
+bool FootballTicker::getJson(const char *url, JsonDocument &filter) {
+  _fetching = true;
+  bool ok = getJsonNow(url, filter);
+  _fetching = false;
+  _fetchEnded = millis();
+  return ok;
+}
+
+bool FootballTicker::getJsonNow(const char *url, JsonDocument &filter) {
+  // Plain HTTP: public score data, and the ESP32's TLS client sometimes stalls
+  // after the first 16KB record of these ~50KB responses
+  WiFiClient client;
+  HTTPClient http;
+  http.useHTTP10(true);  // no chunked encoding, so the JSON can be streamed
+  http.setTimeout(10000);
+  if (!http.begin(client, url)) return false;
+
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    logf("[Football] %s: HTTP %d\n", url, code);
+    http.end();
+    return false;
+  }
+
+  YieldingReader reader(http.getStream(), 10000);
+  _doc->clear();
+  // ESPN nests deeper than ArduinoJson's default limit of 10, even in the skipped parts
+  DeserializationError err = deserializeJson(*_doc, reader, DeserializationOption::Filter(filter),
+                                             DeserializationOption::NestingLimit(20));
+  http.end();
+  _lastNoMemory = err == DeserializationError::NoMemory;
+  if (err) {
+    logf("[Football] %s: %s after %u bytes (heap free %u, largest block %u)\n", url, err.c_str(),
+                  reader.count, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    return false;
+  }
+  return true;
+}
+
+// Remembers when each match ended: when we first see it finished, or, if it
+// had already finished the first time we saw it, an estimate from the kick-off
+void FootballTicker::trackEndTimes(MatchList &matches, time_t nowUtc) {
+  std::map<String, time_t> endedAt;
+  for (Match *mp : matches) {
+    Match &m = *mp;
+    if (m.state != 'f') continue;
+    String key = m.key();
+    auto known = _endedAt.find(key);
+    if (known != _endedAt.end())
+      m.endedAt = known->second;
+    else if (_haveScores && _scores.count(key))
+      m.endedAt = nowUtc;  // still going at the previous refresh
+    else
+      m.endedAt = std::min(nowUtc, m.kickoff + TYPICAL_MATCH_SECS);
+    endedAt[key] = m.endedAt;
+  }
+  _endedAt.swap(endedAt);
+}
+
+// Compares scores with the highest seen so far for each match. The very first
+// refresh only records them, so a reboot doesn't replay goals. Only a score
+// above the highest counts: a feed that flaps (1-0, 0-0, 1-0) or a goal that
+// is ruled out and given again isn't celebrated twice.
+void FootballTicker::detectGoals(const MatchList &matches) {
+  std::map<String, std::pair<int, int>> scores;
+  std::vector<Goal> goals;
+
+  for (const Match *mp : matches) {
+    const Match &m = *mp;
+    String key = m.key();
+    auto previous = _scores.find(key);
+    scores[key] = previous == _scores.end()
+                      ? std::make_pair(m.homeScore, m.awayScore)
+                      : std::make_pair(std::max(m.homeScore, previous->second.first),
+                                       std::max(m.awayScore, previous->second.second));
+
+    if (!_haveScores || previous == _scores.end()) continue;
+    if (m.homeScore > previous->second.first)
+      goals.push_back({m.home, m.away, m.homeScore, m.awayScore, true, m.homeKit, m.awayKit, millis()});
+    if (m.awayScore > previous->second.second)
+      goals.push_back({m.home, m.away, m.homeScore, m.awayScore, false, m.homeKit, m.awayKit, millis()});
+  }
+  _scores.swap(scores);
+  _haveScores = true;
+
+  for (const Goal &g : goals)
+    logf("[Football] GOAL %s: %s %d-%d %s\n", g.homeScored ? g.home.c_str() : g.away.c_str(),
+                  g.home.c_str(), g.homeScore, g.awayScore, g.away.c_str());
+
+  if (goals.empty()) return;
+  std::lock_guard<std::mutex> guard(_lock);
+  _goals.insert(_goals.end(), goals.begin(), goals.end());
+  if (_goals.size() > 5) _goals.erase(_goals.begin(), _goals.end() - 5);
+}
+
+// New cards of live matches. Like goals, the first time a match is seen only records how many there are.
+void FootballTicker::detectCards(const MatchList &matches) {
+  std::map<String, uint8_t> counts;
+  std::vector<Incident> found;
+  for (const Match *mp : matches) {
+    const Match &m = *mp;
+    if (m.state != 'i') continue;
+    String key = m.key();
+    uint8_t count = 0;
+    for (const Event &e : m.events) count += e.kind != 'g';
+    auto previous = _cardCount.find(key);
+    counts[key] = previous == _cardCount.end() ? count : std::max(count, previous->second);  // a download without events isn't fewer
+    if (previous == _cardCount.end()) continue;
+    uint8_t seen = 0;
+    for (const Event &e : m.events) {
+      if (e.kind == 'g' || seen++ < previous->second) continue;
+      Incident in = {e.kind, m.home, m.away, m.homeKit, m.awayKit, e.home, e.minute, "", e.number, 0, millis()};
+      strcpy(in.name, e.name);
+      found.push_back(in);
+    }
+  }
+  _cardCount.swap(counts);
+  addIncidents(found);
+}
+
+// Substitutions aren't on the scoreboard: the summary of a live match has them, with the shirt numbers in the line-ups.
+// One summary per refresh, the one read longest ago.
+void FootballTicker::checkSubstitutions(const MatchList &matches) {
+  if (!_extras) return;
+  const Match *due = nullptr;
+  unsigned long dueSince = 0;
+  for (const Match *mp : matches) {
+    const Match &m = *mp;
+    if (m.state != 'i' || m.id.isEmpty()) continue;
+    auto checked = _subChecked.find(m.key());
+    unsigned long since = checked == _subChecked.end() ? 0xFFFFFFFFUL : millis() - checked->second;
+    if (since >= SUB_REFRESH_MS && since >= dueSince) {
+      due = mp;
+      dueSince = since;
+    }
+  }
+  // Forget the matches that are over, or these maps grow with every match played
+  for (auto it = _subChecked.begin(); it != _subChecked.end();) {
+    bool live = std::any_of(matches.begin(), matches.end(), [&](const Match *m) { return m->state == 'i' && m->key() == it->first; });
+    it = live ? std::next(it) : _subChecked.erase(it);
+  }
+  for (auto it = _subCount.begin(); it != _subCount.end();) {
+    bool live = std::any_of(matches.begin(), matches.end(), [&](const Match *m) { return m->state == 'i' && m->key() == it->first; });
+    it = live ? std::next(it) : _subCount.erase(it);
+  }
+  if (!due) return;
+  String key = due->key();
+  std::vector<Incident> found;
+  uint8_t total = 0;
+  _subChecked[key] = millis();
+  if (!fetchSubstitutions(*due, found, total)) return;
+  auto previous = _subCount.find(key);
+  bool known = previous != _subCount.end();
+  uint8_t seen = known ? previous->second : total;
+  _subCount[key] = std::max(total, seen);
+  if (!known) return;  // the first look only records how many there are
+  if (found.size() > seen) found.erase(found.begin(), found.begin() + seen); else found.clear();
+  addIncidents(found);
+}
+
+bool FootballTicker::fetchSubstitutions(const Match &match, std::vector<Incident> &found, uint8_t &total) {
+  char url[128];
+  snprintf(url, sizeof(url), "http://site.api.espn.com/apis/site/v2/sports/soccer/%s/summary?event=%s",
+           match.league.c_str(), match.id.c_str());
+  StaticJsonDocument<512> filter;
+  JsonObject key = filter["keyEvents"].createNestedObject();
+  key["type"]["type"] = true;
+  key["clock"]["value"] = true;
+  key["team"]["id"] = true;
+  key["participants"][0]["athlete"]["id"] = true;
+  JsonObject squad = filter["rosters"].createNestedObject();
+  squad["homeAway"] = true;
+  squad["team"]["id"] = true;
+  squad["roster"][0]["athlete"]["id"] = true;
+  squad["roster"][0]["jersey"] = true;
+  if (!getJson(url, filter)) return false;
+
+  std::map<String, uint8_t> jerseys;  // athlete id -> shirt number
+  String homeTeamId;
+  for (JsonObject squadJson : (*_doc)["rosters"].as<JsonArray>()) {
+    if (strcmp(squadJson["homeAway"] | "", "home") == 0) homeTeamId = squadJson["team"]["id"] | "";
+    for (JsonObject player : squadJson["roster"].as<JsonArray>())
+      jerseys[String(player["athlete"]["id"] | "")] = atoi(player["jersey"] | "0");
+  }
+  total = 0;
+  for (JsonObject e : (*_doc)["keyEvents"].as<JsonArray>()) {
+    if (strcmp(e["type"]["type"] | "", "substitution") != 0) continue;
+    total++;
+    // ESPN lists the player coming on first, then the one going off
+    uint8_t on = jerseys[String(e["participants"][0]["athlete"]["id"] | "")];
+    uint8_t off = jerseys[String(e["participants"][1]["athlete"]["id"] | "")];
+    Incident in = {'s', match.home, match.away, match.homeKit, match.awayKit, homeTeamId == (e["team"]["id"] | ""),
+                   (uint8_t)std::min(120, (int)(e["clock"]["value"] | 0.0f) / 60 + 1), "", off, on, millis()};
+    found.push_back(in);
+  }
+  return true;
+}
+
+void FootballTicker::addIncidents(const std::vector<Incident> &incidents) {
+  if (incidents.empty()) return;
+  std::lock_guard<std::mutex> guard(_lock);
+  _incidents.insert(_incidents.end(), incidents.begin(), incidents.end());
+  if (_incidents.size() > 6) _incidents.erase(_incidents.begin(), _incidents.end() - 6);
+}
+
+bool FootballTicker::nextIncident(Incident &incident) {
+  std::lock_guard<std::mutex> guard(_lock);
+  while (!_incidents.empty()) {
+    incident = _incidents.front();
+    _incidents.erase(_incidents.begin());
+    if (millis() - incident.detectedAt < GOAL_EXPIRY_MS) return true;
+  }
+  return false;
+}
+
+bool FootballTicker::nextGoal(Goal &goal) {
+  std::lock_guard<std::mutex> guard(_lock);
+  while (!_goals.empty()) {
+    goal = _goals.front();
+    _goals.erase(_goals.begin());
+    if (millis() - goal.detectedAt < GOAL_EXPIRY_MS) return true;
+  }
+  return false;
+}
+
+// Live matches, or when none are live, the matches that finished today (the
+// MAX_SHOWN most recent). Returns whether any finished match is shown.
+bool FootballTicker::buildEntries(const MatchList &matches, time_t nowUtc) {
+  size_t live = 0;
+  std::vector<const Match *> finished;
+  for (const Match *mp : matches) {
+    if (mp->state == 'i') live++;
+    if (mp->state == 'f') finished.push_back(mp);  // the boards only hold today's matches
+  }
+  std::sort(finished.begin(), finished.end(), [](const Match *a, const Match *b) {
+    return a->endedAt > b->endedAt;  // most recent first
+  });
+  finished.resize(live > 0 ? 0 : std::min(finished.size(), MAX_SHOWN));
+
+  std::vector<Entry> entries;
+  String log;
+  for (const Match *mp : matches) {
+    const Match &m = *mp;
+    bool show = m.state == 'i' || std::find(finished.begin(), finished.end(), mp) != finished.end();
+    if (!show) continue;
+
+    entries.push_back(toEntry(m));
+    log += String(" [") + m.label + "] " + m.detail + " " + m.home + " " + entries.back().score + " " + m.away;
+  }
+  logf("[Football] %d matches today, showing:%s\n", matches.size(), log.isEmpty() ? " none" : log.c_str());
+
+  // Live favourites go first, and stay there
+  std::stable_partition(entries.begin(), entries.end(), [](const Entry &e) { return e.live && e.favourite; });
+
+  std::lock_guard<std::mutex> guard(_lock);
+  _entries.swap(entries);
+  return !finished.empty();
+}
+
+FootballTicker::Entry FootballTicker::toEntry(const Match &m) {
+  // The playing time: "67'", "45'+2'" or "HT" while live
+  float progress = 1;
+  uint16_t barColor = FINISHED_COLOR;
+  if (m.state == 'i') {
+    bool halfTime = m.detail.startsWith("HT");
+    progress = halfTime ? 0.5f : std::min(1.0f, m.detail.toInt() / 90.0f);
+    barColor = halfTime ? HALF_TIME_COLOR : LIVE_COLOR;
+  }
+  Entry e{m.home, m.away, String(m.homeScore) + "-" + m.awayScore, m.homeKit, m.awayKit, m.color, progress, barColor,
+          m.state == 'i', m.detail, m.competition};
+  e.events = m.events;
+  e.favourite = isFavourite(m.home) || isFavourite(m.away);
+  tablePositions(m, e.homePos, e.awayPos);
+  return e;
+}
+
+// For faces with their own layout: all live matches, the finished ones (today's, or those of
+// the result window) and the coming ones, today's not started yet included
+void FootballTicker::buildOverview(const MatchList &matches, const std::vector<const Match *> &coming,
+                                  time_t nowUtc) {
+  Overview o;
+  std::vector<const Match *> finished, next;
+  for (const Match *mp : matches) {
+    const Match &m = *mp;
+    if (m.state == 'i') o.live.push_back(toEntry(m));
+    if (m.state == 'f' && (!_resultWindowSecs || m.endedAt + (time_t)_resultWindowSecs > nowUtc)) finished.push_back(mp);
+    if (m.state == 'p') next.push_back(mp);
+  }
+  std::stable_partition(o.live.begin(), o.live.end(), [](const Entry &e) { return e.favourite; });
+  std::sort(finished.begin(), finished.end(), [](const Match *a, const Match *b) { return a->endedAt > b->endedAt; });
+  finished.resize(std::min(finished.size(), MAX_SHOWN));
+  for (const Match *m : finished) o.finished.push_back(toEntry(*m));
+
+  for (const Match *m : coming) {
+    bool known = false;  // today's matches are on both boards
+    for (const Match *n : next) known |= n->kickoff == m->kickoff && n->home == m->home && n->away == m->away;
+    if (!known) next.push_back(m);
+  }
+  // Matches that kick off together keep their order between refreshes, or a face that takes turns in them swaps early
+  std::sort(next.begin(), next.end(), [](const Match *a, const Match *b) {
+    if (a->kickoff != b->kickoff) return a->kickoff < b->kickoff;
+    if (a->home != b->home) return a->home < b->home;
+    return a->away < b->away;
+  });
+  next.resize(std::min(next.size(), MAX_UPCOMING));
+  for (const Match *m : next) {
+    Upcoming u{m->home, m->away, m->homeKit, m->awayKit, m->kickoff, m->color};
+    tablePositions(*m, u.homePos, u.awayPos);
+    o.upcoming.push_back(u);
+  }
+
+  std::lock_guard<std::mutex> guard(_lock);
+  _overview = std::move(o);
+  _version++;
+}
+
+void FootballTicker::overview(Overview &out) {
+  std::lock_guard<std::mutex> guard(_lock);
+  out = _overview;
+}
+
+void FootballTicker::setStatus(Status status) {
+  std::lock_guard<std::mutex> guard(_lock);
+  _status = status;
+}
+
+FootballTicker::Status FootballTicker::status() {
+  std::lock_guard<std::mutex> guard(_lock);
+  return _status;
+}
+
+uint32_t FootballTicker::version() {
+  std::lock_guard<std::mutex> guard(_lock);
+  return _version;
+}
+
+static void drawName(Adafruit_GFX *display, int16_t x, int16_t y, const String &name, const TeamKit &kit) {
+  if (kit.second) {
+    drawTwoToneText(display, x, y, name.c_str(), kit.shirt, kit.second, 1);
+  } else {
+    display->setTextColor(kit.shirt);
+    display->setCursor(x, y);
+    display->print(name);
+  }
+}
+
+// The F1 logo in red and the first three of the race in white, each with a bar in
+// their team's colour underneath, in Picopixel (its cursor is the baseline).
+// A safety car turns the row's background yellow, a red flag red.
+static void drawRace(Adafruit_GFX *display, int16_t y, const FootballTicker::Race &race, bool slide) {
+  uint16_t background = race.flag == 'r' ? 0xA000 : race.flag == 'y' ? 0xC600 : 0;
+  uint16_t text = race.flag == 'y' ? 0 : 0xFFFF;  // black on yellow
+  display->fillRect(0, y - 1, 64, display->height() - (y - 1), background);  // to the very bottom
+  display->setFont(&Picopixel);
+  int16_t baseline = y + 5;
+  // P = practice, Q = qualifying, S = sprint race; the Grand Prix itself has no letter
+  if (race.tag) {
+    display->setTextColor(race.flag ? text : 0x8410);
+    display->setCursor(15, baseline);
+    display->print(race.tag);
+  }
+  // The F1 logo, 13x7: a slanted F and 1 that lean the same way
+  static const char *const LOGO[7] = {"..#####...##.", "..##....####.", ".###.....##..", ".#####...##..",
+                                      ".##......##..", "##......##...", "##......##..."};
+  uint16_t logo = race.flag == 'r' ? 0xFFFF : race.flag == 'y' ? 0 : 0xF800;
+  for (int row = 0; row < 7; row++)
+    for (int col = 0; col < 13; col++)
+      if (LOGO[row][col] == '#') display->drawPixel(col, y + row, logo);
+  // Finished: a chequered flag of 5x4 pixels right of the logo, its last row
+  // below the logo's bottom
+  if (!race.live)
+    for (int row = 0; row < 4; row++)
+      for (int col = 0; col < 5; col++)
+        if ((row + col) % 2) display->drawPixel(12 + col, y + 3 + row, 0xFFFF);
+  // When places change, the codes slide to their new slots. Not when the row
+  // wasn't showing a moment ago (another page was up), then it just updates.
+  static String shown[3];
+  static int from[3] = {0, 1, 2};
+  static unsigned long changedAt = 0, lastDrawn = 0;
+  unsigned long now = millis();
+  bool changed = false;
+  for (int i = 0; i < 3; i++) changed |= shown[i] != race.top[i];
+  if (changed) {
+    bool animate = slide && now - lastDrawn < 1000;
+    for (int i = 0; i < 3; i++) {
+      from[i] = i;
+      for (int j = 0; j < 3; j++)
+        if (animate && shown[j] == race.top[i]) from[i] = j;
+    }
+    for (int i = 0; i < 3; i++) shown[i] = race.top[i];
+    changedAt = now;
+  }
+  lastDrawn = now;
+  float t = std::min(1.0f, (now - changedAt) / (float)RACE_SLIDE_MS);
+  t = t * t * (3 - 2 * t);  // eases in and out
+
+  for (int i = 0; i < 3; i++) {
+    int16_t x = 20 + (int16_t)roundf((from[i] + (i - from[i]) * t) * 15);
+    display->setTextColor(text);
+    display->setCursor(x, baseline);
+    display->print(race.top[i]);
+    display->drawFastHLine(x, y + 7, 14, race.color[i]);
+  }
+  display->setFont(NULL);
+}
+
+bool FootballTicker::current(Entry &entry) {
+  std::lock_guard<std::mutex> guard(_lock);
+  if (_entries.empty()) return false;
+  entry = _entries[pageAt(_entries, millis() / _pageMs)];
+  return true;
+}
+
+// One match at a time, without animation (every _pageMs, the "next live match every" setting):
+// "FEY 2-1 AJA" with the home team on the left, the away team on the right
+// and the score in between, and the playing time as a bar along the bottom.
+bool FootballTicker::draw(Adafruit_GFX *display, int16_t y) {
+  std::lock_guard<std::mutex> guard(_lock);
+  // Live matches come first: a live match hides a live race, and both hide
+  // anything finished. When nothing is live, today's finished matches and F1
+  // sessions are pages of one rotation.
+  bool footballLive = false;
+  for (const Entry &entry : _entries) footballLive |= entry.live;
+  bool raceLive = !footballLive && _race.live;
+  size_t results = footballLive || raceLive ? 0 : _results.size();
+  size_t pages = _entries.size() + results;
+  if (!raceLive && pages == 0) return false;
+  size_t page = pages ? (millis() / _pageMs) % pages : 0;
+  if (footballLive) page = pageAt(_entries, millis() / _pageMs);
+  bool showRace = raceLive || page >= _entries.size();
+
+  // The text sits one pixel higher than the row, leaving a gap above the bar
+  display->fillRect(0, y - 1, 64, display->height() - (y - 1), 0);  // to the very bottom
+  display->setFont(NULL);
+  display->setTextSize(1);
+  display->setTextWrap(false);
+  int16_t textY = y - 1;
+  if (showRace) {
+    drawRace(display, y, raceLive ? _race : _results[page - _entries.size()], raceLive);
+    display->setTextWrap(true);
+    return true;
+  }
+  const Entry &e = _entries[page];
+
+  // Two 4-letter names and a double-digit score don't fit: shorten the names
+  String home = e.home, away = e.away;
+  auto width = [](const String &text) { return (int16_t)(text.length() * CHAR_WIDTH - 1); };
+  if (width(home) + width(e.score) + width(away) + 4 > 64) {
+    home = home.substring(0, 3);
+    away = away.substring(0, 3);
+  }
+  int16_t homeWidth = width(home), scoreWidth = width(e.score);
+  int16_t awayX = 64 - width(away);
+  drawName(display, 0, textY, home, e.homeKit);
+  drawName(display, awayX, textY, away, e.awayKit);
+  display->setTextColor(e.scoreColor);
+  display->setCursor(homeWidth + (awayX - homeWidth - scoreWidth) / 2, textY);
+  display->print(e.score);
+
+  display->drawFastHLine(0, y + 7, (int16_t)roundf(64 * e.progress), e.barColor);
+  display->setTextWrap(true);
+  return true;
+}

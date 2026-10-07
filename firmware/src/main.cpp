@@ -1,0 +1,834 @@
+#include <Arduino.h>
+#include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+
+// Clockface
+#include <Clockface.h>
+
+// Commons
+#include <WiFiController.h>
+#include <CWDateTime.h>
+#include <CWPreferences.h>
+#include <CWWebServer.h>
+#include <StatusController.h>
+#include <TelnetStream.h>
+#include <movingAvg.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <WiFiClientSecure.h>
+#include <Preferences.h>
+#include <esp_ota_ops.h>
+#include <uptime_formatter.h>
+#include "NotificationServer.h"
+
+#include "messageFont.h"  // Include the smallMessageFont font
+
+// #define MIN_BRIGHT_DISPLAY_ON 3 // lowest = 3
+#define MIN_BRIGHT_DISPLAY_OFF 128
+
+#define ESP32_LED_BUILTIN 2
+
+// How often the clockface's update() is called; a face can ask for more
+// frames with a build flag (Tetris does, for its smoother animations)
+#ifndef CLOCKFACE_UPDATE_MS
+#define CLOCKFACE_UPDATE_MS 100
+#endif
+
+// Keep a freshly installed firmware "pending" instead of letting the Arduino
+// core mark it valid at boot. If it resets before checkFirmwareValid() has
+// confirmed it, the bootloader falls back to the previous firmware.
+extern "C" bool verifyRollbackLater() { return true; }
+
+MatrixPanel_I2S_DMA *dma_display = nullptr;
+
+Clockface *clockface;
+
+WiFiController wifi;
+CWDateTime cwDateTime;
+
+bool autoBrightEnabled;
+bool forceRefresh;
+bool nightMode;
+bool updateInProgress = false;
+volatile bool firmwareUpdating = false;  // from the start of a firmware update: the football downloads wait (FootballTicker)
+bool logLDR = false;
+int64_t lastNow;
+int64_t ldrCheckDue = 0;
+int64_t loopDue = 0;
+unsigned long updateCheckDue = 30000; // first check 30s after boot, then hourly; compared wrap-safe
+#define UPDATE_CHECK_MS 3600000
+#define UPDATE_MAX_TRIES 3        // failed downloads per build before giving up
+#define BOOT_QR_MS 10000          // how long the startup QR code stays up
+#define VALIDATE_AFTER_MS 60000   // from this long on, running + on WiFi, try to prove the update check works
+#define VALIDATE_RETRY_MS 30000   // between tries
+#define ROLLBACK_AFTER_MS 300000  // never proved it: go back to the old firmware
+bool fwValidated = false;
+int64_t validateDue = 0;
+int64_t wifiUpAt = 0;  // the rollback deadline counts from here, not from boot: setup portals take minutes
+unsigned int altDisplay;
+unsigned int curBrightness;
+unsigned int currentLDRValue;
+unsigned int avgLDRValue;
+unsigned int panelResY;
+uint8_t curBright;
+
+String lastTime;
+String currentTime;
+String currentTimeWithSeconds;
+
+movingAvg ldrAverage(10);
+
+NotificationServer notificationServer;
+bool showingNotification = false;
+bool flashState = true;
+String currentNotification;
+unsigned long notificationStartTime = 0;
+bool forceFullRefresh = false;
+
+const unsigned long DEFAULT_NOTIFICATION_DURATION = 5000;  // Default 5 seconds
+unsigned long notificationDuration = DEFAULT_NOTIFICATION_DURATION;
+
+void displaySetup(bool swapBlueGreen, uint8_t displayBright, uint8_t displayRotation)
+{
+  panelResY = ClockwiseParams::getInstance()->displayHeight;
+  HUB75_I2S_CFG mxconfig(64, panelResY, 1);
+
+  if (swapBlueGreen)
+  {
+    // Swap Blue and Green pins because the panel is RBG instead of RGB.
+    mxconfig.gpio.b1 = 26;
+    mxconfig.gpio.b2 = 12;
+    mxconfig.gpio.g1 = 27;
+    mxconfig.gpio.g2 = 13;
+  }
+
+  mxconfig.gpio.e = 18;
+  mxconfig.clkphase = false;
+  #ifdef DOUBLE_BUFFER_ON
+    mxconfig.double_buff = true;
+  #endif
+
+  // Display Setup
+  dma_display = new MatrixPanel_I2S_DMA(mxconfig);
+  dma_display->begin();
+  dma_display->setBrightness8(displayBright);
+  dma_display->clearScreen();
+  dma_display->setRotation(displayRotation);
+  #ifdef DOUBLE_BUFFER_ON
+    dma_display->flipDMABuffer();
+  #endif
+}
+
+void printCenterPico(const char *buf, int y)
+{
+  int16_t x1, y1;
+  uint16_t w, h;
+  dma_display->setFont(&Picopixel);
+  dma_display->getTextBounds(buf, 0, y, &x1, &y1, &w, &h);
+  dma_display->setCursor(32 - (w / 2), y);
+  dma_display->print(buf);
+}
+
+void printCenter(const char *buf, int y) {
+  int16_t x1, y1;
+  uint16_t w, h;
+  dma_display->setTextSize(1);
+  dma_display->getTextBounds(buf, 0, y, &x1, &y1, &w, &h);
+  dma_display->setCursor(32 - (w / 2), y);
+  dma_display->print(buf);
+}
+
+void automaticBrightControl()
+{
+
+  ldrCheckDue = millis() + 100;
+  int16_t currentValue = analogRead(ClockwiseParams::getInstance()->ldrPin);
+  int16_t lastValue;
+  uint16_t ldrMin = ClockwiseParams::getInstance()->autoBrightMin;
+  uint16_t ldrMax = ClockwiseParams::getInstance()->autoBrightMax;
+  int16_t avgValue = ldrAverage.reading(currentValue);
+  uint8_t maxBright = ClockwiseParams::getInstance()->displayBright;
+
+  char hour[3] = {0};
+  snprintf(hour, sizeof(hour), "%02d", cwDateTime.getHour());
+  char minute[3] = {0};
+  snprintf(minute, sizeof(minute), "%02d", cwDateTime.getMinute());
+  char second[3] = {0};
+  snprintf(second, sizeof(second), "%02d", cwDateTime.getSecond());
+  currentTimeWithSeconds = String(hour) + ":" + String(minute) + ":" + String(second);
+  
+  if (ldrMin == 0 && ldrMax == 0) return;
+
+  uint8_t mapBright;
+
+  if (avgValue < ldrMin) nightMode=true;
+  if (avgValue > (ldrMin + 1)) nightMode=false;
+
+  // uint8_t minBright = (nightMode == true ? MIN_BRIGHT_DISPLAY_OFF : ClockwiseParams::getInstance()->displayBrMin);
+  uint8_t minBright = max<uint8_t>(3, ClockwiseParams::getInstance()->displayBrMin);  // never fully dark, whatever is stored
+
+  if (ldrMax != 1) {
+    // map() extrapolates outside the range (and divides by zero when min == max)
+    if (ldrMax <= ldrMin) mapBright = maxBright;
+    else mapBright = map(constrain((long)avgValue, (long)ldrMin, (long)ldrMax), ldrMin, ldrMax, minBright, maxBright);
+  } else {
+    mapBright = (currentValue > ldrMin) ? maxBright : minBright;
+  }
+  avgLDRValue = avgValue;
+  currentLDRValue = currentValue;
+  curBrightness = mapBright;
+  if (logLDR == true) TelnetStream.printf("%s [INFO] LDR: %d (avg: %d), dark: %d, bright: %d, Bright: %d, Nightmode: %d\n", currentTimeWithSeconds.c_str(), currentValue, avgValue, ldrMin, ldrMax, mapBright, nightMode);
+
+  if (abs(curBright - mapBright) > 1 || (curBright == 0 && mapBright !=0)) {
+    dma_display->setBrightness8(mapBright);
+    curBright = mapBright;
+  }
+}
+
+// Brightness settings saved from the web UI take effect right away. The auto brightness
+// thresholds are read on every check anyway; switching auto off, or changing the manual
+// brightness, needs the display set here.
+void applyBrightnessSettings() {
+  ClockwiseParams *params = ClockwiseParams::getInstance();
+  autoBrightEnabled = (params->autoBrightMax > 0);
+  if (!autoBrightEnabled) {
+    nightMode = false;
+    dma_display->setBrightness8(params->displayBright);
+    curBright = params->displayBright;
+  }
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  pinMode(ESP32_LED_BUILTIN, INPUT);
+
+  ClockwiseParams::getInstance()->load();
+
+  pinMode(ClockwiseParams::getInstance()->ldrPin, INPUT);
+
+  displaySetup(ClockwiseParams::getInstance()->swapBlueGreen, ClockwiseParams::getInstance()->displayBright, ClockwiseParams::getInstance()->displayRotation);
+  clockface = new Clockface(dma_display);
+
+  autoBrightEnabled = (ClockwiseParams::getInstance()->autoBrightMax > 0);
+
+  ldrAverage.begin();
+  automaticBrightControl();
+
+  StatusController::getInstance()->clockwiseLogo();
+  if (panelResY == 64) StatusController::getInstance()->wifiConnecting();
+  #ifdef DOUBLE_BUFFER_ON
+    dma_display->flipDMABuffer();
+  #endif
+
+  wifi.showDisplay = []() {
+    #ifdef DOUBLE_BUFFER_ON
+      dma_display->flipDMABuffer();
+    #endif
+  };
+  wifi.setBrightness = [](uint8_t b) { dma_display->setBrightness8(b); };
+  wifi.begin();
+  
+  // isConnected() keeps retrying the saved network while we wait
+  while (!wifi.isConnected()) {
+      printCenterPico("No Network", (panelResY / 2) - 4);
+      #ifdef DOUBLE_BUFFER_ON
+        dma_display->flipDMABuffer();
+      #endif
+      delay(500);
+  }
+  
+  wifiUpAt = millis();
+
+  // Point phones at the settings page: a QR code for a few seconds, if not switched off in the web UI
+  if (ClockwiseParams::getInstance()->showQrOnBoot && panelResY == 64) {
+    dma_display->setBrightness8(128);  // the brightness it was tested at
+    // Keep serving the web UI meanwhile; switching the QR off there ends it early.
+    // The frame is redrawn every second for the countdown (double buffering needs the whole frame).
+    unsigned long qrUntil = millis() + BOOT_QR_MS;
+    int shown = 0;
+    while ((long)(millis() - qrUntil) < 0 && ClockwiseParams::getInstance()->showQrOnBoot) {
+      int secondsLeft = (qrUntil - millis() + 999) / 1000;
+      if (secondsLeft != shown) {
+        shown = secondsLeft;
+        StatusController::getInstance()->showQr("http://clockwise.local", "SCAN FOR SETTINGS", secondsLeft);
+        #ifdef DOUBLE_BUFFER_ON
+          dma_display->flipDMABuffer();
+        #endif
+      }
+      ClockwiseWebServer::getInstance()->handleHttpRequest();
+      delay(5);
+    }
+    dma_display->fillScreen(0);
+    #ifdef DOUBLE_BUFFER_ON
+      dma_display->flipDMABuffer();
+    #endif
+    dma_display->setBrightness8(ClockwiseParams::getInstance()->displayBright);
+    curBright = ClockwiseParams::getInstance()->displayBright;
+    automaticBrightControl();  // applies the sensor's brightness again when auto brightness is on
+  }
+  notificationServer.begin();
+  TelnetStream.println("[Main] Device IP: " + WiFi.localIP().toString());
+  
+  char hour[3] = {0};
+  snprintf(hour, sizeof(hour), "%02d", cwDateTime.getHour());
+  char minute[3] = {0};
+  snprintf(minute, sizeof(minute), "%02d", cwDateTime.getMinute());
+  char second[3] = {0};
+  snprintf(second, sizeof(second), "%02d", cwDateTime.getSecond());
+  currentTimeWithSeconds = String(hour) + ":" + String(minute) + ":" + String(second);
+
+  TelnetStream.begin();
+
+  Serial.println("Ready");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+  StatusController::getInstance()->ntpConnecting();
+  cwDateTime.begin(ClockwiseParams::getInstance()->timeZone.c_str(), 
+      ClockwiseParams::getInstance()->use24hFormat, 
+      ClockwiseParams::getInstance()->ntpServer.c_str(),
+      ClockwiseParams::getInstance()->manualPosix.c_str());
+  clockface->setup(&cwDateTime);
+}
+
+// Where firmware comes from: the "Firmware location" setting, else the built-in default.
+// The URL is a folder; per-panel files live in a sub-folder named after the MAC address.
+static String firmwareUrl(const String &file, bool perPanel) {
+  String base = ClockwiseParams::getInstance()->fwUrl;
+  if (base.length() == 0) base = CW_DEFAULT_FW_URL;
+  return base + (perPanel ? WiFi.macAddress() + "/" : String("")) + file;
+}
+
+// HTTPS downloads are not certificate-checked: the md5 comparison guards against corrupt files,
+// not against someone on the path to the server
+static std::unique_ptr<WiFiClient> makeClient(const String &url) {
+  if (url.startsWith("https://")) {
+    WiFiClientSecure *secure = new WiFiClientSecure();
+    secure->setInsecure();
+    return std::unique_ptr<WiFiClient>(secure);
+  }
+  return std::unique_ptr<WiFiClient>(new WiFiClient());
+}
+
+void updateFirmware( String id ) {
+  firmwareUpdating = true;
+
+  dma_display->setFont(&smallMessageFont);
+  dma_display->setTextColor(0x0412);
+  
+  dma_display->fillScreen(0);
+  printCenter("UPDATING...", (panelResY / 2) - 5);
+  #ifdef DOUBLE_BUFFER_ON
+    dma_display->flipDMABuffer();
+  #endif
+
+  httpUpdate.rebootOnUpdate(false); // remove automatic update
+  TelnetStream.println(("Updating to " + id + " now!"));
+  Update.onProgress([](size_t progresso, size_t total){
+    int percentage = (progresso / (total / 100));
+    int progressBar = (percentage * 48 / 100);
+    static int prevPercentage = -1;
+    static int prevProgress;
+
+    // Called for every chunk written: only print when the percentage changes
+    if (percentage == prevPercentage && updateInProgress) return;
+    prevPercentage = percentage;
+
+    Serial.printf("%s [FW Update] Progress: %u%%\r", currentTimeWithSeconds.c_str(), percentage);
+    TelnetStream.printf("%s [FW Update] Progress: %u%%\r", currentTimeWithSeconds.c_str(), percentage);
+
+    if (updateInProgress == false) {
+      dma_display->fillScreen(0);
+      dma_display->setTextColor(0x0412);
+      dma_display->fillRect(0, 0, 64, 64, 0);
+      dma_display->fillRect(6, (panelResY / 2) + 3, 52, 8, 0x0412);
+      dma_display->fillRect(8, (panelResY / 2) + 5, 48, 4, 0);
+      printCenter("UPDATING...", (panelResY / 2) - 5);
+      #ifdef DOUBLE_BUFFER_ON
+        dma_display->flipDMABuffer();
+      #endif
+      updateInProgress = true;
+    }
+
+    if (progressBar > 0 && prevProgress != progressBar) {
+      #ifdef DOUBLE_BUFFER_ON
+        dma_display->fillScreen(0);
+        dma_display->setTextColor(0x0412);
+        dma_display->fillRect(0, 0, 64, 64, 0);
+        dma_display->fillRect(6, (panelResY / 2) + 3, 52, 8, 0x0412);
+        dma_display->fillRect(8, (panelResY / 2) + 5, 48, 4, 0);
+        printCenter("UPDATING...", (panelResY / 2) - 5);
+      #endif
+      dma_display->fillRect(8, (panelResY / 2) + 5, progressBar, 4, 0xd660);
+      #ifdef DOUBLE_BUFFER_ON
+        dma_display->flipDMABuffer();
+      #endif
+    }
+    prevProgress = progressBar;
+
+  });
+  
+  String file = "cw-cf-" + id + ".bin";
+  String panelUrl = firmwareUrl(file, true), sharedUrl = firmwareUrl(file, false);
+  httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  std::unique_ptr<WiFiClient> client = makeClient(panelUrl);
+  t_httpUpdate_return customRet = httpUpdate.update(*client, panelUrl);
+  if (customRet == HTTP_UPDATE_FAILED) client = makeClient(sharedUrl);
+  t_httpUpdate_return ret = (customRet == HTTP_UPDATE_FAILED) ? httpUpdate.update(*client, sharedUrl) : customRet;
+  dma_display->fillScreen(0);
+  switch (ret) {
+    case HTTP_UPDATE_FAILED:
+      TelnetStream.printf("HTTP_UPDATE_FAILD Error (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+      dma_display->setTextColor(0xfb80);
+      printCenter("UPDATE!", (panelResY / 2) - 5);
+      printCenter("FAILED!", (panelResY / 2) + 5);
+      #ifdef DOUBLE_BUFFER_ON
+        dma_display->flipDMABuffer();
+      #endif
+      delay(5000);
+      firmwareUpdating = false;
+      updateInProgress = false;  // set by the progress callback; the clock loop needs it clear
+      forceRefresh = true;
+      break;
+
+    case HTTP_UPDATE_NO_UPDATES:
+      TelnetStream.println("HTTP_UPDATE_NO_UPDATES");
+      dma_display->setTextColor(0xfb80);
+      printCenter("UPDATE!", (panelResY / 2) - 5);
+      printCenter("FAILED!", (panelResY / 2) + 5);
+      #ifdef DOUBLE_BUFFER_ON
+        dma_display->flipDMABuffer();
+      #endif
+      delay(5000);
+      firmwareUpdating = false;
+      updateInProgress = false;
+      forceRefresh = true;
+      break;
+
+    case HTTP_UPDATE_OK:
+      updateInProgress = false;
+      printCenter("RESTARTING...", (panelResY / 2) - 5);
+      #ifdef DOUBLE_BUFFER_ON
+        dma_display->flipDMABuffer();
+      #endif
+      esp_restart();  
+  }
+}
+
+// Fetch the md5 that update-fw.sh publishes next to each firmware image.
+// reachable is false when the server could not be connected to at all.
+static String fetchServerMd5(const String &url, bool &reachable) {
+  HTTPClient http;
+  std::unique_ptr<WiFiClient> client = makeClient(url);
+  String md5 = "";
+  http.setConnectTimeout(2000);
+  http.setTimeout(3000);
+  reachable = false;
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  if (http.begin(*client, url)) {
+    int code = http.GET();
+    reachable = code > 0;
+    if (code == HTTP_CODE_OK) {
+      md5 = http.getString();
+      md5.trim();
+    }
+  }
+  http.end();
+  return md5;
+}
+
+// The md5 of the latest build for this panel: its own file, else the shared
+// one. Empty when there is none or the server can't be reached.
+static String fetchLatestMd5() {
+  String file = "cw-cf-" CW_FW_ID ".md5";
+  bool reachable;
+  String md5 = fetchServerMd5(firmwareUrl(file, true), reachable);
+  // No per-panel file (404) falls back to the shared one; no server at all doesn't
+  if (md5.length() == 0 && reachable) md5 = fetchServerMd5(firmwareUrl(file, false), reachable);
+  return md5;
+}
+
+// A new firmware must prove itself before the bootloader keeps it: it has to
+// run and be able to fetch version info from the update server, the same way
+// checkForUpdate() does. A build that can't update itself would be stuck on
+// the panel, so it rolls back instead.
+void checkFirmwareValid(int64_t now) {
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state;
+  if (esp_ota_get_state_partition(running, &state) != ESP_OK || state != ESP_OTA_IMG_PENDING_VERIFY) {
+    fwValidated = true;
+    return;
+  }
+  if (now > VALIDATE_AFTER_MS && now >= validateDue && wifi.isConnected()) {
+    validateDue = now + VALIDATE_RETRY_MS;
+    if (fetchLatestMd5().length() == 32) {
+      esp_ota_mark_app_valid_cancel_rollback();
+      fwValidated = true;
+      TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware confirmed");
+      return;
+    }
+    TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware can't reach the update server yet");
+  }
+  if (now - wifiUpAt > ROLLBACK_AFTER_MS) {
+    TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware could not check for updates, rolling back");
+    esp_ota_mark_app_invalid_rollback_and_reboot();
+  }
+}
+
+// The automatic hourly check stays quiet between two hours of the day (22:00 to 08:00 unless changed
+// in the web UI), so nobody is woken by a restart. From = until means never quiet. Checking by hand
+// (web UI, telnet) still works. Without a synced clock the hour is unknown.
+static bool inUpdateQuietHours() {
+  int from = ClockwiseParams::getInstance()->updQuietFrom, until = ClockwiseParams::getInstance()->updQuietUntil;
+  if (from == until || ezt::timeStatus() != timeSet) return false;
+  int hour = cwDateTime.getHour24();
+  return from < until ? (hour >= from && hour < until) : (hour >= from || hour < until);
+}
+
+// Compare the running firmware with the one on the update server and install
+// it when they differ.
+// ignoreSkips = telnet 'X': also retry builds that failed or rolled back.
+void checkForUpdate(bool ignoreSkips = false) {
+  String md5 = fetchLatestMd5();
+  String &status = ClockwiseWebServer::getInstance()->update_status;  // what the web UI shows
+
+  if (md5.length() != 32) {
+    TelnetStream.println(currentTimeWithSeconds + " [Update] No version info on server");
+    status = "noserver";
+    return;
+  }
+  if (md5.equalsIgnoreCase(ESP.getSketchMD5())) {
+    TelnetStream.println(currentTimeWithSeconds + " [Update] Firmware is up to date");
+    status = "uptodate";
+    return;
+  }
+  // An install of this exact build was started and we are still on the old
+  // firmware, so it was rolled back: leave it alone until a new build is up
+  Preferences prefs;
+  prefs.begin("fwupdate", false);
+  if (!ignoreSkips && prefs.getString("tried", "") == md5) {
+    TelnetStream.println(currentTimeWithSeconds + " [Update] Skipping build that failed before (X to force)");
+    status = "skipped";
+    prefs.end();
+    return;
+  }
+  if (!ignoreSkips && prefs.getString("failMd5", "") == md5 && prefs.getUChar("fails", 0) >= UPDATE_MAX_TRIES) {
+    TelnetStream.println(currentTimeWithSeconds + " [Update] Giving up on this build after repeated download failures (X to force)");
+    status = "skipped";
+    prefs.end();
+    return;
+  }
+  prefs.putString("tried", md5);
+  prefs.end();
+
+  TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware available, installing");
+  status = "installing";
+  updateFirmware(CW_FW_ID);
+  status = "failed";  // only reached when the download failed, success restarts
+
+  // Only reached when the download failed (success restarts): allow a retry,
+  // but count it so one broken upload does not retry forever
+  prefs.begin("fwupdate", false);
+  prefs.remove("tried");
+  uint8_t fails = (prefs.getString("failMd5", "") == md5) ? prefs.getUChar("fails", 0) + 1 : 1;
+  prefs.putString("failMd5", md5);
+  prefs.putUChar("fails", fails);
+  prefs.end();
+}
+
+void loop() {
+    int64_t now = millis();  // Keep this single now declaration
+    if (!fwValidated) checkFirmwareValid(now);
+#ifdef CW_TEST_CRASH
+    if (now > 10000) abort(); // rollback test build: die before it can be confirmed
+#endif
+    wifi.handleImprovWiFi();
+    char hour[3] = {0};
+    char minute[3] = {0};
+    char second[3] = {0};
+    snprintf(hour, sizeof(hour), "%02d", cwDateTime.getHour());
+    snprintf(minute, sizeof(minute), "%02d", cwDateTime.getMinute());
+    snprintf(second, sizeof(second), "%02d", cwDateTime.getSecond());
+    currentTimeWithSeconds = String(hour) + ":" + String(minute) + ":" + String(second);
+    currentTime = String(hour) + ":" + String(minute);
+    if ((altDisplay == 1 && nightMode == false) || (altDisplay > 1 && nightMode == true)) lastTime = false;
+
+    if (now > ldrCheckDue) automaticBrightControl();
+    
+    if (wifi.isConnected())
+    {
+        ClockwiseWebServer::getInstance()->handleHttpRequest();
+        if (ClockwiseWebServer::getInstance()->brightness_changed) {
+          ClockwiseWebServer::getInstance()->brightness_changed = false;
+          applyBrightnessSettings();
+        }
+        if (ClockwiseWebServer::getInstance()->update_requested) {
+          ClockwiseWebServer::getInstance()->update_requested = false;
+          TelnetStream.println(currentTimeWithSeconds + " [INFO] Web UI asked for a firmware update check...");
+          checkForUpdate();
+        }
+        if (ClockwiseWebServer::getInstance()->face_requested.length() > 0) {
+          String id = ClockwiseWebServer::getInstance()->face_requested;
+          ClockwiseWebServer::getInstance()->face_requested = "";
+          updateFirmware(id);
+        }
+        ClockPeers::getInstance()->loop();
+        ezt::events();
+        // Hourly update check, not in the quiet hours. The timer only advances when it runs, so a
+        // check that comes due during them happens when they end.
+        if ((long)(millis() - updateCheckDue) >= 0 && fwValidated && updateInProgress == false && !inUpdateQuietHours()) {
+          updateCheckDue = millis() + UPDATE_CHECK_MS;
+          checkForUpdate();
+        }
+        switch (TelnetStream.read()) {
+          case 'R':
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Restarting device...");
+            esp_ota_mark_app_valid_cancel_rollback();  // asked for, so not a failed update
+            TelnetStream.stop();
+            delay(100);
+            ESP.restart();
+            break;
+          case 'C':
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Checking for a firmware update...");
+            checkForUpdate();
+            break;
+          case 'X':
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Forcing a firmware update, ignoring earlier failures...");
+            checkForUpdate(true);
+            break;
+          case 'L':
+            logLDR = (logLDR == false) ? true : false;
+            if (logLDR == false) {
+              TelnetStream.println(currentTimeWithSeconds + " [INFO] Turning off LDR sensor output...");
+            } else {
+              TelnetStream.println(currentTimeWithSeconds + " [INFO] Turning on LDR sensor output...");
+            }
+            break;
+          case 'U':
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime() + ", reset reason " +
+                                 String((int)esp_reset_reason()) + " (1 power on, 3 software, 4 panic/exception, 5-7 watchdog, 9 brownout), heap free " +
+                                 String(ESP.getFreeHeap()) + ", largest block " + String(ESP.getMaxAllocHeap()) + ", lowest ever " +
+                                 String(ESP.getMinFreeHeap()));
+            break;
+          case 'P': {
+            // Panel height has no web UI and can't be detected: flip it here and reboot
+            uint8_t newHeight = (ClockwiseParams::getInstance()->displayHeight == 64) ? 32 : 64;
+            ClockwiseParams::getInstance()->displayHeight = newHeight;
+            ClockwiseParams::getInstance()->save();
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Panel height set to " + String(newHeight) + " rows, restarting...");
+            esp_ota_mark_app_valid_cancel_rollback();
+            TelnetStream.stop();
+            delay(100);
+            ESP.restart();
+            break;
+          }
+          case '1':
+            updateFirmware("0x01");
+            break;
+          case '2':
+            updateFirmware("0x02");
+            break;
+          case '3':
+            updateFirmware("0x03");
+            break;
+          case '4':
+            updateFirmware("0x04");
+            break;
+          case '5':
+            updateFirmware("0x05");
+            break;
+          case '6':
+            updateFirmware("0x06");
+            break;
+          case '8':
+            updateFirmware("0x08");
+            break;
+          case '9':
+            updateFirmware("0x09");
+            break;
+          case 'B':
+            updateFirmware("0x0B");
+            break;
+          case 'F':
+            updateFirmware("0x0C");
+            break;
+#ifdef CW_FOOTBALL_SIM
+          case 'S':
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Football simulator: " + clockface->simulate());
+            break;
+          case 'N':
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Football simulator: " + clockface->simulateNext());
+            break;
+          case 'G':
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Celebrating a test goal...");
+            clockface->testGoal();
+            break;
+          case 'Y':
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Showing a test yellow card...");
+            clockface->testIncident('y');
+            break;
+          case 'D':
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Showing a test red card...");
+            clockface->testIncident('r');
+            break;
+          case 'W':
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Showing a test substitution...");
+            clockface->testIncident('s');
+            break;
+#endif
+          case 'h':
+            TelnetStream.println("R - Restart device");
+            TelnetStream.println("C - Check for a firmware update now");
+            TelnetStream.println("X - Same, but retry builds that failed before");
+            TelnetStream.println("L - Toggle LDR Data");
+            TelnetStream.println("U - Print uptime");
+            TelnetStream.println("P - Switch panel height to " + String(ClockwiseParams::getInstance()->displayHeight == 64 ? 32 : 64) + " rows and restart");
+            TelnetStream.println("1 - Install latest 'Mario' firmware");
+            TelnetStream.println("2 - Install latest 'Time in Words' firmware");
+            TelnetStream.println("3 - Install latest 'World map' firmware");
+            TelnetStream.println("4 - Install latest 'Castlevania' firmware");
+            TelnetStream.println("5 - Install latest 'Pacman' firmware");
+            TelnetStream.println("6 - Install latest 'Pokemon' firmware");
+            TelnetStream.println("8 - Install latest 'Tetris' firmware");
+            TelnetStream.println("9 - Install latest 'Luigi' firmware");
+            TelnetStream.println("B - Install latest 'Football' firmware");
+            TelnetStream.println("F - Install latest 'Formula 1' firmware");
+#ifdef CW_FOOTBALL_SIM
+            TelnetStream.println("S, N - Football simulator of the Formula 1 face");
+            TelnetStream.println("G - Celebrate a test goal");
+            TelnetStream.println("Y - Show a test yellow card");
+            TelnetStream.println("D - Show a test red card");
+            TelnetStream.println("W - Show a test substitution");
+#endif
+            break;
+        }
+        
+        // Handle notifications
+        notificationServer.handle();
+        
+        if (!showingNotification && notificationServer.hasNotification()) {
+            auto notification = notificationServer.getNextNotification();
+            currentNotification = notification.first;
+            notificationDuration = notification.second;  // Use duration from message
+            showingNotification = true;
+            notificationStartTime = now;
+            flashState = true;
+        }
+
+        if (showingNotification) {
+            bool shouldShowText = (now % 1000) < 500;
+            if (shouldShowText != flashState) {
+                flashState = shouldShowText;
+                if (shouldShowText) {
+                    dma_display->fillRect(0, 0, 64, 64, 0xffff);  // green background
+                    dma_display->setFont(&smallMessageFont);  // Use smallMessageFont instead of Picopixel
+                    dma_display->setTextColor(0x0000);  // Black text
+                } else {
+                    dma_display->fillRect(0, 0, 64, 64, 0x0000);  // Black background
+                    dma_display->setFont(&smallMessageFont);  // Use smallMessageFont instead of Picopixel
+                    dma_display->setTextColor(0xffff);  // Green text
+                }
+                
+                // Display text in both cases
+                String words[20];
+                int wordCount = 0;
+                String temp = currentNotification;
+                
+                while (temp.length() > 0 && wordCount < 20) {
+                    int spaceIndex = temp.indexOf(' ');
+                    if (spaceIndex == -1) {
+                        words[wordCount++] = temp;
+                        break;
+                    }
+                    words[wordCount++] = temp.substring(0, spaceIndex);
+                    temp = temp.substring(spaceIndex + 1);
+                }
+                
+                int16_t y = 5;
+                String currentLine = "";
+                
+                for (int i = 0; i < wordCount; i++) {
+                    String testLine = currentLine;
+                    if (testLine.length() > 0) testLine += " ";
+                    testLine += words[i];
+                    
+                    int16_t x1, y1;
+                    uint16_t w, h;
+                    dma_display->getTextBounds(testLine.c_str(), 0, 0, &x1, &y1, &w, &h);
+                    
+                    if (w > 58 && currentLine.length() > 0) {
+                        dma_display->setCursor(1, y);
+                        // dma_display->print(currentLine);
+                        printCenter(currentLine.c_str(), y);
+
+                        y += 8;
+                        currentLine = words[i];
+                    } else {
+                        if (currentLine.length() > 0) currentLine += " ";
+                        currentLine += words[i];
+                    }
+                }
+
+                if (currentLine.length() > 0) {
+                    dma_display->setCursor(1, y);
+                    printCenter(currentLine.c_str(), y);
+                }
+                
+                #ifdef DOUBLE_BUFFER_ON
+                    dma_display->flipDMABuffer();
+                #endif
+            }
+            
+            if (now - notificationStartTime >= notificationDuration) {
+                showingNotification = false;
+                forceFullRefresh = true;
+                // dma_display->fillRect(0, 0, 64, 64, 0);
+                dma_display->setTextColor(0xFFFF);
+                clockface->setup(&cwDateTime);
+                #ifdef DOUBLE_BUFFER_ON
+                    dma_display->flipDMABuffer();
+                #endif
+                lastTime = "";  // Force time redraw
+            }
+            return;
+        }
+    }
+
+    if (wifi.connectionSucessfulOnce && ( now > loopDue || now < lastNow ) && updateInProgress == false)
+    {
+      if (nightMode == true) {
+        if (currentTime != lastTime || altDisplay != 1) {
+          dma_display->fillRect(0, 0, 64, 64, 0);
+          dma_display->setTextColor(ClockwiseParams::getInstance()->nightColor());
+
+          // dma_display->setTextColor(0x01c0); // green
+          // dma_display->setTextColor(0x0007); // blue
+          dma_display->setFont(&nightFont);
+          printCenter(currentTime.c_str(), panelResY/2);
+          #ifdef DOUBLE_BUFFER_ON
+            dma_display->flipDMABuffer();
+          #endif
+
+          altDisplay = 1;
+        }
+      } else {
+        if (altDisplay > 0 || forceRefresh == true) {
+          dma_display->setTextColor(0xFFFF);
+          clockface->setup(&cwDateTime);
+          #ifdef DOUBLE_BUFFER_ON
+            dma_display->flipDMABuffer();
+          #endif
+          altDisplay = 0;
+          lastTime = false;
+          forceRefresh = false;
+        }
+        clockface->update();
+      }
+      if (currentTime != lastTime) {
+        TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime());
+      }
+      lastTime = currentTime;
+      loopDue = now + CLOCKFACE_UPDATE_MS;
+    }
+    lastNow = now;
+}

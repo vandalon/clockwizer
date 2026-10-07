@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Clockwise</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Clockwise">
+<meta name="theme-color" content="#155799">
+<style>
+  :root { --bg:#f2f4f7; --card:#fff; --text:#1c2430; --muted:#6b7785; --line:#dfe4ea; --accent:#155799; --danger:#c0392b; }
+  body.bar-on #toast { bottom:calc(96px + env(safe-area-inset-bottom)); }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#10151c; --card:#1a222c; --text:#e8edf3; --muted:#93a0af; --line:#2b3644; --accent:#4a9be8; --danger:#e8695c; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.4 system-ui,sans-serif; padding-bottom:88px; }
+  header { background:linear-gradient(120deg,#155799,#159957); color:#fff; padding:18px 16px; }
+  header h1 { margin:0; font-size:22px; }
+  header small { opacity:.85; }
+  main { max-width:560px; margin:0 auto; padding:0 16px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin:16px 0; }
+  h2 { margin:0 0 12px; font-size:17px; }
+  label { display:block; margin:12px 0 4px; font-weight:600; }
+  .hint { color:var(--muted); font-size:14px; margin:4px 0 0; }
+  input[type=text], input[type=number] { width:100%; padding:12px; font-size:16px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  /* Two range inputs stacked: the track ignores the pointer, only the handles take it */
+  .dual { position:relative; height:32px; margin-block:4px; }
+  .dual-track { position:absolute; left:0; right:0; top:14px; height:4px; background:var(--line); border-radius:2px; }
+  .dual-fill { position:absolute; top:0; bottom:0; background:var(--accent); border-radius:2px; }
+  .dual input[type=range] { position:absolute; left:0; top:0; width:100%; height:32px; margin:0; background:none; pointer-events:none; -webkit-appearance:none; appearance:none; }
+  .dual input[type=range]::-webkit-slider-runnable-track { background:none; height:32px; }
+  .dual input[type=range]::-moz-range-track { background:none; }
+  .dual input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; pointer-events:auto; width:26px; height:26px; margin-top:3px; border-radius:50%; background:var(--accent); border:2px solid var(--card); }
+  .dual input[type=range]::-moz-range-thumb { pointer-events:auto; width:22px; height:22px; border-radius:50%; background:var(--accent); border:2px solid var(--card); }
+  .peer { display:block; padding:12px; border:1px solid var(--line); border-radius:10px; margin-top:10px; color:inherit; text-decoration:none; }
+  .peer small { color:var(--muted); }
+  select { width:100%; padding:12px; font-size:16px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  input[type=range] { width:100%; height:32px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .row.split > * { flex:1; }
+  .switch { width:52px; height:30px; flex:none; accent-color:var(--accent); transform:scale(1.4); transform-origin:right center; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:6px 6px 6px 12px; border:1px solid var(--line); border-radius:16px; background:var(--bg); }
+  .chip button { width:auto; margin:0; padding:0 8px; border:0; background:none; font-size:18px; line-height:1.2; color:var(--muted); }
+  .picks { border:1px solid var(--line); border-radius:8px; background:var(--card); max-height:220px; overflow-y:auto; margin-top:4px; }
+  .picks div { padding:10px 12px; border-bottom:1px solid var(--line); }
+  .picks div:last-child { border-bottom:0; }
+  .picks small { color:var(--muted); }
+  .leagues details { border-top:1px solid var(--line); padding:8px 0; }
+  .leagues summary { cursor:pointer; font-weight:600; }
+  .leagues summary small { color:var(--muted); font-weight:400; }
+  .leagues h3 { margin:14px 0 4px; font-size:13px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .leagues label { display:flex; align-items:center; gap:10px; margin:0; padding:5px 0; font-weight:400; }
+  .leagues input { width:20px; height:20px; flex:none; accent-color:var(--accent); }
+  button { font:inherit; font-weight:600; padding:13px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); width:100%; margin-top:10px; }
+  button.small { width:auto; padding:8px 12px; margin-top:8px; font-weight:500; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--danger); border-color:var(--danger); }
+  button:active { opacity:.7; }
+  .bar { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line); padding:12px 16px calc(12px + env(safe-area-inset-bottom)); }
+  .bar .row { max-width:560px; margin:0 auto; }
+  .bar .row button { width:auto; margin:0; white-space:nowrap; }
+  #busy { display:none; position:fixed; inset:0; z-index:20; background:rgba(0,0,0,.6); align-items:center; justify-content:center; padding:16px; }
+  .busyBox { background:var(--card); border-radius:14px; padding:24px; text-align:center; max-width:320px; }
+  .busyBox p { margin:0; }
+  .spinner { width:36px; height:36px; border:4px solid var(--line); border-top-color:var(--accent); border-radius:50%; margin:0 auto 14px; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #toast { position:fixed; z-index:10; left:16px; right:16px; bottom:calc(24px + env(safe-area-inset-bottom)); max-width:528px; margin:0 auto; background:#222; color:#fff; padding:12px 16px; border-radius:10px; display:none; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Clockwise</h1>
+  <small id="info">&nbsp;</small>
+</header>
+
+<main>
+  <section id="faceBox">
+    <h2>Clockface</h2>
+    <select id="face" onchange="switchFace()"></select>
+    <p class="hint">Choosing a clockface installs it: the clock downloads it and restarts.</p>
+  </section>
+
+  <section id="f1Box" style="display:none">
+    <h2>Formula 1</h2>
+    <div class="row">
+      <div><strong>Show Formula 1</strong><p class="hint">Shows the top 3 of the race while a Formula 1 session is on</p></div>
+      <input type="checkbox" class="switch" id="f1" onchange="scheduleSave()">
+    </div>
+  </section>
+
+  <section id="pacmanBox" style="display:none">
+    <h2>Pacman Colours</h2>
+    <label for="ghost1">First ghost</label>
+    <select id="ghost1" onchange="scheduleSave()"></select>
+    <label for="ghost2" style="margin-top:12px;display:block">Second ghost</label>
+    <select id="ghost2" onchange="scheduleSave()"></select>
+    <label for="dots" style="margin-top:12px;display:block">Dots</label>
+    <select id="dots" onchange="scheduleSave()"></select>
+    <label for="color" style="margin-top:12px;display:block">Border</label>
+    <select id="color" onchange="scheduleSave()">
+      <option value="0">Default</option><option value="1">Pastel purple</option><option value="2">Pastel green</option>
+      <option value="3">Pastel pink</option><option value="4">Pastel blue</option><option value="5">Peach</option>
+      <option value="6">Lemon</option><option value="7">Orange</option><option value="8">Red</option><option value="9">Cyan</option>
+    </select>
+    <p class="hint">The maze walls on Pacman and the clock at night.</p>
+    <p class="hint">Default keeps the colours the clock picks itself. The ghosts change at once, the dots too.</p>
+  </section>
+
+  <section id="footballBox" style="display:none">
+    <h2>Football</h2>
+    <div class="row" id="ballRow" style="margin-bottom:12px">
+      <div><strong>Rolling ball</strong><p class="hint">On the clock with the upcoming matches, the ball is passed back and forth along the grass at the bottom; off, it rests there</p></div>
+      <input type="checkbox" class="switch" id="ball" onchange="scheduleSave()">
+    </div>
+    <div id="styleRow">
+      <label for="timeStyle">Clock digits change by</label>
+      <select id="timeStyle" onchange="scheduleSave()">
+        <option value="0">Flipping cards</option><option value="1">Fading</option><option value="2">Rolling up</option>
+        <option value="3">Dissolving</option><option value="4">Drifting up</option><option value="5">Fading, with a shimmer</option>
+      </select>
+      <p class="hint">How the time changes on the clock. The shimmer is a soft highlight that sweeps over the digits all the time.</p>
+    </div>
+    <label for="matchSecs">Next live match every</label>
+    <select id="matchSecs" onchange="scheduleSave()">
+      <option value="4">4 seconds</option><option value="6">6 seconds</option><option value="8">8 seconds</option>
+      <option value="10">10 seconds</option><option value="15">15 seconds</option><option value="20">20 seconds</option>
+      <option value="30">30 seconds</option>
+    </select>
+    <p class="hint">With several matches on at once, the clock shows them one by one, and lists of results slide on after the same time.</p>
+
+    <label for="resultMins">Show a finished match for</label>
+    <select id="resultMins" onchange="scheduleSave()">
+      <option value="30">30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option>
+      <option value="180">3 hours</option><option value="360">6 hours</option><option value="720">12 hours</option>
+      <option value="1440">24 hours</option><option value="0">Until midnight</option>
+    </select>
+    <p class="hint">After that the result is dropped from the screen.</p>
+
+    <label>Competitions to follow</label>
+    <p class="hint" id="leagueHint"></p>
+    <div class="leagues" id="leagueList"></div>
+
+    <label for="teamSearch">Favourite teams</label>
+    <div class="chips" id="teamChips"></div>
+    <input type="text" id="teamSearch" placeholder="Type a club or country" autocomplete="off" oninput="searchTeams()" onfocus="searchTeams()">
+    <div class="picks" id="teamPicks" style="display:none"></div>
+    <p class="hint">A favourite's live matches stay at the top of the live feed, even when other matches are on too. They are also followed when their competition isn't ticked above.</p>
+  </section>
+
+  <section id="peersBox" style="display:none">
+    <details>
+      <summary><h2 style="display:inline">Other clocks on your network</h2></summary>
+      <p class="hint" id="peersHint"></p>
+      <div id="peerList"></div>
+    </details>
+  </section>
+
+  <section>
+    <h2>Display</h2>
+    <div id="manualBox">
+      <div class="row"><strong>Brightness</strong><output id="brOut"></output></div>
+      <input type="range" id="bright" min="2" max="100" oninput="setManual()" onchange="scheduleSave()">
+    </div>
+    <div class="row" style="margin-top:16px">
+      <div><strong>Auto brightness</strong><p class="hint">Dim the display when the room is dark</p></div>
+      <input type="checkbox" class="switch" id="auto" onchange="showAuto(); scheduleSave()">
+    </div>
+    <div id="autoBox" style="display:none">
+      <div class="row"><strong>Display brightness</strong><output id="rangeOut"></output></div>
+      <div class="dual">
+        <div class="dual-track"><div class="dual-fill" id="dualFill"></div></div>
+        <input type="range" id="brMin" min="1" max="99" aria-label="Dimmest" oninput="syncBr('min')" onchange="scheduleSave()">
+        <input type="range" id="brMax" min="2" max="100" aria-label="Brightest" oninput="syncBr('max')" onchange="scheduleSave()">
+      </div>
+      <p class="hint">Dimmest in a dark room, brightest in a bright room. The display never goes fully dark.</p>
+      <div class="row" style="margin-top:12px"><strong>Room light</strong></div>
+      <p class="hint">Where the dark and bright ends of the room are.</p>
+      <div class="row"><strong>Light in the room now</strong><output id="luxOut">-</output></div>
+      <progress id="lux" max="100" value="0" style="width:100%"></progress>
+      <div class="row" style="margin-top:12px"><strong>Dark</strong><output id="darkOut"></output></div>
+      <input type="range" id="dark" min="1" max="99" oninput="syncAuto('dark')" onchange="scheduleSave()">
+      <div class="row" style="margin-top:12px"><strong>Bright</strong><output id="lightOut"></output></div>
+      <input type="range" id="light" min="2" max="100" oninput="syncAuto('light')" onchange="scheduleSave()">
+    </div>
+  </section>
+
+  <section>
+    <h2>Time</h2>
+    <div class="row">
+      <div><strong>24-hour clock</strong><p class="hint">Off shows 8:00PM instead of 20:00</p></div>
+      <input type="checkbox" class="switch" id="h24" onchange="scheduleSave()">
+    </div>
+    <label for="tz">Timezone</label>
+    <select id="tz" onchange="scheduleSave()"></select>
+    <button class="small" onclick="phoneZone()">Use my phone's timezone</button>
+  </section>
+
+  <section>
+    <h2>Updates</h2>
+    <div class="row">
+      <div><strong>Pause automatic updates at night</strong><p class="hint">The clock checks for a new version every hour. Checking by hand always works.</p></div>
+      <input type="checkbox" class="switch" id="quiet" onchange="showQuiet(); scheduleSave()">
+    </div>
+    <div id="quietBox" class="row split" style="display:none">
+      <div><label for="qFrom">From</label><select id="qFrom" onchange="scheduleSave()"></select></div>
+      <div><label for="qTo">Until</label><select id="qTo" onchange="scheduleSave()"></select></div>
+    </div>
+    <label for="fwUrl" style="margin-top:12px">Firmware location</label>
+    <input type="text" id="fwUrl" maxlength="120" placeholder="https://" autocomplete="off" autocapitalize="off" spellcheck="false" onchange="scheduleSave()">
+    <p class="hint">The web folder the clock downloads new firmware from. Clear it to use the default.</p>
+  </section>
+
+  <section>
+    <h2>Clock</h2>
+    <label for="name">Name</label>
+    <input type="text" id="name" maxlength="24" placeholder="Clockwise" autocomplete="off" onchange="scheduleSave()">
+    <p class="hint">Shown in the list of clocks on your network, so you can tell them apart.</p>
+    <div class="row" style="margin-top:12px">
+      <div><strong>QR code at startup</strong><p class="hint">Shows a code on the display for a few seconds that opens this page</p></div>
+      <input type="checkbox" class="switch" id="qr" onchange="scheduleSave()">
+    </div>
+    <label for="access" style="margin-top:12px;display:block">Who can open this page</label>
+    <select id="access" onchange="scheduleSave()">
+      <option value="1">Only devices on this network</option>
+      <option value="2">Any private network (10.x, 172.16-31.x, 192.168.x)</option>
+      <option value="0">Anyone who can reach the clock</option>
+    </select>
+    <button onclick="checkUpdate()">Check for update</button>
+    <button onclick="if(confirm('Restart the clock and open WiFi setup? Your current network stays saved until you pick a new one.'))cmd('wifi','Restarting into WiFi setup. Scan the QR code on the clock.',true)">Change WiFi</button>
+    <button onclick="cmd('reboot','Rebooting...',true)">Reboot</button>
+    <button class="danger" onclick="if(confirm('Reset the clock to factory settings? All settings and the WiFi network are erased.'))cmd('reset','Reset done. Scan the QR code on the clock to set up WiFi again.',true)">Reset to factory settings</button>
+  </section>
+</main>
+
+<div id="busy"><div class="busyBox"><div class="spinner"></div><p id="busyMsg"></p><button id="busyBtn" style="display:none" onclick="location.reload()">Reload page</button></div></div>
+<div id="toast"></div>
+<div class="bar" id="restartBar" style="display:none">
+  <div class="row">
+    <span>Restart the clock to apply the timezone or clock format.</span>
+    <button class="primary" onclick="cmd('reboot','Rebooting...')">Restart now</button>
+  </div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  let faceId = '';
+  let ldrPin = 35;
+  const FACES = [['0x01', 'Mario'], ['0x02', 'Time in Words'], ['0x03', 'World Map'], ['0x04', 'Castlevania'],
+                 ['0x05', 'Pacman'], ['0x06', 'Pokemon'], ['0x08', 'Tetris'], ['0x09', 'Luigi'], ['0x0B', 'Football'], ['0x0C', 'Formula 1']]
+    .sort((a, b) => a[1].localeCompare(b[1]));
+  // Only these faces are drawn for a 64x32 panel; all the others need 64x64
+  const FACES_32 = ['0x08'];
+
+  // Used when the browser can't list timezones itself
+  const FALLBACK_ZONES = ['Africa/Cairo', 'Africa/Johannesburg', 'America/Argentina/Buenos_Aires', 'America/Chicago', 'America/Denver',
+    'America/Los_Angeles', 'America/Mexico_City', 'America/New_York', 'America/Sao_Paulo', 'America/Toronto', 'Asia/Bangkok',
+    'Asia/Dubai', 'Asia/Kolkata', 'Asia/Seoul', 'Asia/Shanghai', 'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney',
+    'Europe/Amsterdam', 'Europe/Athens', 'Europe/Berlin', 'Europe/Brussels', 'Europe/Copenhagen', 'Europe/Dublin',
+    'Europe/Helsinki', 'Europe/Istanbul', 'Europe/Lisbon', 'Europe/London', 'Europe/Madrid', 'Europe/Moscow', 'Europe/Oslo',
+    'Europe/Paris', 'Europe/Rome', 'Europe/Stockholm', 'Europe/Vienna', 'Europe/Warsaw', 'Europe/Zurich', 'Pacific/Auckland', 'UTC'];
+
+  // Timezone dropdown grouped by region. A saved zone the list doesn't know stays selectable.
+  function fillZones(current) {
+    let zones = [];
+    try { zones = Intl.supportedValuesOf('timeZone'); } catch (e) {}
+    if (!zones.length) zones = FALLBACK_ZONES;
+    zones = zones.slice();
+    for (const extra of ['UTC', current]) if (extra && !zones.includes(extra)) zones.push(extra);
+    zones.sort();
+    const groups = {};
+    for (const z of zones) {
+      const slash = z.indexOf('/');
+      const region = slash > 0 ? z.slice(0, slash) : 'Other';
+      (groups[region] = groups[region] || []).push(z);
+    }
+    $('tz').innerHTML = Object.keys(groups).map(region =>
+      '<optgroup label="' + region + '">' + groups[region].map(z =>
+        '<option value="' + z + '">' + (z.indexOf('/') > 0 ? z.slice(z.indexOf('/') + 1) : z).replace(/_/g, ' ') + '</option>').join('') + '</optgroup>').join('');
+    $('tz').value = current;
+  }
+
+  // Display brightness is stored as 0-255; the page works in percent
+  const brPct = raw => Math.min(100, Math.max(0, Math.round(Number(raw) * 100 / 255)));
+  const brRaw = pct => Math.round(Number(pct) * 255 / 100);
+
+  // The two-handle slider keeps the dimmest (at least 1%, raw 3, never fully dark) below the brightest.
+  // The brightest is also the manual brightness.
+  function syncBr(which) {
+    let lo = Number($('brMin').value), hi = Number($('brMax').value);
+    if (which === 'min' && lo >= hi) { hi = Math.min(100, lo + 1); lo = hi - 1; }
+    if (which === 'max' && hi <= lo) { lo = Math.max(1, hi - 1); hi = lo + 1; }
+    $('brMin').value = lo;
+    $('brMax').value = hi;
+    $('bright').value = hi;
+    $('brOut').value = hi + '%';
+    $('rangeOut').value = lo + '% to ' + hi + '%';
+    const fill = $('dualFill');
+    fill.style.left = lo + '%';
+    fill.style.width = (hi - lo) + '%';
+  }
+
+  // The single brightness slider (auto brightness off) moves the top of the range
+  function setManual() {
+    $('brMax').value = $('bright').value;
+    syncBr('max');
+  }
+
+  // The clock stores raw sensor readings (0-4095); people think in percent.
+  // 1% is raw 1 and 100% is raw 4095, so the whole sensor range can be picked.
+  const toPct = raw => Number(raw) > 0 ? Math.min(100, Math.max(1, Math.round(1 + (Number(raw) - 1) * 99 / 4094))) : '';
+  const toRaw = pct => Math.round(1 + (pct - 1) * 4094 / 99);
+
+  function toast(msg, ms) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.style.display = 'block';
+    if (ms) setTimeout(() => t.style.display = 'none', ms);
+  }
+
+  // Keeps bright above dark, and shows both values
+  function syncAuto(which) {
+    let d = Number($('dark').value), l = Number($('light').value);
+    if (which === 'dark' && d >= l) { l = d + 1; $('light').value = l; }
+    if (which === 'light' && l <= d) { d = l - 1; $('dark').value = d; }
+    $('darkOut').value = d + '%';
+    $('lightOut').value = l + '%';
+  }
+
+  // With auto brightness the sensor sets the brightness, so the manual slider goes away
+  // The clock's name is the page heading, the tab title and the name a home screen shortcut gets
+  function setTitle(name) {
+    const title = name || 'Clockwise';
+    $('title').textContent = title;
+    document.title = title;
+    document.querySelector('meta[name="apple-mobile-web-app-title"]').content = title;
+  }
+
+  // Other clocks found on the network (the clock searches for them in the background)
+  async function loadPeers() {
+    try {
+      const r = await fetch('/peers', { cache: 'no-store' });
+      const peers = await r.json();
+      $('peersBox').style.display = peers.length ? 'block' : 'none';
+      $('peersHint').textContent = 'Found ' + peers.length + (peers.length === 1 ? ' other clock' : ' other clocks') +
+        '. You are on "' + (orig.name || 'Clockwise') + '". Tap a clock to open its settings.';
+      const list = $('peerList');
+      list.textContent = '';
+      for (const p of peers) {
+        const link = document.createElement('a');
+        link.className = 'peer';
+        link.href = 'http://' + p.ip + '/';
+        const name = document.createElement('strong');
+        name.textContent = p.name || p.host || p.ip;
+        const detail = document.createElement('small');
+        detail.textContent = [p.face, p.ip].filter(Boolean).join(' \u00b7 ');
+        link.append(name, document.createElement('br'), detail);
+        list.appendChild(link);
+      }
+    } catch (e) {}
+  }
+
+  function showQuiet() { $('quietBox').style.display = $('quiet').checked ? 'flex' : 'none'; }
+
+  function showAuto() {
+    const auto = $('auto').checked;
+    $('autoBox').style.display = auto ? 'block' : 'none';
+    $('manualBox').style.display = auto ? 'none' : 'block';
+    if (auto) showLight();
+  }
+
+  async function load() {
+    const r = await fetch('/get');
+    const g = k => r.headers.get('X-' + k) || '';
+    $('brMax').value = Math.max(2, brPct(g('displayBright')));
+    $('brMin').value = Math.max(1, brPct(g('displayBrMin')));
+    syncBr('min');
+    $('h24').checked = g('use24hFormat') == '1';
+    fillZones(g('timeZone'));
+    $('dark').value = Math.min(99, toPct(g('autoBrightMin')) || 10);
+    $('light').value = Math.max(2, toPct(g('autoBrightMax')) || 80);
+    syncAuto('dark');
+    $('auto').checked = Number(g('autoBrightMax')) > 0;
+    $('qr').checked = g('showQr') !== '0';
+    $('f1').checked = g('showF1') !== '0';
+    $('ball').checked = g('ballRoll') !== '0';
+    $('timeStyle').value = g('timeStyle') || '2';
+    $('color').value = g('color') || '0';
+    const pacmanOpts = ['Default', 'Pastel green', 'Pastel pink', 'Pastel blue', 'Lemon', 'Peach', 'Pastel purple', 'Red', 'Orange', 'Cyan', 'White']
+      .map((n, i) => '<option value="' + i + '">' + n + '</option>').join('');
+    ['ghost1', 'ghost2', 'dots'].forEach(id => { $(id).innerHTML = pacmanOpts; });
+    $('ghost1').value = g('ghost1Color') || '0';
+    $('ghost2').value = g('ghost2Color') || '0';
+    $('dots').value = g('dotColor') || '0';
+    $('access').value = g('webAccess') || '1';
+    $('name').value = g('clockName');
+    $('fwUrl').value = g('fwUrl');
+    $('fwUrl').placeholder = g('fwUrlDefault') || 'https://';
+    setTitle(g('clockName'));
+    const hours = Array.from({ length: 24 }, (_, h) => '<option value="' + h + '">' + String(h).padStart(2, '0') + ':00</option>').join('');
+    $('qFrom').innerHTML = hours;
+    $('qTo').innerHTML = hours;
+    const qf = Number(g('updQuietFrom')), qt = Number(g('updQuietUntil'));
+    $('quiet').checked = qf !== qt;  // the same hour twice means no quiet hours
+    $('qFrom').value = qf !== qt ? qf : 22;
+    $('qTo').value = qf !== qt ? qt : 8;
+    showQuiet();
+    ldrPin = g('ldrPin') || 35;
+    faceId = g('CW_FW_ID');
+    $('ballRow').style.display = faceId === '0x0B' ? 'flex' : 'none';
+    $('styleRow').style.display = faceId === '0x0B' ? 'block' : 'none';
+    $('pacmanBox').style.display = faceId === '0x05' ? 'block' : 'none';
+    $('f1Box').style.display = faceId === '0x08' && g('displayHeight') === '32' ? 'block' : 'none';
+    const rows32 = g('displayHeight') === '32';
+    $('face').innerHTML = FACES.filter(f => !rows32 || FACES_32.includes(f[0]) || f[0] === faceId).map(f => '<option value="' + f[0] + '">' + f[1] + '</option>').join('');
+    $('face').value = faceId;
+    $('faceBox').style.display = $('face').options.length > 1 ? 'block' : 'none';
+    $('footballBox').style.display = faceId === '0x0B' || faceId === '0x08' ? 'block' : 'none';
+    const ms = g('matchSecs') || '8';
+    if (!Array.from($('matchSecs').options).some(o => o.value === ms)) $('matchSecs').add(new Option(ms + ' seconds', ms));
+    $('matchSecs').value = ms;
+    $('resultMins').value = g('resultMins') || '120';
+    if (faceId === '0x0B' || faceId === '0x08') await loadFootball(g('fbLeagues'), g('fbTeams'));
+    $('info').textContent = g('CLOCKFACE_NAME') + ' · v' + g('CW_FW_VERSION') + ' · ' + g('wifiSsid');
+    showAuto();
+    orig = current();
+  }
+
+  function phoneZone() {
+    const z = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!z) { toast('Your phone did not share its timezone', 3000); return; }
+    if (!Array.from($('tz').options).some(o => o.value === z)) fillZones(z);
+    $('tz').value = z;
+    scheduleSave();
+  }
+
+  // Live sensor reading while the auto brightness settings are open
+  async function showLight() {
+    if (!$('auto').checked || document.hidden) return;
+    try {
+      const ctl = new AbortController();
+      setTimeout(() => ctl.abort(), 3000);
+      const r = await fetch('/read?pin=' + ldrPin, { cache: 'no-store', signal: ctl.signal });
+      const raw = Number(r.headers.get('X-pin'));
+      const pct = raw > 0 ? toPct(raw) : 0;
+      $('lux').value = pct;
+      $('luxOut').value = pct + '%';
+    } catch (e) {}
+  }
+  setInterval(showLight, 2000);
+
+  async function set(key, value) { await fetch('/set?' + key + '=' + value, { method: 'POST' }); }
+
+  // Dims and blocks the page while the clock is busy (restarting, installing)
+  function setBusy(msg, canReload) {
+    $('busyMsg').textContent = msg;
+    $('busyBtn').style.display = canReload ? 'block' : 'none';
+    $('busy').style.display = 'flex';
+    $('toast').style.display = 'none';
+  }
+  function clearBusy() { $('busy').style.display = 'none'; }
+
+  // Waits for the clock to go down and come back (a reboot), then calls done(response, wentDown).
+  // Answering before it ever went down could just be the reboot not having started yet,
+  // so after 20 s an answer counts anyway (the clock may have rebooted between two polls).
+  function waitForClock(msg, done) {
+    setBusy(msg);
+    const started = Date.now();
+    let wentDown = false;
+    const poll = setInterval(async () => {
+      if (Date.now() - started > 180000) {
+        clearInterval(poll);
+        setBusy('The clock did not come back. Check that it is powered and on your network.', true);
+        return;
+      }
+      try {
+        const ctl = new AbortController();
+        setTimeout(() => ctl.abort(), 3000);
+        const r = await fetch('/get', { cache: 'no-store', signal: ctl.signal });
+        if (wentDown || Date.now() - started > 20000) { clearInterval(poll); clearBusy(); done(r, wentDown); }
+      } catch (e) { wentDown = true; }
+    }, 2000);
+  }
+  const reloadPage = () => location.reload();
+
+  // What the clock had when the page loaded, to save only what changed
+  let orig = {};
+  const current = () => ({
+    bright: $('brMax').value,
+    brMin: $('brMin').value,
+    h24: $('h24').checked ? 1 : 0,
+    tz: $('tz').value,
+    auto: $('auto').checked,
+    qr: $('qr').checked ? 1 : 0,
+    f1: $('f1').checked ? 1 : 0,
+    ball: $('ball').checked ? 1 : 0,
+    timeStyle: $('timeStyle').value,
+    color: $('color').value,
+    ghost1: $('ghost1').value,
+    ghost2: $('ghost2').value,
+    dots: $('dots').value,
+    access: $('access').value,
+    name: $('name').value.trim(),
+    fwUrl: $('fwUrl').value.trim(),
+    quiet: $('quiet').checked,
+    qFrom: $('qFrom').value,
+    qTo: $('qTo').value,
+    dark: $('dark').value,
+    light: $('light').value,
+    matchSecs: $('matchSecs').value,
+    resultMins: $('resultMins').value,
+    fbLeagues: fbLeagues.join(','),
+    fbTeams: fbTeams.map(t => t.id + ':' + t.abbr + ':' + t.kind).join(',')
+  });
+
+  // Football: the competitions to follow and the favourite teams. The lists of what can be chosen
+  // come from the clock (they are only on the Football clockface).
+  const MAX_LEAGUES = 10, MAX_TEAMS = 8;
+  let fbLeagues = [], fbTeams = [], fbCatalog = [], fbCatalogLoaded = false;
+  async function loadFootball(leagueCodes, teamCodes) {
+    fbLeagues = leagueCodes.split(',').filter(Boolean);
+    try {
+      const [leagues, teams] = await Promise.all([fetch('/football/leagues').then(r => r.json()), fetch('/football/teams').then(r => r.json())]);
+      fbCatalog = teams.map(t => ({ id: String(t[0]), abbr: t[1], name: t[2], kind: t[3] }));
+      // One collapsible block per group, open when something in it is chosen. The groups that aren't countries
+      // (European cups, national teams) come first under their own heading, the countries after them.
+      const INTERNATIONAL = ['Europe', 'National teams'];
+      const block = g => {
+        const rows = leagues.filter(l => l[3] === g);
+        const chosen = rows.filter(l => fbLeagues.includes(l[0])).length;
+        return '<details' + (chosen ? ' open' : '') + '><summary>' + g + (chosen ? ' <small>(' + chosen + ')</small>' : '') + '</summary>' +
+          rows.map(l => '<label><input type="checkbox" value="' + l[0] + '" onchange="pickLeague(this)"' + (fbLeagues.includes(l[0]) ? ' checked' : '') + '>' + l[2] + '</label>').join('') + '</details>';
+      };
+      const countries = [...new Set(leagues.map(l => l[3]))].filter(g => !INTERNATIONAL.includes(g)).sort((a, b) => a.localeCompare(b));
+      $('leagueList').innerHTML = '<h3>International</h3>' + INTERNATIONAL.map(block).join('') + '<h3>Countries</h3>' + countries.map(block).join('');
+      fbCatalogLoaded = true;
+    } catch (e) { $('leagueHint').textContent = 'Could not load the list of competitions.'; }
+    fbTeams = teamCodes.split(',').filter(Boolean).map(c => {
+      const [id, abbr, kind] = c.split(':');
+      const known = fbCatalog.find(t => t.id === id);
+      return { id, abbr, kind, name: known ? known.name : abbr };
+    });
+    showFootball();
+  }
+  function showFootball() {
+    $('leagueHint').textContent = fbLeagues.length + ' of ' + MAX_LEAGUES + ' chosen';
+    $('teamChips').innerHTML = fbTeams.map((t, i) => '<span class="chip">' + t.name + '<button aria-label="Remove" onclick="dropTeam(' + i + ')">&times;</button></span>').join('');
+  }
+  function pickLeague(box) {
+    if (box.checked && fbLeagues.length >= MAX_LEAGUES) { box.checked = false; toast('At most ' + MAX_LEAGUES + ' competitions', 2500); return; }
+    fbLeagues = fbLeagues.filter(c => c !== box.value);
+    if (box.checked) fbLeagues.push(box.value);
+    showFootball();
+    scheduleSave();
+  }
+  function dropTeam(i) { fbTeams.splice(i, 1); showFootball(); scheduleSave(); }
+  function searchTeams() {
+    const q = $('teamSearch').value.trim().toLowerCase();
+    const box = $('teamPicks');
+    if (!q) { box.style.display = 'none'; return; }
+    const found = fbCatalog.filter(t => !fbTeams.some(f => f.id === t.id) && (t.name.toLowerCase().includes(q) || t.abbr.toLowerCase() === q))
+      .sort((a, b) => (b.name.toLowerCase().startsWith(q) - a.name.toLowerCase().startsWith(q))).slice(0, 8);
+    box.innerHTML = found.map(t => '<div onclick="addTeam(\'' + t.id + '\')">' + t.name + ' <small>' + (t.kind === 'n' ? 'national team' : t.abbr) + '</small></div>').join('')
+      || '<div><small>Nothing found</small></div>';
+    box.style.display = 'block';
+  }
+  function addTeam(id) {
+    const t = fbCatalog.find(x => x.id === id);
+    if (!t) return;
+    if (fbTeams.length >= MAX_TEAMS) { toast('At most ' + MAX_TEAMS + ' favourites', 2500); return; }
+    fbTeams.push(t);
+    $('teamSearch').value = '';
+    $('teamPicks').style.display = 'none';
+    showFootball();
+    scheduleSave();
+  }
+
+  // Settings save as soon as they change. Brightness and the like apply at once; the clock only
+  // reads the timezone and 12/24h format at boot, so those ask for a restart instead.
+  let saveTimer = null, saving = false;
+  function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
+
+  function showRestartNote() {
+    $('restartBar').style.display = 'block';
+    document.body.classList.add('bar-on');
+  }
+
+  async function save() {
+    if (saving) { scheduleSave(); return; }
+    const now = current();
+    const autoChanged = now.auto !== orig.auto || (now.auto && (now.dark !== orig.dark || now.light !== orig.light));
+    const brightChanged = now.bright !== orig.bright;
+    const brMinChanged = now.brMin !== orig.brMin;
+    const restart = now.h24 !== orig.h24 || now.tz !== orig.tz;
+    const qrChanged = now.qr !== orig.qr;
+    const f1Changed = now.f1 !== orig.f1;
+    const ballChanged = now.ball !== orig.ball;
+    const styleChanged = now.timeStyle !== orig.timeStyle;
+    const colorChanged = now.color !== orig.color;
+    const pacmanChanged = now.ghost1 !== orig.ghost1 || now.ghost2 !== orig.ghost2 || now.dots !== orig.dots;
+    const accessChanged = now.access !== orig.access;
+    const nameChanged = now.name !== orig.name;
+    const fwUrlChanged = now.fwUrl !== orig.fwUrl;
+    const matchChanged = now.matchSecs !== orig.matchSecs;
+    const resultChanged = now.resultMins !== orig.resultMins;
+    const leaguesChanged = now.fbLeagues !== orig.fbLeagues, teamsChanged = now.fbTeams !== orig.fbTeams;
+    const quietChanged = now.quiet !== orig.quiet || (now.quiet && (now.qFrom !== orig.qFrom || now.qTo !== orig.qTo));
+    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !qrChanged && !f1Changed && !ballChanged && !styleChanged && !colorChanged && !pacmanChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged) return;
+    if (now.quiet && now.qFrom === now.qTo) { toast('Choose different start and end times', 3000); return; }
+    saving = true;
+    try {
+      if (brightChanged) await set('displayBright', brRaw(now.bright));
+      if (brMinChanged) await set('displayBrMin', brRaw(now.brMin));
+      if (qrChanged) await set('showQr', now.qr);
+      if (f1Changed) await set('showF1', now.f1);
+      if (ballChanged) await set('ballRoll', now.ball);
+      if (styleChanged) await set('timeStyle', now.timeStyle);
+      if (colorChanged) await set('color', now.color);
+      if (now.ghost1 !== orig.ghost1) await set('ghost1Color', now.ghost1);
+      if (now.ghost2 !== orig.ghost2) await set('ghost2Color', now.ghost2);
+      if (now.dots !== orig.dots) await set('dotColor', now.dots);
+      if (accessChanged) await set('webAccess', now.access);
+      if (matchChanged) await set('matchSecs', now.matchSecs);
+      if (resultChanged) await set('resultMins', now.resultMins);
+      if (leaguesChanged) await set('fbLeagues', now.fbLeagues);
+      if (teamsChanged) await set('fbTeams', now.fbTeams);
+      if (nameChanged) { await set('clockName', encodeURIComponent(now.name)); setTitle(now.name); }
+      if (fwUrlChanged) {
+        if (now.fwUrl && !/^https?:\/\//i.test(now.fwUrl)) { toast('The location must start with http:// or https://', 4000); saving = false; return; }
+        await set('fwUrl', encodeURIComponent(now.fwUrl));
+      }
+      if (quietChanged) {
+        await set('updQuietFrom', now.quiet ? now.qFrom : 0);
+        await set('updQuietUntil', now.quiet ? now.qTo : 0);
+      }
+      if (now.h24 !== orig.h24) await set('use24hFormat', now.h24);
+      if (now.tz !== orig.tz) await set('timeZone', now.tz);
+      if (autoChanged) {
+        const pad = n => String(n).padStart(4, '0');
+        await set('autoBright', now.auto ? pad(toRaw(now.dark)) + ',' + pad(toRaw(now.light)) : '0000,0000');
+      }
+      orig = now;
+      if (restart) { showRestartNote(); toast('Saved. Restart the clock to apply it.', 5000); }
+      else toast('Saved', 1500);
+    } catch (e) { toast('Could not reach the clock', 4000); }
+    saving = false;
+  }
+
+  async function switchFace() {
+    const id = $('face').value, name = $('face').selectedOptions[0].text;
+    if (id === faceId) return;
+    if (!confirm('Install the ' + name + ' clockface? The clock downloads it and restarts.')) { $('face').value = faceId; return; }
+    try { await fetch('/face?id=' + id, { method: 'POST' }); }
+    catch (e) { toast('Could not reach the clock', 4000); $('face').value = faceId; return; }
+    // The clock doesn't answer while it downloads. Once it is back, either the new face runs or the install failed.
+    waitForClock('Installing ' + name + '. The clock restarts when it is done...', r => {
+      if (r.headers.get('X-CW_FW_ID') === id) location.reload();
+      else { $('face').value = faceId; toast('Install failed, the clock is still on its old clockface', 6000); }
+    });
+  }
+
+  function showUpdateResult(status) {
+    if (status === 'uptodate') toast('The clock is up to date', 5000);
+    else if (status === 'noserver') toast('Could not reach the update server', 6000);
+    else if (status === 'skipped') toast('A newer version exists, but installing it failed on this clock before', 8000);
+    else if (status === 'failed') toast('The new version could not be downloaded. Try again later.', 6000);
+  }
+
+  // Asks the clock to check, shows what it found, and follows it through a restart if it installs something
+  async function checkUpdate() {
+    setBusy('Checking for a new version...');
+    try { await fetch('/cmd?c=update', { method: 'POST' }); }
+    catch (e) { clearBusy(); toast('Could not reach the clock', 4000); return; }
+    const started = Date.now();
+    let silent = 0;
+    const poll = setInterval(async () => {
+      if (Date.now() - started > 45000) { clearInterval(poll); clearBusy(); toast('The clock did not answer', 5000); return; }
+      try {
+        const ctl = new AbortController();
+        setTimeout(() => ctl.abort(), 3000);
+        const r = await fetch('/get', { cache: 'no-store', signal: ctl.signal });
+        const status = r.headers.get('X-updateStatus');
+        if (status === 'checking') return;
+        clearInterval(poll);
+        if (!status) { location.reload(); return; }  // restarted since: a new version is running
+        clearBusy();
+        showUpdateResult(status);
+      } catch (e) {
+        // Silent while it checks is normal for a moment; for longer it is busy downloading a new version
+        if (++silent < 3) return;
+        clearInterval(poll);
+        waitForClock('A new version was found. Installing, the clock restarts...', (r, wentDown) => {
+          const status = r.headers.get('X-updateStatus');
+          if (!wentDown && status) showUpdateResult(status); else location.reload();
+        });
+      }
+    }, 1500);
+  }
+
+  async function cmd(c, msg, restarts) {
+    try {
+      await fetch('/cmd?c=' + c, { method: 'POST' });
+    } catch (e) { toast('Could not reach the clock', 4000); return; }
+    if (c === 'reboot') {
+      waitForClock(msg, reloadPage);
+    } else {
+      setBusy(msg, true);  // WiFi setup and reset: the clock leaves this network, so there is nothing to wait for
+    }
+  }
+
+  load().then(loadPeers).catch(() => toast('Could not load settings'));
+  setInterval(loadPeers, 20000);
+</script>
+</body>
+</html>
