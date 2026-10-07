@@ -17,8 +17,12 @@
 #endif
 
 // What the football ticker follows until the settings page says otherwise
-#define CW_DEFAULT_FOOTBALL_LEAGUES "ned.1,ned.cup"
-#define CW_DEFAULT_FOOTBALL_TEAMS "449:NED:n,143:FOR:c"
+#ifndef CW_DEFAULT_FOOTBALL_LEAGUES
+    #define CW_DEFAULT_FOOTBALL_LEAGUES "ned.1,ned.cup"
+#endif
+#ifndef CW_DEFAULT_FOOTBALL_TEAMS
+    #define CW_DEFAULT_FOOTBALL_TEAMS "449:NED:n"
+#endif
 
 struct ClockwiseParams
 {
