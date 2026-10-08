@@ -58,6 +58,7 @@ int64_t loopDue = 0;
 unsigned long updateCheckDue = 30000; // first check 30s after boot, then daily; compared wrap-safe
 #define UPDATE_CHECK_MS 86400000
 #define UPDATE_MAX_TRIES 3        // failed downloads per build before giving up
+#define UPDATE_MAX_RESTARTS 2     // restarts in a row for the same update before giving up
 #define BOOT_QR_MS 10000          // how long the startup QR code stays up
 #define VALIDATE_AFTER_MS 60000   // from this long on, running + on WiFi, try to prove the update check works
 #define VALIDATE_RETRY_MS 30000   // between tries
@@ -582,10 +583,21 @@ static void updateLog(const String &msg) {
   if (inBootCheck) bootLog += "[after the restart]" + msg + "\n";
 }
 
-// Restarts so the update check runs again right after the boot (see bootUpdateCheck()), where it can install
-static void restartForUpdateCheck(const char *msg, const String &knownMd5 = "") {
+// Restarts so the update check runs again right after the boot (see bootUpdateCheck()), where it can install.
+// Safety net: the same restart reason (the build, or "memory") is only tried UPDATE_MAX_RESTARTS times in a
+// row, so a boot that fails to install can never turn into an endless restart loop. The count is cleared
+// when the firmware is up to date (see applyUpdateCheck()). Returns false when it gave up.
+static bool restartForUpdateCheck(const char *msg, const String &knownMd5 = "") {
   Preferences prefs;
   prefs.begin("fwupdate", false);
+  String reason = knownMd5.length() == 32 ? knownMd5 : String("memory");
+  uint8_t restarts = (prefs.getString("restartFor", "") == reason) ? prefs.getUChar("restarts", 0) : 0;
+  if (restarts >= UPDATE_MAX_RESTARTS) {
+    prefs.end();
+    return false;
+  }
+  prefs.putString("restartFor", reason);
+  prefs.putUChar("restarts", restarts + 1);
   prefs.putBool("bootCheck", true);
   prefs.putBool("skipQr", true);
   if (knownMd5.length() == 32) prefs.putString("bootMd5", knownMd5);  // the boot installs it without asking the server again
@@ -593,6 +605,7 @@ static void restartForUpdateCheck(const char *msg, const String &knownMd5 = "") 
   ClockwiseWebServer::getInstance()->update_status = "restarting";
   restartAt = millis() + (knownMd5.length() ? 1000 : 3000);  // the web UI sees the status first
   if (msg) updateLog(msg);
+  return true;
 }
 
 static bool userCheck = false;  // asked for by a person (web UI, telnet): goes through even during a live match
@@ -608,13 +621,18 @@ static void applyUpdateCheck(const String &md5, bool ignoreSkips) {
     status = "noserver";
     // Out of memory for the TLS handshake: a restart starts with a whole heap, so check again there
     if (md5Failure.indexOf("emory") >= 0 && !inBootCheck && fwValidated) {
-      restartForUpdateCheck(" [Update] Low on memory, restarting to check again");
+      if (!restartForUpdateCheck(" [Update] Low on memory, restarting to check again"))
+        updateLog(" [Update] Still low on memory after restarts, giving up until the next check");
     }
     return;
   }
   if (md5.equalsIgnoreCase(ESP.getSketchMD5())) {
     updateLog(" [Update] Firmware is up to date");
     status = "uptodate";
+    Preferences done;
+    done.begin("fwupdate", false);
+    done.remove("restarts");
+    done.end();
     return;
   }
   // An install of this exact build was started and we are still on the old
@@ -643,8 +661,9 @@ static void applyUpdateCheck(const String &md5, bool ignoreSkips) {
   // handshake fit whatever the clockface (Football, F1) has allocated
   if (!inBootCheck && !ignoreSkips && fwValidated) {  // telnet X installs on the spot
     prefs.end();
-    updateLog(" [Update] New firmware available, restarting to install it");
-    restartForUpdateCheck(nullptr, md5);
+    if (restartForUpdateCheck(" [Update] New firmware available, restarting to install it", md5)) return;
+    updateLog(" [Update] New firmware available, but restarting did not install it, giving up (X to force)");
+    status = "skipped";
     return;
   }
   prefs.putString("tried", md5);
@@ -732,8 +751,9 @@ static void bootUpdateCheck() {
   inBootCheck = true;
   const esp_partition_t *running = esp_ota_get_running_partition();
   esp_ota_img_states_t state;
-  if (esp_ota_get_state_partition(running, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY &&
-      startMd5Fetch(true, false))
+  bool pending = esp_ota_get_state_partition(running, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY;
+  if (!pending) fwValidated = true;  // already confirmed: the restart for an update must be able to install right here
+  if (pending && startMd5Fetch(true, false))
     waitForFetch("CHECKING...");
 
   Preferences prefs;
