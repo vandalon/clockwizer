@@ -126,9 +126,9 @@ struct StatusController
 
 	void wifiConnecting()
 	{
-		Locator::getDisplay()->fillRect(0, 24, 64, 52, 0);
-		Locator::getDisplay()->drawBitmap(16, 24, CW_STATUS_WIFI, 32, 32, 0x2459);
-		printCenter("Connecting WiFi", 61);
+		Locator::getDisplay()->fillRect(0, 16, 64, 48, 0);
+		Locator::getDisplay()->drawBitmap(16, 16, CW_STATUS_WIFI, 32, 32, 0x2459);
+		printCenter("Connecting WiFi", 52);
 		// #ifdef DOUBLE_BUFFER_ON
 		//   dma_display->flipDMABuffer();
 		// #endif
@@ -136,9 +136,9 @@ struct StatusController
 
 	void wifiConnectionFailed(const char *msg)
 	{
-		Locator::getDisplay()->fillRect(0, 24, 64, 52, 0);
-		Locator::getDisplay()->drawBitmap(16, 24, CW_STATUS_WIFI, 32, 32, 0xFA28);
-		printCenter(msg, 61);
+		Locator::getDisplay()->fillRect(0, 16, 64, 48, 0);
+		Locator::getDisplay()->drawBitmap(16, 16, CW_STATUS_WIFI, 32, 32, 0xFA28);
+		printCenter(msg, 52);
 		// #ifdef DOUBLE_BUFFER_ON
 		//   dma_display->flipDMABuffer();
 		// #endif
