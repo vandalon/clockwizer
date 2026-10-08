@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 
+class String;
+
 class Print {
  public:
   virtual ~Print() {}
@@ -15,4 +17,5 @@ class Print {
   }
   size_t write(const char *s) { return s ? write((const uint8_t *)s, strlen(s)) : 0; }
   size_t print(const char *s) { return write(s); }
+  size_t print(const String &s);  // defined in Arduino.h, once String is complete
 };

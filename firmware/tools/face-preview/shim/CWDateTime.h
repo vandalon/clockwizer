@@ -5,7 +5,8 @@
 
 class CWDateTime {
  public:
-  int hour = 21, minute = 34, second = 0, day = 4, month = 10, weekday = 0;
+  int year = 2026, hour = 21, minute = 34, second = 0, day = 4, month = 10, weekday = 0;
+  int getYear() { return year; }
   int getHour() { return hour; }
   int getMinute() { return minute; }
   int getSecond() { return second; }

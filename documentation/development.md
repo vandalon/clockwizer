@@ -92,7 +92,8 @@ There is only a placeholder test so far (`test/test_native`) and a preferences t
 `firmware/tools/` has a few ways to see a screen without flashing a clock; they compile parts of the real firmware against a tiny Arduino shim on your computer:
 
 - `goal-preview/preview.sh` renders the football goal celebration to an animated GIF (needs a C++ compiler and `ffmpeg`, and the Tetris environment built once so the Adafruit GFX library is present).
-- `face-preview/preview.sh` renders the Football screens to PNG pictures that look like the LED panel. It needs Pillow and was written for an earlier version of the Football face: if it fails to link, update it to the current `FootballTicker` interface first.
+- `face-preview/thumbs.sh` renders Tetris, Football and Formula 1 on a fake panel from the real `Clockface.cpp` files and makes the pictures the web flasher shows (`docs/images/faces`; Luigi is the Mario picture with its red turned green). Needs a C++ compiler and Pillow, and the Football environment built once. The scenes (a live match, a race) are made up in `thumb_football.cpp`, `thumb_f1.cpp` and `thumb_tetris.cpp`.
+- `face-preview/preview.sh` is an older tool for the Football screens that depended on a simulator which has since been removed; use `thumbs.sh` as the starting point for a new preview instead.
 - `football-catalog/generate.py` regenerates `FootballCatalog.h`, the list of competitions and teams offered on the settings page, from ESPN.
 
 ## The web flasher

@@ -11,6 +11,14 @@
 #include <string>
 #include <time.h>
 
+// Not in every libc: the ESP32 one has it
+static inline size_t cw_strlcpy(char *dst, const char *src, size_t size) {
+  size_t n = strlen(src);
+  if (size) { size_t c = n >= size ? size - 1 : n; memcpy(dst, src, c); dst[c] = 0; }
+  return n;
+}
+#define strlcpy cw_strlcpy
+
 #define PROGMEM
 #define PI 3.14159265358979f
 typedef bool boolean;
@@ -49,6 +57,11 @@ class String {
   }
   bool startsWith(const String &p) const { return _s.compare(0, p._s.size(), p._s) == 0; }
   long toInt() const { return atol(_s.c_str()); }
+  char charAt(unsigned i) const { return i < _s.size() ? _s[i] : 0; }
+  void replace(const String &from, const String &to) {
+    if (from._s.empty()) return;
+    for (size_t p = 0; (p = _s.find(from._s, p)) != std::string::npos; p += to._s.size()) _s.replace(p, from._s.size(), to._s);
+  }
   String &operator+=(const String &o) { _s += o._s; return *this; }
   String &operator+=(char c) { _s += c; return *this; }
   bool operator==(const String &o) const { return _s == o._s; }
@@ -68,3 +81,9 @@ template <typename T, typename = typename std::enable_if<std::is_arithmetic<T>::
 String operator+(const String &a, T b) { return String(a.str() + String(b).str()); }
 
 #include "Print.h"
+inline size_t Print::print(const String &s) { return write(s.c_str()); }
+struct SerialStub {  // the face prints debug lines here; nobody listens in the preview
+  template <typename T> void println(const T &) {}
+  template <typename T> void print(const T &) {}
+};
+static SerialStub Serial;
