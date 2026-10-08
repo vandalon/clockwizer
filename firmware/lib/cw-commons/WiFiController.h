@@ -22,7 +22,25 @@ static const char PORTAL_STYLE[] PROGMEM =
   "button.D{background:#c0392b!important}"
   ".msg{border-radius:10px;background:var(--card);border-left-color:var(--accent)!important;color:var(--text)}"
   ".q{color:var(--text)}"
-  "</style>";
+  "</style>"
+  // The page after "save" says to reconnect to the setup network; say where to go instead. It then asks the clock
+  // for its address (/cwip, empty until the clock has joined the network) and shows it when it arrives. If the phone
+  // has left the setup network by then, the first text stays.
+  "<script>addEventListener('DOMContentLoaded',function(){document.querySelectorAll('.msg').forEach(function(m){"
+  "if(!/Saving Credentials/.test(m.textContent))return;"
+  "var head='<b>Saved.</b><br>The clock joins your network and restarts. Your phone goes back to your normal WiFi by itself. Then open ';"
+  "var tail='<br><br>Wait for this screen to close by itself.';"
+  "function L(u){return '<a href=\"'+u+'\">'+u+'</a> (<a href=\"#\" data-c=\"'+u+'\">copy</a>)'}"
+  "var local=L('http://clockwizer.local');"
+  "m.innerHTML=head+local+'.'+tail;"
+  // plain http is not a secure context, so navigator.clipboard is missing: copy through a temporary textarea
+  "m.addEventListener('click',function(e){var u=e.target.getAttribute('data-c');if(!u)return;e.preventDefault();"
+  "var x=document.createElement('textarea');x.value=u;document.body.appendChild(x);x.select();"
+  "try{document.execCommand('copy');e.target.textContent='copied'}catch(_){}document.body.removeChild(x)});"
+  "var t=setInterval(function(){fetch('/cwip').then(function(r){return r.text()}).then(function(ip){"
+  "if(!ip)return;clearInterval(t);"
+  "m.innerHTML=head+local+' or '+L('http://'+ip)+'.'+tail"
+  "}).catch(function(){})},1500)})})</script>";
 
 ImprovWiFi improvSerial(&Serial);
 
@@ -41,6 +59,10 @@ struct WiFiController
   // Set by main: shows what was just drawn (needed with double buffering)
   void (*showDisplay)() = nullptr;
   void (*setBrightness)(uint8_t) = nullptr;
+  // Set by main: the display runs in its fast mode for the setup QR code. Other starts restart into it when the
+  // setup is needed, and out of it when it is done (the fast mode costs colour depth).
+  bool highRefresh = false;
+  bool joinedViaPortal = false;
 
   static void onImprovWiFiErrorCb(ImprovTypes::Error err)
   {
@@ -106,31 +128,57 @@ struct WiFiController
 
   bool alternativeSetupMethod()
   {
+    if (!highRefresh && ClockwiseParams::getInstance()->displayHeight == 64)
+    {
+      Preferences prefs;
+      prefs.begin("fwupdate", false);
+      prefs.putBool("setupRefresh", true);
+      prefs.end();
+      Serial.println("[WiFi] Restarting into the fast display mode for the setup QR code");
+      delay(100);
+      ESP.restart();
+    }
+    StatusController::getInstance()->stopWifiBlink();
     WiFiManager wifiManager;
     wifiManager.setConfigPortalTimeout(300); //Wait 5min to configure wifi via AP
+    wifiManager.setDisableConfigPortal(false);  // the portal stays up for a moment after joining, so the page can get the address
+    bool ipServed = false;
+    wifiManager.setWebServerCallback([&wifiManager, &ipServed]() {
+      wifiManager.server->on("/cwip", [&wifiManager, &ipServed]() {
+        wifiManager.server->sendHeader("Cache-Control", "no-store");
+        bool up = WiFi.status() == WL_CONNECTED;
+        wifiManager.server->send(200, "text/plain", up ? WiFi.localIP().toString() : String(""));
+        if (up) ipServed = true;
+      });
+    });
     wifiManager.setConfigPortalBlocking(false); // a failed password leaves the portal open for another try
     // One clear screen in the same look as the settings page
     const char* menu[] = {"wifi"};
     wifiManager.setMenu(menu, 1);
     wifiManager.setTitle("Clockwizer");
     wifiManager.setCustomHeadElement(PORTAL_STYLE);
-    wifiManager.startConfigPortal("Clockwizer-Wifi");
+    wifiManager.startConfigPortal("CW-SETUP");
 
     if (ClockwiseParams::getInstance()->displayHeight == 64)
     {
-      // Tested on a real panel: lit modules on black at half brightness scan reliably
-      if (setBrightness) setBrightness(128);
-      StatusController::getInstance()->wifiSetupQr("Clockwizer-Wifi");
+      // Tested on a real panel: white modules on black at full brightness scan best
+      if (setBrightness) setBrightness(255);
+      StatusController::getInstance()->qrTitle("WIFI SETUP", "SSID: CW-SETUP", true);
+      if (showDisplay) showDisplay();
+      for (unsigned long until = millis() + 3000; (long)(millis() - until) < 0; delay(5))
+        wifiManager.process();
+      StatusController::getInstance()->wifiSetupQr("CW-SETUP");
     }
     else
     {
-      StatusController::getInstance()->wifiConnectionFailed("Setup WiFi via AP");
+      StatusController::getInstance()->wifiConnectionFailed("SETUP WIFI VIA AP");
     }
     if (showDisplay) showDisplay();
 
     bool success = false;
 
     // Stays active until it times out or a network is joined
+    int phones = 0;
     while (wifiManager.getConfigPortalActive())
     {
       if (wifiManager.process())
@@ -138,14 +186,39 @@ struct WiFiController
         success = true;
         break;
       }
+      // Say so on the display when a phone joins (the setup page needs a moment), and show the QR code again if it leaves
+      if (ClockwiseParams::getInstance()->displayHeight == 64)
+      {
+        int now = WiFi.softAPgetStationNum();
+        if ((now > 0) != (phones > 0))
+        {
+          if (now > 0)
+            StatusController::getInstance()->wifiPhoneConnected();
+          else
+            StatusController::getInstance()->wifiSetupQr("CW-SETUP");
+          if (showDisplay) showDisplay();
+        }
+        phones = now;
+      }
       delay(1);
     }
 
     if (success)
     {
+      // Keep answering the setup page (it asks for the address): up to 10 seconds for it to ask, then 10 more seconds once it has it.
+      // Then free port 80 for the clock's own page.
+      unsigned long until = millis() + 10000, servedAt = 0;
+      while ((long)(millis() - until) < 0)
+      {
+        wifiManager.process();
+        if (ipServed && servedAt == 0) until = (servedAt = millis()) + 10000;
+        delay(5);
+      }
+      wifiManager.stopConfigPortal();
       onImprovWiFiConnectedCb(WiFi.SSID().c_str(), WiFi.psk().c_str());
       Serial.printf("[WiFi] Connected via WiFiManager to %s, IP address %s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
       connectionSucessfulOnce = success;
+      joinedViaPortal = true;
     }
 
     return success;
@@ -215,16 +288,25 @@ struct WiFiController
       {
         if (setBrightness) setBrightness(ClockwiseParams::getInstance()->displayBright);
         StatusController::getInstance()->wifiRetrying();
-        if (showDisplay) showDisplay();
       }
       connected = retrySavedNetwork();
+      StatusController::getInstance()->stopWifiBlink();
     }
 
+    if (highRefresh)
+    {
+      // Back to the normal display mode; after a setup the next start says where the settings page is
+      Preferences prefs;
+      prefs.begin("fwupdate", false);
+      if (joinedViaPortal) prefs.putBool("setupInfo", true);
+      prefs.end();
+      delay(500);
+      ESP.restart();
+    }
     if (setBrightness) setBrightness(ClockwiseParams::getInstance()->displayBright);
     if (ClockwiseParams::getInstance()->displayHeight == 64)
     {
-      StatusController::getInstance()->wifiSetupDone();
-      if (showDisplay) showDisplay();
+      StatusController::getInstance()->wifiConnected();
     }
     return true;
   }

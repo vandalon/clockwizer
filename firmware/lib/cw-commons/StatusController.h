@@ -124,14 +124,66 @@ struct StatusController
 		return &base;
 	}
 
+	volatile bool blinking = false;
+	volatile bool stopBlink = false;
+
+	void (*showDisplay)() = nullptr;  // flips the display buffer, set by main
+
+	void flip()
+	{
+		if (showDisplay) showDisplay();
+	}
+
+	void drawWifiIcon(uint16_t color)
+	{
+		Locator::getDisplay()->fillRect(16, 16, 32, 32, 0);
+		Locator::getDisplay()->drawBitmap(16, 16, CW_STATUS_WIFI, 32, 32, color);
+	}
+
+	static void blinkTask(void *arg)
+	{
+		auto self = (StatusController *)arg;
+		bool on = true;
+		for (;;)
+		{
+			self->flip();
+			for (int i = 0; i < 5 && !self->stopBlink; i++)
+				vTaskDelay(pdMS_TO_TICKS(100));
+			if (self->stopBlink) break;
+			on = !on;
+			self->drawWifiIcon(on ? 0x2459 : 0);
+		}
+		self->blinking = false;
+		vTaskDelete(nullptr);
+	}
+
+	// Blue WiFi icon, blinking in a small task until stopWifiBlink(). Nothing else may draw meanwhile.
 	void wifiConnecting()
 	{
-		Locator::getDisplay()->fillRect(0, 16, 64, 48, 0);
-		Locator::getDisplay()->drawBitmap(16, 16, CW_STATUS_WIFI, 32, 32, 0x2459);
-		printCenter("Connecting WiFi", 52);
-		// #ifdef DOUBLE_BUFFER_ON
-		//   dma_display->flipDMABuffer();
-		// #endif
+		stopWifiBlink();
+		Locator::getDisplay()->fillScreen(0);
+		drawWifiIcon(0x2459);
+		blinking = true;
+		xTaskCreate(blinkTask, "wifiBlink", 3072, this, 1, nullptr);
+	}
+
+	void stopWifiBlink()
+	{
+		while (blinking)
+		{
+			stopBlink = true;
+			delay(10);
+		}
+		stopBlink = false;
+	}
+
+	// Solid green WiFi icon, no text
+	void wifiConnected()
+	{
+		stopWifiBlink();
+		Locator::getDisplay()->fillScreen(0);
+		drawWifiIcon(0x07E0);
+		flip();
 	}
 
 	void wifiConnectionFailed(const char *msg)
@@ -144,65 +196,79 @@ struct StatusController
 		// #endif
 	}
 
-	// QR code that joins the setup access point. 64x64 panels only.
-	// Lit modules on black: a big lit area blooms and fools the phone camera's exposure.
-	void wifiSetupQr(const char *ssid)
+	// Title shown for a few seconds before a QR code: the code fills the whole panel, so there is no
+	// room on it to say what it is for.
+	void qrTitle(const char *line1, const char *line2, bool wifiIcon)
 	{
-		if (!showQr(String("WIFI:T:nopass;S:") + ssid + ";;"))
-			wifiConnectionFailed("Setup WiFi via AP");
+		auto display = Locator::getDisplay();
+		display->fillScreen(0);
+		display->setTextColor(0xFFFF);
+		if (wifiIcon)
+			display->drawBitmap(16, 12, CW_STATUS_WIFI, 32, 32, 0x2459);
+		printCenter(line1, wifiIcon ? 52 : 28);
+		printCenter(line2, wifiIcon ? 59 : 38);
 	}
 
-	// Returns false when the text doesn't fit in a code. With a caption the code is drawn at
-	// 2px per module to leave room under it (only possible for the 25 module version).
-	// countdown > 0 (seconds left): the last 9 seconds are counted in the top right corner.
-	bool showQr(const String &payload, const char *caption = nullptr, int countdown = 0)
+	// Shown after the WiFi setup: where to find the settings page
+	void wifiConnectedInfo(const char *ip)
+	{
+		auto display = Locator::getDisplay();
+		display->fillScreen(0);
+		display->setTextColor(0xFFFF);
+		display->drawBitmap(16, 4, CW_STATUS_WIFI, 32, 32, 0x07E0);
+		printCenter("SETTINGS PAGE:", 51);
+		printCenter("CLOCKWIZER.LOCAL", 57);
+		printCenter(ip, 63);
+	}
+
+	// Shown as soon as a phone joins the setup access point: the setup page takes a moment to open
+	void wifiPhoneConnected()
+	{
+		auto display = Locator::getDisplay();
+		display->fillScreen(0);
+		display->setTextColor(0xFFFF);
+		display->drawBitmap(16, 8, CW_STATUS_WIFI, 32, 32, 0x07E0);
+		printCenter("PHONE CONNECTED", 48);
+		printCenter("OPENING SETUP...", 55);
+	}
+
+	// QR code that joins the setup access point. 64x64 panels only.
+	// White modules on black at full brightness scanned best on a real panel.
+	// "T:nopass" is left out (an omitted type means an open network). With a name of 8 characters
+	// or less the text is 17 bytes, which fits the smallest code (21 modules).
+	void wifiSetupQr(const char *ssid)
+	{
+		if (!showQr(String("WIFI:S:") + ssid + ";;"))
+			wifiConnectionFailed("SETUP WIFI VIA AP");
+	}
+
+	// Returns false when the text doesn't fit in a code. The smallest code (21 modules) is drawn
+	// at 3px per module, a bigger one at 2px, centered.
+	// Capitals only text (like "HTTP://CLOCKWIZER.LOCAL") is stored in the compact mode and fits version 1.
+	bool showQr(const String &payload)
 	{
 		static uint8_t qrData[128];  // version 3 needs 106 bytes
 		QRCode qr;
 
-		// Version 2 (25 modules) leaves a proper quiet zone; 3 is the fallback for longer names
-		if (qrcode_initBytes(&qr, qrData, 2, ECC_LOW, (uint8_t *)payload.c_str(), payload.length()) < 0 &&
-			qrcode_initBytes(&qr, qrData, 3, ECC_LOW, (uint8_t *)payload.c_str(), payload.length()) < 0)
-			return false;
+		for (uint8_t version = 1; version <= 3; version++)
+			if (qrcode_initBytes(&qr, qrData, version, ECC_LOW, (uint8_t *)payload.c_str(), payload.length()) >= 0)
+				break;
+			else if (version == 3)
+				return false;
 
-		const int quiet = 1;
-		int total = qr.size + 2 * quiet;
+		int px = qr.size <= 21 ? 3 : 2;
+		int left = (64 - qr.size * px) / 2;
 		auto display = Locator::getDisplay();
 		display->fillScreen(0);
-
-		if (caption && qr.size <= 25)
-		{
-			int left = (64 - total * 2) / 2;
-			for (uint8_t y = 0; y < qr.size; y++)
-				for (uint8_t x = 0; x < qr.size; x++)
-					if (qrcode_getModule(&qr, x, y))
-						display->fillRect(left + (x + quiet) * 2, (y + quiet) * 2, 2, 2, 0xFFFF);
-			printCenter(caption, 61);
-			// The caption takes the whole bottom line, so the countdown goes in the free top right corner
-			if (countdown > 0 && countdown <= 9)
-			{
-				Locator::getDisplay()->setCursor(60, 5);
-				Locator::getDisplay()->print(countdown);
-			}
-			return true;
-		}
-
-		// Scale to the panel: modules come out 2 or 3 px wide. One module of black margin is
-		// enough on a dark panel (none at all decoded unreliably when tested).
 		for (uint8_t y = 0; y < qr.size; y++)
 			for (uint8_t x = 0; x < qr.size; x++)
 				if (qrcode_getModule(&qr, x, y))
-				{
-					int x0 = ((x + quiet) * 64) / total, x1 = ((x + quiet + 1) * 64) / total;
-					int y0 = ((y + quiet) * 64) / total, y1 = ((y + quiet + 1) * 64) / total;
-					display->fillRect(x0, y0, x1 - x0, y1 - y0, 0xFFFF);
-				}
+					display->fillRect(left + x * px, left + y * px, px, px, 0xFFFF);
 		return true;
 	}
 
 	void wifiRetrying()
 	{
-		Locator::getDisplay()->fillScreen(0);
 		wifiConnecting();
 	}
 
@@ -215,7 +281,7 @@ struct StatusController
 	{
 		Locator::getDisplay()->fillRect(0, 24, 64, 52, 0);
 		Locator::getDisplay()->drawBitmap(16, 24, CW_STATUS_NTP, 32, 32, 0xBCBF);
-		printCenter("NTP Server", 61);
+		printCenter("NTP SERVER", 61);
 		// #ifdef DOUBLE_BUFFER_ON
 		//   dma_display->flipDMABuffer();
 		// #endif

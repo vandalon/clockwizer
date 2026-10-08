@@ -50,7 +50,6 @@ struct ClockwiseParams
     const char* const PREF_DISPLAY_HEIGHT = "displayHeight";
     // One-shot flag: open the WiFi setup portal on the next boot, keeping the saved network
     const char* const PREF_SETUP_WIFI = "setupWifi";
-    const char* const PREF_SHOW_QR = "showQr";
     const char* const PREF_CLOCK_NAME = "clockName";  // what the user calls this clock, announced over mDNS
     // The automatic update check stays quiet from this hour until that hour (local time); equal = never quiet
     const char* const PREF_UPD_QUIET_FROM = "updQuietFrom";
@@ -127,7 +126,6 @@ struct ClockwiseParams
     String manualPosix;
     uint8_t displayRotation;
     uint8_t displayHeight;
-    bool showQrOnBoot;
     String clockName;
     uint8_t updQuietFrom;
     uint8_t updQuietUntil;
@@ -196,7 +194,6 @@ struct ClockwiseParams
         preferences.putString(PREF_MANUAL_POSIX, manualPosix);
         preferences.putUInt(PREF_DISPLAY_ROTATION, displayRotation);
         preferences.putUInt(PREF_DISPLAY_HEIGHT, displayHeight);
-        preferences.putBool(PREF_SHOW_QR, showQrOnBoot);
         preferences.putString(PREF_CLOCK_NAME, clockName);
         preferences.putUInt(PREF_UPD_QUIET_FROM, updQuietFrom);
         preferences.putUInt(PREF_UPD_QUIET_UNTIL, updQuietUntil);
@@ -232,7 +229,6 @@ struct ClockwiseParams
         manualPosix = preferences.getString(PREF_MANUAL_POSIX, "");
         displayRotation = preferences.getUInt(PREF_DISPLAY_ROTATION, 0);
         displayHeight = preferences.getUInt(PREF_DISPLAY_HEIGHT, 64);
-        showQrOnBoot = preferences.getBool(PREF_SHOW_QR, true);
         clockName = preferences.getString(PREF_CLOCK_NAME, "");
         updQuietFrom = preferences.getUInt(PREF_UPD_QUIET_FROM, 22);
         updQuietUntil = preferences.getUInt(PREF_UPD_QUIET_UNTIL, 8);
