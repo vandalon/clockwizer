@@ -1,6 +1,6 @@
 # The web settings page
 
-Every clock serves its own settings page. Open `http://clockwizer.local`, the clock's IP address, or scan the QR code the clock shows at startup. The page works on a phone and a computer, and can be added to a phone's home screen.
+Every clock serves its own settings page. Open `http://clockwizer.local`, the clock's IP address. The page works on a phone and a computer, and can be added to a phone's home screen.
 
 **Changes are saved by themselves**, about half a second after you stop touching a control. A short "Saved" message confirms it. Only two settings need a restart, the timezone and the 24-hour switch; a bar appears at the bottom with a *Restart now* button when you change them.
 
@@ -72,10 +72,9 @@ Auto brightness also drives night mode (below).
 ## Clock
 
 - **Name**: what you call this clock (24 characters). It is shown in the page title and in the lists of other clocks.
-- **QR code at startup**: show or hide the code at boot.
 - **Who can open this page**: *only devices on this network* (default), *any private network* (10.x, 172.16-31.x, 192.168.x) or *anyone who can reach the clock*. The page has no password, so leave it on the default unless the clock sits behind something you trust. Devices on the clock's own network, including its setup network, are always allowed.
 - **Check for update**: looks for a new build right now. The status shows what happened (checking, up to date, installing).
-- **WiFi setup**: restarts the clock into the `Clockwizer-Wifi` setup network so you can choose another network. Your current network stays saved until you pick a new one.
+- **WiFi setup**: restarts the clock into the `CW-SETUP` setup network so you can choose another network. Your current network stays saved until you pick a new one.
 - **Reboot**: restarts the clock.
 - **Reset to factory settings**: erases the settings and the WiFi network after a confirmation. The settings tied to your particular panel (colour order, rotation, light-sensor pin and panel height) are kept.
 

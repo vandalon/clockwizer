@@ -27,8 +27,8 @@ Ready-made options: Brian Lough's [ESP32 Trinity](https://github.com/witnessmeno
 ## Getting started
 
 1. **Flash a clockface** onto the ESP32 over USB, see [Installing](#installing) below.
-2. **Connect it to WiFi.** On first boot the clock opens its own network called `Clockwizer-Wifi` and shows a QR code. Scan it, or join that network, pick your WiFi (it must be 2.4 GHz) and enter the password. You can also set up WiFi while flashing from the browser, via the Improv step.
-3. **Open the settings page.** For a few seconds after every start the clock shows a QR code that opens it. Or browse to `http://clockwizer.local` or to the clock's IP address.
+2. **Connect it to WiFi.** On first boot the clock opens its own network called `CW-SETUP` and shows a QR code. Scan it, or join that network, pick your WiFi (it must be 2.4 GHz) and enter the password. You can also set up WiFi while flashing from the browser, via the Improv step.
+3. **Open the settings page.** After the WiFi setup the clock shows its address for a few seconds. Browse to `http://clockwizer.local` or to the clock's IP address.
 4. Choose your timezone, and you're done. The clock gets the time over NTP.
 
 ## Installing
@@ -77,7 +77,7 @@ Out of the box it follows the Eredivisie, the KNVB Cup and the Netherlands natio
 
 ## Using the clock from your phone
 
-Open the settings page (`http://clockwizer.local`, the IP address, or scan the QR code at startup). Changes are saved by themselves a moment after you make them; a few of them ask for a restart. The top of the page names the clockface, firmware version and WiFi network.
+Open the settings page (`http://clockwizer.local`, or the IP address). Changes are saved by themselves a moment after you make them; a few of them ask for a restart. The top of the page names the clockface, firmware version and WiFi network.
 
 **Clockface**
 Switch to another clockface from the list. The clock downloads it, installs it and restarts, which takes a minute. Panels with 32 rows only list the faces that fit.
@@ -106,9 +106,8 @@ Switch to another clockface from the list. The clock downloads it, installs it a
 
 **Clock**
 - *Name*: how this clock appears in the list of clocks on your network.
-- *QR code at startup*: show or hide the setup code.
 - *Who can open this page*: only devices on the clock's own network (default), any private network (10.x, 172.16-31.x, 192.168.x), or anyone who can reach it. The page has no password, so leave this on the default unless you know why you'd change it.
-- *Check for update*, *Reboot*, and *WiFi setup* (restarts into the `Clockwizer-Wifi` setup, your saved network stays until you choose a new one).
+- *Check for update*, *Reboot*, and *WiFi setup* (restarts into the `CW-SETUP` setup, your saved network stays until you choose a new one).
 - *Factory reset*: erases all settings and the WiFi network. The panel wiring options (colour order, rotation, LDR pin, height) are kept.
 
 ### Advanced settings

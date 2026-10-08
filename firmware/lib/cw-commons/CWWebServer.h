@@ -363,8 +363,6 @@ struct ClockwiseWebServer
         ClockwiseParams::getInstance()->dotColor = constrain(value.toInt(), 0, ClockwiseParams::PACMAN_COLOR_COUNT - 1);
       } else if (key == ClockwiseParams::getInstance()->PREF_BIRTHDAYS) {
         ClockwiseParams::getInstance()->birthdays = Birthdays::clean(urlDecode(value));
-      } else if (key == ClockwiseParams::getInstance()->PREF_SHOW_QR) {
-        ClockwiseParams::getInstance()->showQrOnBoot = (value == "1");
       } else if (key == ClockwiseParams::getInstance()->PREF_DISPLAY_ROTATION) {
         ClockwiseParams::getInstance()->displayRotation = value.toInt() & 3;  // 0-3 quarter turns
       } else if (key == ClockwiseParams::getInstance()->PREF_DISPLAY_HEIGHT) {
@@ -418,7 +416,6 @@ struct ClockwiseWebServer
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_GHOST2_COLOR, ClockwiseParams::getInstance()->ghost2Color);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_DOT_COLOR, ClockwiseParams::getInstance()->dotColor);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_SHOW_F1, ClockwiseParams::getInstance()->showF1);
-    client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_SHOW_QR, ClockwiseParams::getInstance()->showQrOnBoot);
     client.printf(HEADER_TEMPLATE_S, ClockwiseParams::getInstance()->PREF_CLOCK_NAME, ClockwiseParams::getInstance()->clockName.c_str());
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_UPD_QUIET_FROM, ClockwiseParams::getInstance()->updQuietFrom);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_UPD_QUIET_UNTIL, ClockwiseParams::getInstance()->updQuietUntil);

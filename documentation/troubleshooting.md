@@ -5,7 +5,7 @@
 - Only **2.4 GHz** networks work. A router that merges 2.4 and 5 GHz under one name usually works, but if setup fails, create a separate 2.4 GHz network name.
 - Check the password. WiFi setup stays open for five minutes and then the clock gives up until the next restart.
 - Start the setup again: *Clock → WiFi setup* on the settings page (if you can still reach it), or power the clock off and on with no network available. You can also re-run the WiFi step of the [web flasher](https://vandalon.github.io/clockwizer/) over USB.
-- The display shows `Clockwizer-Wifi` and a QR code when it waits for you in setup mode. Join that network from your phone and a setup page opens.
+- The display shows a QR code (for the `CW-SETUP` network) when it waits for you in setup mode. Join that network from your phone and a setup page opens. The display runs in a faster mode meanwhile so the code is easier to scan, and the clock restarts into the normal mode once it has joined your network.
 
 ## I can't open the settings page
 

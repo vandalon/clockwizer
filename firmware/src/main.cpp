@@ -59,7 +59,7 @@ unsigned long updateCheckDue = 30000; // first check 30s after boot, then daily;
 #define UPDATE_CHECK_MS 86400000
 #define UPDATE_MAX_TRIES 3        // failed downloads per build before giving up
 #define UPDATE_MAX_RESTARTS 2     // restarts in a row for the same update before giving up
-#define BOOT_QR_MS 10000          // how long the startup QR code stays up
+#define SETUP_INFO_MS 10000       // how long the screen with the clock's address stays up after the WiFi setup
 #define VALIDATE_AFTER_MS 60000   // from this long on, running + on WiFi, try to prove the update check works
 #define VALIDATE_RETRY_MS 30000   // between tries
 #define ROLLBACK_AFTER_MS 300000  // never proved it: go back to the old firmware
@@ -89,6 +89,8 @@ bool forceFullRefresh = false;
 const unsigned long DEFAULT_NOTIFICATION_DURATION = 5000;  // Default 5 seconds
 unsigned long notificationDuration = DEFAULT_NOTIFICATION_DURATION;
 
+bool setupRefresh = false;  // the display runs fast for the WiFi setup QR code (see displaySetup())
+
 void displaySetup(bool swapBlueGreen, uint8_t displayBright, uint8_t displayRotation)
 {
   panelResY = ClockwiseParams::getInstance()->displayHeight;
@@ -105,6 +107,14 @@ void displaySetup(bool swapBlueGreen, uint8_t displayBright, uint8_t displayRota
 
   mxconfig.gpio.e = 18;
   mxconfig.clkphase = false;
+  // Only for the WiFi setup QR code: a faster panel clock and a high minimum refresh rate keep a phone camera
+  // from seeing stripes. That costs colour depth, so every other start uses the library defaults (8 MHz, 60 Hz).
+  // The clock can ghost or garble some panels: remove these two lines if the picture looks wrong.
+  if (setupRefresh)
+  {
+    mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_20M;
+    mxconfig.min_refresh_rate = 255;
+  }
   #ifdef DOUBLE_BUFFER_ON
     mxconfig.double_buff = true;
   #endif
@@ -222,14 +232,6 @@ static void bootUpdateCheck();
 static bool inBootCheck = false;  // the check right after a restart: a failure there doesn't restart again
 static void crashGuard();
 
-// A restart for an update leaves a flag, so the next boot doesn't show the QR code again
-static void skipQrNextBoot() {
-  Preferences prefs;
-  prefs.begin("fwupdate", false);
-  prefs.putBool("skipQr", true);
-  prefs.end();
-}
-
 void setup()
 {
   Serial.begin(115200);
@@ -240,6 +242,20 @@ void setup()
 
   pinMode(ClockwiseParams::getInstance()->ldrPin, INPUT);
 
+  // The WiFi setup QR code is only shown when there is no network to join (or when asked for), and then the
+  // display starts in its fast mode. A start that needs the setup late (saved network gone) restarts into it.
+  if (ClockwiseParams::getInstance()->displayHeight == 64)
+  {
+    Preferences prefs;
+    prefs.begin("fwupdate", false);
+    setupRefresh = ClockwiseParams::getInstance()->wifiSsid.isEmpty() ||
+                   ClockwiseParams::getInstance()->preferences.getBool(ClockwiseParams::getInstance()->PREF_SETUP_WIFI, false) ||
+                   prefs.getBool("setupRefresh", false);
+    prefs.remove("setupRefresh");
+    prefs.end();
+  }
+  wifi.highRefresh = setupRefresh;
+
   displaySetup(ClockwiseParams::getInstance()->swapBlueGreen, ClockwiseParams::getInstance()->displayBright, ClockwiseParams::getInstance()->displayRotation);
   clockface = new Clockface(dma_display);
 
@@ -248,22 +264,19 @@ void setup()
   ldrAverage.begin();
   automaticBrightControl();
 
-  if (panelResY == 64) StatusController::getInstance()->wifiConnecting();
-  #ifdef DOUBLE_BUFFER_ON
-    dma_display->flipDMABuffer();
-  #endif
-
   wifi.showDisplay = []() {
     #ifdef DOUBLE_BUFFER_ON
       dma_display->flipDMABuffer();
     #endif
   };
+  StatusController::getInstance()->showDisplay = wifi.showDisplay;
+  if (panelResY == 64) StatusController::getInstance()->wifiConnecting();
   wifi.setBrightness = [](uint8_t b) { dma_display->setBrightness8(b); };
   wifi.begin();
   
   // isConnected() keeps retrying the saved network while we wait
   while (!wifi.isConnected()) {
-      printCenterPico("No Network", (panelResY / 2) - 4);
+      printCenterPico("NO NETWORK", (panelResY / 2) - 4);
       #ifdef DOUBLE_BUFFER_ON
         dma_display->flipDMABuffer();
       #endif
@@ -271,41 +284,31 @@ void setup()
   }
   
   wifiUpAt = millis();
+  if (panelResY == 64) {
+    StatusController::getInstance()->wifiConnected();  // solid green icon
+    delay(1000);
+  }
 
-  // Point phones at the settings page: a QR code for a few seconds, if not switched off in the web UI
-  bool skipQr;
+  // After a WiFi setup: tell where the settings page is, because the phone just left the setup network
+  bool setupInfo;
   {
     Preferences prefs;
     prefs.begin("fwupdate", false);
-    skipQr = prefs.getBool("skipQr", false);
-    if (skipQr) prefs.remove("skipQr");
+    setupInfo = prefs.getBool("setupInfo", false);
+    if (setupInfo) prefs.remove("setupInfo");
     prefs.end();
   }
-  if (ClockwiseParams::getInstance()->showQrOnBoot && panelResY == 64 && !skipQr) {
-    dma_display->setBrightness8(128);  // the brightness it was tested at
-    // Keep serving the web UI meanwhile; switching the QR off there ends it early.
-    // The frame is redrawn every second for the countdown (double buffering needs the whole frame).
-    unsigned long qrUntil = millis() + BOOT_QR_MS;
-    int shown = 0;
-    while ((long)(millis() - qrUntil) < 0 && ClockwiseParams::getInstance()->showQrOnBoot) {
-      int secondsLeft = (qrUntil - millis() + 999) / 1000;
-      if (secondsLeft != shown) {
-        shown = secondsLeft;
-        StatusController::getInstance()->showQr("http://clockwizer.local", "SCAN FOR SETTINGS", secondsLeft);
-        #ifdef DOUBLE_BUFFER_ON
-          dma_display->flipDMABuffer();
-        #endif
-      }
+  if (setupInfo && panelResY == 64) {
+    StatusController::getInstance()->wifiConnectedInfo(WiFi.localIP().toString().c_str());
+    #ifdef DOUBLE_BUFFER_ON
+      dma_display->flipDMABuffer();
+    #endif
+    for (unsigned long until = millis() + SETUP_INFO_MS; (long)(millis() - until) < 0; delay(5))
       ClockwiseWebServer::getInstance()->handleHttpRequest();
-      delay(5);
-    }
     dma_display->fillScreen(0);
     #ifdef DOUBLE_BUFFER_ON
       dma_display->flipDMABuffer();
     #endif
-    dma_display->setBrightness8(ClockwiseParams::getInstance()->displayBright);
-    curBright = ClockwiseParams::getInstance()->displayBright;
-    automaticBrightControl();  // applies the sensor's brightness again when auto brightness is on
   }
   notificationServer.begin();
   TelnetStream.println("[Main] Device IP: " + WiFi.localIP().toString());
@@ -457,7 +460,6 @@ void updateFirmware( String id ) {
       #ifdef DOUBLE_BUFFER_ON
         dma_display->flipDMABuffer();
       #endif
-      skipQrNextBoot();
       esp_restart();  
   }
 }
@@ -618,13 +620,24 @@ static bool restartForUpdateCheck(const char *msg, const String &knownMd5 = "") 
   prefs.putString("restartFor", reason);
   prefs.putUChar("restarts", restarts + 1);
   prefs.putBool("bootCheck", true);
-  prefs.putBool("skipQr", true);
   if (knownMd5.length() == 32) prefs.putString("bootMd5", knownMd5);  // the boot installs it without asking the server again
   prefs.end();
   ClockwiseWebServer::getInstance()->update_status = "restarting";
   restartAt = millis() + (knownMd5.length() ? 1000 : 3000);  // the web UI sees the status first
   if (msg) updateLog(msg);
   return true;
+}
+
+// Switching clockface restarts first, like an update: the boot downloads the new face with a whole heap
+// (see bootUpdateCheck()), whatever the current face (Football, F1) has allocated.
+static void restartForFace(const String &id) {
+  Preferences prefs;
+  prefs.begin("fwupdate", false);
+  prefs.putString("bootFace", id);
+  prefs.end();
+  ClockwiseWebServer::getInstance()->update_status = "restarting";
+  restartAt = millis() + 1000;  // the web UI sees the status first
+  TelnetStream.println(currentTimeWithSeconds + " [Face] Switching to " + id + ", restarting to install it");
 }
 
 static bool userCheck = false;  // asked for by a person (web UI, telnet): goes through even during a live match
@@ -781,7 +794,13 @@ static void bootUpdateCheck() {
   if (wanted) prefs.remove("bootCheck");
   String knownMd5 = prefs.getString("bootMd5", "");
   prefs.remove("bootMd5");
+  String face = prefs.getString("bootFace", "");  // removed first: a failed download can't restart again
+  prefs.remove("bootFace");
   prefs.end();
+  if (face.length()) {
+    TelnetStream.println("[Face] Installing the clockface chosen before the restart");
+    updateFirmware(face);  // restarts on success; on failure the current firmware carries on
+  }
   if (wanted && fwValidated) {
     if (knownMd5.length() == 32) {  // the check before the restart already found the build: skip a second TLS handshake
       TelnetStream.println("[Update] Installing the update found before the restart");
@@ -878,7 +897,7 @@ void loop() {
         if (ClockwiseWebServer::getInstance()->face_requested.length() > 0 && md5Fetch == MD5_IDLE) {  // not while a fetch holds the heap
           String id = ClockwiseWebServer::getInstance()->face_requested;
           ClockwiseWebServer::getInstance()->face_requested = "";
-          updateFirmware(id);
+          restartForFace(id);
         }
         ClockPeers::getInstance()->loop();
         ezt::events();
@@ -931,34 +950,34 @@ void loop() {
             break;
           }
           case '1':
-            updateFirmware("0x01");
+            restartForFace("0x01");
             break;
           case '2':
-            updateFirmware("0x02");
+            restartForFace("0x02");
             break;
           case '3':
-            updateFirmware("0x03");
+            restartForFace("0x03");
             break;
           case '4':
-            updateFirmware("0x04");
+            restartForFace("0x04");
             break;
           case '5':
-            updateFirmware("0x05");
+            restartForFace("0x05");
             break;
           case '6':
-            updateFirmware("0x06");
+            restartForFace("0x06");
             break;
           case '8':
-            updateFirmware("0x08");
+            restartForFace("0x08");
             break;
           case '9':
-            updateFirmware("0x09");
+            restartForFace("0x09");
             break;
           case 'B':
-            updateFirmware("0x0B");
+            restartForFace("0x0B");
             break;
           case 'F':
-            updateFirmware("0x0C");
+            restartForFace("0x0C");
             break;
           case 'T':
             if (millis() < birthdayPreviewUntil) {

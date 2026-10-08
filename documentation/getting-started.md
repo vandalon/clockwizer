@@ -39,13 +39,13 @@ The clock needs a 2.4 GHz network; 5 GHz networks don't work.
 
 **While flashing:** the browser installer asks for the network name and password right after the install (it speaks the Improv WiFi protocol with the clock over USB).
 
-**Without USB:** on a clock with no saved network (or after *WiFi setup* on the settings page) it opens its own network called `Clockwizer-Wifi` and shows a QR code. Scan it, or join that network by hand, choose your WiFi in the page that opens and enter the password. The setup page closes after five minutes.
+**Without USB:** on a clock with no saved network (or after *WiFi setup* on the settings page) it opens its own network called `CW-SETUP` and shows a QR code. Scan it, or join that network by hand, choose your WiFi in the page that opens and enter the password. The setup page closes after five minutes.
 
 If the clock can't connect it shows a message on the display and falls back to the setup network.
 
 ## 4. Open the settings page
 
-For a few seconds after each start, and when you want it, the clock shows a QR code. Scanning it opens the settings page. You can also use:
+After the WiFi setup the clock shows its address for a few seconds. You can also use:
 
 - `http://clockwizer.local` (works on most phones and computers; needs mDNS)
 - the clock's IP address, which your router lists, or which the clock prints on its serial log

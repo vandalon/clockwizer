@@ -14,7 +14,7 @@ Replace `clockwizer.local` with the clock's IP address if your computer can't re
 | `POST /face?id=0x05` | Installs a clockface: `0x0B 0x0C 0x08 0x01 0x09 0x05 0x06 0x04 0x03 0x02` |
 | `POST /cmd?c=update` | Checks for a firmware update now |
 | `POST /cmd?c=reboot` | Restarts the clock |
-| `POST /cmd?c=wifi` | Restarts into the `Clockwizer-Wifi` setup |
+| `POST /cmd?c=wifi` | Restarts into the `CW-SETUP` setup |
 | `POST /cmd?c=reset` | Factory reset (erases settings and WiFi) |
 | `POST /restart` | Restarts the clock |
 | `GET /read?pin=35` | Reads an analog pin, used by the light-sensor display on the page |
@@ -52,7 +52,6 @@ Values for `/set`. Text values with special characters must be URL-encoded. Sett
 | `updQuietFrom`, `updQuietUntil` * | hours 0-23; the same value twice means no quiet hours |
 | `fwUrl` * | the firmware location (URL-encoded, `http(s)://...`); empty or the default means the default |
 | `webAccess` * | `0` anyone, `1` own network (default), `2` any private network |
-| `showQr` * | `1` or `0`, the QR code at startup |
 | `color`, `ghost1Color`, `ghost2Color`, `dotColor` * | index into the colour lists (see the page) |
 | `showF1` *, `ballRoll` *, `timeStyle` * (0-5) | Football and Tetris options |
 | `matchSecs` * (3-60), `resultMins` * (0-1440, 0 = until midnight) | Football options |
