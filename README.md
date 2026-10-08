@@ -3,7 +3,7 @@
 A fork of [Clockwise](https://github.com/jnthas/clockwise) by Jonathas Barbosa (@jnthas): a smart clock for a HUB75 LED matrix driven by an ESP32. Clockwizer keeps everything that makes Clockwise fun and adds a bunch of things on top.
 
 **What's different from upstream**
-- New clockfaces: **Football** (live scores, results, goal celebrations), and **Formula 1** (live sessions, standings, next race); **Tetris** also runs on 64x32 panels and can show the F1 race in its ticker
+- New clockfaces: **Football** (live scores, results, goal celebrations), and **Formula 1** (live sessions, standings, next race); **Tetris** also runs on 64x32 panels, with a ticker row that shows football scores and, if you switch it on, the F1 race
 - A redesigned web settings page: pick the clockface, colours, brightness, update behaviour and more from your phone
 - Automatic firmware updates: the clock checks for a new build every hour and rolls back by itself if the new one can't reach the update server
 - The firmware location is a setting, so you can host your own builds
@@ -49,7 +49,7 @@ pio run -e cw-cf-0x05 -t upload     # Pacman
 | `cw-cf-0x04` | Castlevania | 64x64 |
 | `cw-cf-0x05` | Pacman | 64x64 |
 | `cw-cf-0x06` | Pokemon | 64x64 |
-| `cw-cf-0x08` | Tetris | 64x64 and 64x32 |
+| `cw-cf-0x08` | Tetris (on 64x32 with a football and F1 ticker) | 64x64 and 64x32 |
 | `cw-cf-0x09` | Luigi (Mario in other colours) | 64x64 |
 | `cw-cf-0x0B` | Football | 64x64 |
 | `cw-cf-0x0C` | Formula 1 | 64x64 |
