@@ -15,6 +15,8 @@ Each clockface is its own firmware build, named `cw-cf-0xNN`. You switch between
 | `0x03` | World Map | 64x64 | no |
 | `0x02` | Time in Words | 64x64 | no |
 
+Every face also shows an animated [birthday screen](web-ui.md#birthdays) on the birthdays you add on the settings page. Preview it with the `T` telnet command.
+
 All faces get the time over NTP, so they all need the internet once to show the right time (and the connection again after a power cut).
 
 ## The classics

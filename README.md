@@ -4,6 +4,7 @@ A fork of [Clockwise](https://github.com/jnthas/clockwise) by Jonathas Barbosa (
 
 **What's different from upstream**
 - New clockfaces: **Football** (live scores, results, goal celebrations), and **Formula 1** (live sessions, standings, next race); **Tetris** also runs on 64x32 panels, with a ticker row that shows football scores and, if you switch it on, the F1 race
+- **Birthdays**: add up to 10 names and dates on the settings page and every clockface plays an animated birthday party (cake, balloons, fireworks) all day, on both panel sizes
 - A redesigned web settings page: pick the clockface, colours, brightness, update behaviour and more from your phone
 - Automatic firmware updates: the clock checks for a new build once a day and rolls back by itself if the new one can't reach the update server
 - The firmware location is a setting, so you can host your own builds
@@ -86,6 +87,8 @@ Switch to another clockface from the list. The clock downloads it, installs it a
 - *Pacman colours*: colour of each ghost, the dots and the maze borders.
 - *Football* (Football and Tetris faces): see [The Football clockface](#the-football-clockface).
   The football and F1 data come from ESPN's public scoreboard feeds and the Jolpica F1 API.
+
+- *Birthdays* (all faces): see [Birthdays](documentation/web-ui.md#birthdays).
 
 **Other clocks on your network**: lists every Clockwizer on the same network by name, with a link to its own settings page.
 

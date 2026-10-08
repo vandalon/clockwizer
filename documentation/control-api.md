@@ -56,6 +56,7 @@ Values for `/set`. Text values with special characters must be URL-encoded. Sett
 | `color`, `ghost1Color`, `ghost2Color`, `dotColor` * | index into the colour lists (see the page) |
 | `showF1` *, `ballRoll` *, `timeStyle` * (0-5) | Football and Tetris options |
 | `matchSecs` * (3-60), `resultMins` * (0-1440, 0 = until midnight) | Football options |
+| `birthdays` * | up to 10 entries `MMDD:NAME:YYYY` separated by commas, year optional, `_` for a space, e.g. `0511:ELIOT:2012,1216:AARON` (URL-encoded). Names are uppercased and cleaned up by the clock |
 | `fbLeagues` *, `fbTeams` * | comma separated codes, e.g. `ned.1,eng.1` and `449:NED:n` |
 
 ### Advanced settings
@@ -90,6 +91,8 @@ Connect with `nc clockwizer.local 23` (or `telnet clockwizer.local 23`). The clo
 | `1` `2` `3` `4` `5` `6` `8` `9` | Install Mario, Time in Words, World Map, Castlevania, Pacman, Pokemon, Tetris, Luigi |
 | `B` | Install Football |
 | `F` | Install Formula 1 |
+
+`T` previews the birthday screen for a minute on any build (`T` again stops it).
 
 On Football and Formula 1 builds there are also test commands, see [clockfaces.md](clockfaces.md#trying-football-and-formula-1-without-a-match): `G`, `Y`, `D`, `W` on Football and `S`, `N` on Formula 1.
 

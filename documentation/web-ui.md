@@ -37,6 +37,15 @@ Colours for the first ghost, the second ghost and the dots, each from a list of 
 
 The match data come from ESPN's public scoreboard feed. The clock polls it in the background; if the internet is down it shows the clock only.
 
+## Birthdays
+
+Shown on every clockface. Tap *Add birthday* to add a row with a name, a day, a month and an optional year; up to 10. On the day itself the clock shows a birthday screen all day instead of the normal face: fireworks, balloons, a cake with the time on it, the name in rainbow colours and the age (or HAPPY BIRTHDAY! when you left the year empty). A 64x32 panel gets a smaller layout with the cake bottom-left.
+
+- Names are always capitals: A-Z, 0-9 and spaces, up to 12 characters. Accents are dropped.
+- The small x to the right of a row deletes it.
+- The screen is hidden while a live football match or F1 session is on, and comes back afterwards.
+- If two birthdays fall on the same day, only the first in the list is shown. 29 February is allowed.
+
 ## Other clocks on your network
 
 Shown when the clock has found other Clockwizer clocks. They announce themselves over mDNS (`_clockwise._tcp`) and are sorted by name. Each entry shows the clock's name, its clockface and IP address; tap it to open that clock's settings page. A clock is only dropped from the list after it has been missing for about a day.
