@@ -199,6 +199,7 @@ void applyBrightnessSettings() {
 }
 
 static void bootUpdateCheck();
+static bool inBootCheck = false;  // the check right after a restart: a failure there doesn't restart again
 static void crashGuard();
 
 // A restart for an update leaves a flag, so the next boot doesn't show the QR code again
@@ -345,7 +346,7 @@ void updateFirmware( String id ) {
 
   // The football/F1 tasks hand back their parse buffers once they see firmwareUpdating (the update
   // check cleared it a moment ago, so they may have taken them again); the TLS handshake needs the block
-  delay(2500);
+  if (!inBootCheck) delay(2500);  // at boot the football/F1 tasks have not started yet
 
   httpUpdate.rebootOnUpdate(false); // remove automatic update
   TelnetStream.println(("Updating to " + id + " now!"));
@@ -573,13 +574,25 @@ static bool inUpdateQuietHours() {
   return from < until ? (hour >= from && hour < until) : (hour >= from || hour < until);
 }
 
-static bool inBootCheck = false;  // the check right after a restart: a failure there doesn't restart again
 static unsigned long restartAt = 0;  // millis() of a restart for a clean update check, 0 for none
 static String bootLog;               // what the check right after a restart said: nobody is on telnet yet, so it is replayed later
 
 static void updateLog(const String &msg) {
   TelnetStream.println(currentTimeWithSeconds + msg);
   if (inBootCheck) bootLog += "[after the restart]" + msg + "\n";
+}
+
+// Restarts so the update check runs again right after the boot (see bootUpdateCheck()), where it can install
+static void restartForUpdateCheck(const char *msg, const String &knownMd5 = "") {
+  Preferences prefs;
+  prefs.begin("fwupdate", false);
+  prefs.putBool("bootCheck", true);
+  prefs.putBool("skipQr", true);
+  if (knownMd5.length() == 32) prefs.putString("bootMd5", knownMd5);  // the boot installs it without asking the server again
+  prefs.end();
+  ClockwiseWebServer::getInstance()->update_status = "restarting";
+  restartAt = millis() + (knownMd5.length() ? 1000 : 3000);  // the web UI sees the status first
+  if (msg) updateLog(msg);
 }
 
 // Compare the running firmware with the one on the update server and install
@@ -593,14 +606,7 @@ static void applyUpdateCheck(const String &md5, bool ignoreSkips) {
     status = "noserver";
     // Out of memory for the TLS handshake: a restart starts with a whole heap, so check again there
     if (md5Failure.indexOf("emory") >= 0 && !inBootCheck && fwValidated) {
-      Preferences prefs;
-      prefs.begin("fwupdate", false);
-      prefs.putBool("bootCheck", true);
-      prefs.putBool("skipQr", true);
-      prefs.end();
-      status = "restarting";
-      restartAt = millis() + 3000;  // the web UI sees the status first
-      updateLog(" [Update] Low on memory, restarting to check again");
+      restartForUpdateCheck(" [Update] Low on memory, restarting to check again");
     }
     return;
   }
@@ -623,6 +629,14 @@ static void applyUpdateCheck(const String &md5, bool ignoreSkips) {
     updateLog(" [Update] Giving up on this build after repeated download failures (X to force)");
     status = "skipped";
     prefs.end();
+    return;
+  }
+  // Every clock installs from a fresh boot: the heap is whole there, so the download and the TLS
+  // handshake fit whatever the clockface (Football, F1) has allocated
+  if (!inBootCheck && !ignoreSkips && fwValidated) {  // telnet X installs on the spot
+    prefs.end();
+    updateLog(" [Update] New firmware available, restarting to install it");
+    restartForUpdateCheck(nullptr, md5);
     return;
   }
   prefs.putString("tried", md5);
@@ -715,10 +729,17 @@ static void bootUpdateCheck() {
   prefs.begin("fwupdate", false);
   bool wanted = prefs.getBool("bootCheck", false);
   if (wanted) prefs.remove("bootCheck");
+  String knownMd5 = prefs.getString("bootMd5", "");
+  prefs.remove("bootMd5");
   prefs.end();
   if (wanted && fwValidated) {
-    TelnetStream.println("[Update] Checking for an update right after a restart");
-    if (startMd5Fetch(false, false)) waitForFetch("CHECKING...");
+    if (knownMd5.length() == 32) {  // the check before the restart already found the build: skip a second TLS handshake
+      TelnetStream.println("[Update] Installing the update found before the restart");
+      applyUpdateCheck(knownMd5, false);
+    } else {
+      TelnetStream.println("[Update] Checking for an update right after a restart");
+      if (startMd5Fetch(false, false)) waitForFetch("CHECKING...");
+    }
   }
   inBootCheck = false;
 }
