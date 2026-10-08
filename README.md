@@ -60,6 +60,20 @@ The clockface folders are in `firmware/clockfaces/`, shared code in `firmware/li
 
 No tools needed: open **https://vandalon.github.io/clockwizer/** in Chrome or Edge on a computer, plug in the ESP32, pick a clockface and press *Connect and install*. It writes the whole flash, so it also works for a blank ESP32 or for moving an older Clockwise to this firmware, and it offers to set up WiFi when it's done. The page and its libraries are hosted in this repository (`docs/`), and published together with the firmware by `update-fw.sh -g`.
 
+## The Football clockface
+
+The Football face turns the clock into a small scoreboard. With nothing on it is a clock on flip tiles with a rolling ball. When a match you follow is on, it switches to a live view with the score, the time played, a timeline with goals and cards, and the other results of the day. A goal plays a full-screen celebration in the colours of the team that scored, and cards and substitutions get a short animation. The Tetris face on a 64x32 panel has the same ticker in its bottom row.
+
+You choose what to follow on the settings page, in the *Football* section:
+
+- **Competitions to follow**: the leagues and cups whose matches are shown. They are grouped as *Europe* (Champions League, Europa League, Conference League), *National teams* (World Cup, European Championship, Nations League and other international tournaments) and then **by country**, each country with its own leagues and cups, for example the Eredivisie and KNVB Cup under the Netherlands. Open a group and tick what you want; you can follow up to 10 competitions.
+- **Favourite teams**: type the name of a club or a country in the search field and tap it to add it; up to 8. Clubs and national teams both work. A favourite's matches are always followed, even when their competition isn't ticked, and they stay at the top of the live view when several matches are on at once. When no match is live the face shows a favourite's latest result first.
+- **Next live match every**: with several live matches the face rotates through them; this sets how long each stays.
+- **Show a finished match for**: how long a result stays on the screen after the final whistle, from 30 minutes up to 24 hours, or until midnight.
+- **Rolling ball** and **Clock digits change by**: the look of the clock between matches (flipping cards, fading, rolling, dissolving, drifting or shimmering digits).
+
+Out of the box it follows the Eredivisie, the KNVB Cup and the Netherlands national team; change that to your own country and teams first. The scores come from ESPN's public feeds, so the clock needs internet access, and a match shows up once ESPN lists it for the day.
+
 ## Using the clock from your phone
 
 Open the settings page (`http://clockwise.local`, the IP address, or scan the QR code at startup). Changes are saved by themselves a moment after you make them; a few of them ask for a restart. The top of the page names the clockface, firmware version and WiFi network.
@@ -70,13 +84,7 @@ Switch to another clockface from the list. The clock downloads it, installs it a
 **Face-specific sections** (these appear only on the matching face)
 - *Formula 1* (Tetris on 64x32): show the top 3 of the race while a session is on.
 - *Pacman colours*: colour of each ghost, the dots and the maze borders.
-- *Football* (Football and Tetris faces):
-  - *Rolling ball*: the ball is passed along the bottom of the screen, or just rests.
-  - *Clock digits change by*: flipping cards, fading, rolling, dissolving, drifting or shimmering.
-  - *Next live match every*: how long each live match is shown when several are on.
-  - *Show a finished match for*: how long a result stays on the screen, up to midnight.
-  - *Competitions to follow*: tick leagues and cups per country or international.
-  - *Favourite teams*: search a team to add it. A favourite's live matches stay at the top of the feed, even when its competition isn't ticked.
+- *Football* (Football and Tetris faces): see [The Football clockface](#the-football-clockface).
   The football and F1 data come from ESPN's public scoreboard feeds and the Jolpica F1 API.
 
 **Other clocks on your network**: lists every Clockwise on the same network by name, with a link to its own settings page.

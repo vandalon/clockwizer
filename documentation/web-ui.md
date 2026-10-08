@@ -32,8 +32,8 @@ Colours for the first ghost, the second ghost and the dots, each from a list of 
 - **Clock digits change by** (Football): flipping cards, fading, rolling up, dissolving, drifting up, or fading with a shimmer (a soft highlight that sweeps over the digits all the time).
 - **Next live match every**: with several matches on at once, the clock shows one at a time. This is how long each stays (4 to 30 seconds). Lists of results slide on after the same time.
 - **Show a finished match for**: how long a result stays on screen (30 minutes to 24 hours, or until midnight).
-- **Competitions to follow**: pick leagues and cups, grouped as International and by country. Up to 10 at a time.
-- **Favourite teams**: type to search a team and tap it to add it; up to 8. A favourite's live matches stay at the top of the live feed even when other matches are on, and they are followed even if their competition isn't ticked above.
+- **Competitions to follow**: pick leagues and cups. They are grouped as *Europe* (Champions League, Europa League, Conference League), *National teams* (World Cup, European Championship, Nations League and other international tournaments), and then by country, with each country's leagues and cups in its own group. Up to 10 at a time.
+- **Favourite teams**: type a club or a country to search and tap it to add it; up to 8. Clubs and national teams both work. A favourite's live matches stay at the top of the live feed even when other matches are on, and they are followed even if their competition isn't ticked above.
 
 The match data come from ESPN's public scoreboard feed. The clock polls it in the background; if the internet is down it shows the clock only.
 
