@@ -120,6 +120,25 @@ void displaySetup(bool swapBlueGreen, uint8_t displayBright, uint8_t displayRota
   #endif
 }
 
+#include "BirthdayAnim.h"
+#include "Birthdays.h"
+
+#define BIRTHDAY_FRAME_MS 60  // ~16 frames per second for the birthday animation
+
+// Today's birthday: the fixed ones of the build, then the ones from the settings. nullptr when there is none
+const Birthdays::Entry *todaysBirthday(int month, int day) {
+  static Birthdays::Entry list[Birthdays::MAX * 2];
+  int n = Birthdays::parse(CW_FIXED_BIRTHDAYS, list);
+  n += Birthdays::parse(ClockwiseParams::getInstance()->birthdays, list + n);
+  for (int i = 0; i < n; i++)
+    if (list[i].month == month && list[i].day == day) return &list[i];
+  return nullptr;
+}
+
+// Telnet T: preview the birthday screen for a minute, whatever the date (T again stops it)
+const Birthdays::Entry BIRTHDAY_PREVIEW = {0, 0, "TEST", 2013};
+unsigned long birthdayPreviewUntil = 0;
+
 void printCenterPico(const char *buf, int y)
 {
   int16_t x1, y1;
@@ -941,6 +960,15 @@ void loop() {
           case 'F':
             updateFirmware("0x0C");
             break;
+          case 'T':
+            if (millis() < birthdayPreviewUntil) {
+              birthdayPreviewUntil = 0;
+              TelnetStream.println(currentTimeWithSeconds + " [INFO] Birthday preview stopped");
+            } else {
+              birthdayPreviewUntil = millis() + 60000;
+              TelnetStream.println(currentTimeWithSeconds + " [INFO] Showing the birthday screen for a minute (T again to stop)");
+            }
+            break;
 #ifdef CW_FOOTBALL_SIM
           case 'S':
             TelnetStream.println(currentTimeWithSeconds + " [INFO] Football simulator: " + clockface->simulate());
@@ -982,6 +1010,7 @@ void loop() {
             TelnetStream.println("9 - Install latest 'Luigi' firmware");
             TelnetStream.println("B - Install latest 'Football' firmware");
             TelnetStream.println("F - Install latest 'Formula 1' firmware");
+            TelnetStream.println("T - Show the birthday screen for a minute (again to stop)");
 #ifdef CW_FOOTBALL_SIM
             TelnetStream.println("S, N - Football simulator of the Formula 1 face");
             TelnetStream.println("G - Celebrate a test goal");
@@ -1085,6 +1114,9 @@ void loop() {
 
     if (wifi.connectionSucessfulOnce && ( now > loopDue || now < lastNow ) && updateInProgress == false)
     {
+      // Not while a match or an F1 session is live: that is what the clock is for then
+      const Birthdays::Entry *birthday = liveEventOn ? nullptr : todaysBirthday(cwDateTime.getMonth(), cwDateTime.getDay());
+      if (millis() < birthdayPreviewUntil) birthday = &BIRTHDAY_PREVIEW;
       if (nightMode == true) {
         if (currentTime != lastTime || altDisplay != 1) {
           dma_display->fillRect(0, 0, 64, 64, 0);
@@ -1100,6 +1132,15 @@ void loop() {
 
           altDisplay = 1;
         }
+      } else if (birthday != nullptr && BirthdayAnim::begin()) {
+        // Animated, so drawn on every pass of the loop, not only when the minute changes
+        int age = birthday->year ? cwDateTime.getYear() - birthday->year : 0;
+        BirthdayAnim::draw(dma_display, panelResY, birthday->name, age, currentTime.c_str());
+        #ifdef DOUBLE_BUFFER_ON
+          dma_display->flipDMABuffer();
+        #endif
+
+        altDisplay = 6;
       } else {
         if (altDisplay > 0 || forceRefresh == true) {
           dma_display->setTextColor(0xFFFF);
@@ -1113,11 +1154,12 @@ void loop() {
         }
         clockface->update();
       }
+      if (altDisplay != 6) BirthdayAnim::release();
       if (currentTime != lastTime) {
         TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime() + crashCountText());
       }
       lastTime = currentTime;
-      loopDue = now + CLOCKFACE_UPDATE_MS;
+      loopDue = now + (altDisplay == 6 ? BIRTHDAY_FRAME_MS : CLOCKFACE_UPDATE_MS);
     }
     lastNow = now;
 }

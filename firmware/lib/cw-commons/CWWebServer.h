@@ -7,6 +7,7 @@
 #include "SettingsWebPage.h"
 #include "AppIcon.h"
 #include "ClockPeers.h"
+#include "Birthdays.h"
 #ifdef CW_FOOTBALL_CATALOG
 #include "FootballCatalog.h"
 #endif
@@ -360,6 +361,8 @@ struct ClockwiseWebServer
         ClockwiseParams::getInstance()->ghost2Color = constrain(value.toInt(), 0, ClockwiseParams::PACMAN_COLOR_COUNT - 1);
       } else if (key == ClockwiseParams::getInstance()->PREF_DOT_COLOR) {
         ClockwiseParams::getInstance()->dotColor = constrain(value.toInt(), 0, ClockwiseParams::PACMAN_COLOR_COUNT - 1);
+      } else if (key == ClockwiseParams::getInstance()->PREF_BIRTHDAYS) {
+        ClockwiseParams::getInstance()->birthdays = Birthdays::clean(urlDecode(value));
       } else if (key == ClockwiseParams::getInstance()->PREF_SHOW_QR) {
         ClockwiseParams::getInstance()->showQrOnBoot = (value == "1");
       } else if (key == ClockwiseParams::getInstance()->PREF_DISPLAY_ROTATION) {
@@ -427,6 +430,7 @@ struct ClockwiseWebServer
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_RESULT_MINS, ClockwiseParams::getInstance()->resultMins);
     client.printf(HEADER_TEMPLATE_S, ClockwiseParams::getInstance()->PREF_FOOTBALL_LEAGUES, ClockwiseParams::getInstance()->footballLeagues.c_str());
     client.printf(HEADER_TEMPLATE_S, ClockwiseParams::getInstance()->PREF_FOOTBALL_TEAMS, ClockwiseParams::getInstance()->footballTeams.c_str());
+    client.printf(HEADER_TEMPLATE_S, ClockwiseParams::getInstance()->PREF_BIRTHDAYS, ClockwiseParams::getInstance()->birthdays.c_str());
     client.printf(HEADER_TEMPLATE_S, "updateStatus", update_status.c_str());
 
     client.printf(HEADER_TEMPLATE_S, "CW_FW_VERSION", CW_FW_VERSION);

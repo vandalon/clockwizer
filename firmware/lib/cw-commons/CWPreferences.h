@@ -16,6 +16,12 @@
     #define CW_DEFAULT_FW_URL "https://vandalon.github.io/clockwizer/"
 #endif
 
+// Birthdays the clock always celebrates, on top of the ones on the settings page ("MMDD:NAME:YYYY,...", see Birthdays.h).
+// A private build can fill this from local_config.h.
+#ifndef CW_FIXED_BIRTHDAYS
+    #define CW_FIXED_BIRTHDAYS ""
+#endif
+
 // What the football ticker follows until the settings page says otherwise
 #ifndef CW_DEFAULT_FOOTBALL_LEAGUES
     #define CW_DEFAULT_FOOTBALL_LEAGUES "ned.1,ned.cup"
@@ -72,6 +78,9 @@ struct ClockwiseParams
     const char* const PREF_GHOST1_COLOR = "ghost1Color";
     const char* const PREF_GHOST2_COLOR = "ghost2Color";
     const char* const PREF_DOT_COLOR = "dotColor";
+
+    // Birthdays the clock celebrates with an animated screen: "MMDD:NAME:YYYY" entries, comma separated
+    const char* const PREF_BIRTHDAYS = "birthdays";
 
     static const uint8_t COLOR_COUNT = 10;
     // Accent colours, in the order of the settings page: RGB565 for the Pacman walls and for the night mode clock
@@ -135,6 +144,7 @@ struct ClockwiseParams
     uint8_t ghost1Color;
     uint8_t ghost2Color;
     uint8_t dotColor;
+    String birthdays;
 
     uint16_t wallColor() { return COLORS[color < COLOR_COUNT ? color : 0][0]; }
     // 0 when the default is wanted
@@ -203,6 +213,7 @@ struct ClockwiseParams
         preferences.putUInt(PREF_GHOST1_COLOR, ghost1Color);
         preferences.putUInt(PREF_GHOST2_COLOR, ghost2Color);
         preferences.putUInt(PREF_DOT_COLOR, dotColor);
+        preferences.putString(PREF_BIRTHDAYS, birthdays);
     }
 
     void load()
@@ -238,6 +249,7 @@ struct ClockwiseParams
         ghost1Color = preferences.getUInt(PREF_GHOST1_COLOR, 0);
         ghost2Color = preferences.getUInt(PREF_GHOST2_COLOR, 0);
         dotColor = preferences.getUInt(PREF_DOT_COLOR, 0);
+        birthdays = preferences.getString(PREF_BIRTHDAYS, "");
     }
 
 };

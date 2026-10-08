@@ -57,6 +57,12 @@
   .leagues h3 { margin:14px 0 4px; font-size:13px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
   .leagues label { display:flex; align-items:center; gap:10px; margin:0; padding:5px 0; font-weight:400; }
   .leagues input { width:20px; height:20px; flex:none; accent-color:var(--accent); }
+  .bday { display:flex; align-items:center; gap:4px; border:1px solid var(--line); border-radius:10px; padding:10px 6px 10px 10px; margin-top:10px; }
+  .bday .info { flex:1; min-width:0; }
+  .bday .row { margin-top:8px; }
+  .bday input[type=text] { text-transform:uppercase; }
+  .bday input[type=number], .bday select { padding:10px; }
+  .bday .x { flex:none; width:auto; margin:0; padding:4px 8px; border:0; background:none; font-size:22px; line-height:1; color:var(--muted); }
   button { font:inherit; font-weight:600; padding:13px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); width:100%; margin-top:10px; }
   button.small { width:auto; padding:8px 12px; margin-top:8px; font-weight:500; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -151,6 +157,14 @@
     <input type="text" id="teamSearch" placeholder="Type a club or country" autocomplete="off" oninput="searchTeams()" onfocus="searchTeams()">
     <div class="picks" id="teamPicks" style="display:none"></div>
     <p class="hint">A favourite's live matches stay at the top of the live feed, even when other matches are on too. They are also followed when their competition isn't ticked above.</p>
+  </section>
+
+  <section id="birthdayBox">
+    <h2>Birthdays</h2>
+    <p class="hint" style="margin-top:0">On the day, the clock shows a birthday party with the name in capitals, the age and the time. It steps aside while a football match or a Formula 1 session is live.</p>
+    <div id="bdayList"></div>
+    <button class="small" id="bdayAdd" onclick="addBday()">Add a birthday</button>
+    <p class="hint">Without a birth year the clock wishes happy birthday instead of showing an age. At most 10.</p>
   </section>
 
   <section id="peersBox" style="display:none">
@@ -419,12 +433,14 @@
     $('face').innerHTML = FACES.filter(f => !rows32 || FACES_32.includes(f[0]) || f[0] === faceId).map(f => '<option value="' + f[0] + '">' + f[1] + '</option>').join('');
     $('face').value = faceId;
     $('faceBox').style.display = $('face').options.length > 1 ? 'block' : 'none';
-    $('footballBox').style.display = faceId === '0x0B' || faceId === '0x08' ? 'block' : 'none';
+    const ticker = faceId === '0x0B' || (faceId === '0x08' && rows32);  // Tetris shows football on the 64x32 panel only
+    $('footballBox').style.display = ticker ? 'block' : 'none';
     const ms = g('matchSecs') || '8';
     if (!Array.from($('matchSecs').options).some(o => o.value === ms)) $('matchSecs').add(new Option(ms + ' seconds', ms));
     $('matchSecs').value = ms;
     $('resultMins').value = g('resultMins') || '120';
-    if (faceId === '0x0B' || faceId === '0x08') await loadFootball(g('fbLeagues'), g('fbTeams'));
+    if (ticker) await loadFootball(g('fbLeagues'), g('fbTeams'));
+    loadBirthdays(g('birthdays'));
     $('info').textContent = g('CLOCKFACE_NAME') + ' · v' + g('CW_FW_VERSION') + ' · ' + g('wifiSsid');
     showAuto();
     orig = current();
@@ -514,7 +530,8 @@
     matchSecs: $('matchSecs').value,
     resultMins: $('resultMins').value,
     fbLeagues: fbLeagues.join(','),
-    fbTeams: fbTeams.map(t => t.id + ':' + t.abbr + ':' + t.kind).join(',')
+    fbTeams: fbTeams.map(t => t.id + ':' + t.abbr + ':' + t.kind).join(','),
+    birthdays: bdayString()
   });
 
   // Football: the competitions to follow and the favourite teams. The lists of what can be chosen
@@ -579,6 +596,53 @@
     scheduleSave();
   }
 
+
+  // Birthdays: the clock stores "MMDD:NAME:YYYY" entries, comma separated; "_" stands for a space in a name
+  const MAX_BDAYS = 10;
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  let bdays = [];
+  const daysIn = m => [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+  // Capitals, digits and spaces only: what the clock's little font can draw
+  const bdayName = v => v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9 ]/g, '').slice(0, 12);
+  function bdayString() {
+    return bdays.filter(b => bdayName(b.name).trim()).map(b =>
+      String(b.month).padStart(2, '0') + String(b.day).padStart(2, '0') + ':' + bdayName(b.name).trim().replace(/ /g, '_') + ':' + (b.year || '')).join(',');
+  }
+  function loadBirthdays(text) {
+    bdays = text.split(',').filter(Boolean).map(e => {
+      const p = e.split(':');
+      return { name: (p[1] || '').replace(/_/g, ' '), month: Number(p[0].slice(0, 2)), day: Number(p[0].slice(2)), year: p[2] || '' };
+    });
+    showBirthdays();
+  }
+  function showBirthdays() {
+    $('bdayList').innerHTML = bdays.map((b, i) => {
+      const months = MONTHS.map((n, m) => '<option value="' + (m + 1) + '"' + (b.month === m + 1 ? ' selected' : '') + '>' + n + '</option>').join('');
+      let days = '';
+      for (let d = 1; d <= daysIn(b.month); d++) days += '<option' + (b.day === d ? ' selected' : '') + '>' + d + '</option>';
+      return '<div class="bday"><div class="info"><input type="text" maxlength="12" placeholder="Name" autocomplete="off" value="' + b.name + '" oninput="bdayEdit(' + i + ',\'name\',this)" onchange="scheduleSave()">' +
+        '<div class="row split"><select onchange="bdayEdit(' + i + ',\'day\',this)">' + days + '</select>' +
+        '<select onchange="bdayEdit(' + i + ',\'month\',this)">' + months + '</select>' +
+        '<input type="number" min="1900" max="2100" placeholder="Year" value="' + b.year + '" oninput="bdayEdit(' + i + ',\'year\',this)" onchange="scheduleSave()">' +
+        '</div></div><button class="x" onclick="dropBday(' + i + ')" aria-label="Remove">&times;</button></div>';
+    }).join('');
+    $('bdayAdd').style.display = bdays.length < MAX_BDAYS ? 'inline-block' : 'none';
+  }
+  function bdayEdit(i, field, el) {
+    if (field === 'name') { const v = bdayName(el.value); if (v !== el.value) el.value = v; bdays[i].name = v; return; }
+    if (field === 'year') { bdays[i].year = el.value.slice(0, 4); return; }
+    bdays[i][field] = Number(el.value);
+    if (field === 'month') { bdays[i].day = Math.min(bdays[i].day, daysIn(bdays[i].month)); showBirthdays(); }
+    scheduleSave();
+  }
+  function addBday() {
+    if (bdays.length >= MAX_BDAYS) return;
+    const d = new Date();
+    bdays.push({ name: '', month: d.getMonth() + 1, day: d.getDate(), year: '' });
+    showBirthdays();
+  }
+  function dropBday(i) { bdays.splice(i, 1); showBirthdays(); scheduleSave(); }
+
   // Settings save as soon as they change. Brightness and the like apply at once; the clock only
   // reads the timezone and 12/24h format at boot, so those ask for a restart instead.
   let saveTimer = null, saving = false;
@@ -607,9 +671,10 @@
     const fwUrlChanged = now.fwUrl !== orig.fwUrl;
     const matchChanged = now.matchSecs !== orig.matchSecs;
     const resultChanged = now.resultMins !== orig.resultMins;
+    const birthdaysChanged = now.birthdays !== orig.birthdays;
     const leaguesChanged = now.fbLeagues !== orig.fbLeagues, teamsChanged = now.fbTeams !== orig.fbTeams;
     const quietChanged = now.quiet !== orig.quiet || (now.quiet && (now.qFrom !== orig.qFrom || now.qTo !== orig.qTo));
-    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !qrChanged && !f1Changed && !ballChanged && !styleChanged && !colorChanged && !pacmanChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged) return;
+    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !qrChanged && !f1Changed && !ballChanged && !styleChanged && !colorChanged && !pacmanChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged && !birthdaysChanged) return;
     if (now.quiet && now.qFrom === now.qTo) { toast('Choose different start and end times', 3000); return; }
     saving = true;
     try {
@@ -628,6 +693,7 @@
       if (resultChanged) await set('resultMins', now.resultMins);
       if (leaguesChanged) await set('fbLeagues', now.fbLeagues);
       if (teamsChanged) await set('fbTeams', now.fbTeams);
+      if (birthdaysChanged) await set('birthdays', encodeURIComponent(now.birthdays));
       if (nameChanged) { await set('clockName', encodeURIComponent(now.name)); setTitle(now.name); }
       if (fwUrlChanged) {
         if (now.fwUrl && !/^https?:\/\//i.test(now.fwUrl)) { toast('The location must start with http:// or https://', 4000); saving = false; return; }
