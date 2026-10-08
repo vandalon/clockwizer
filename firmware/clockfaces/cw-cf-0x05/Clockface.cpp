@@ -119,7 +119,7 @@ void Clockface::update()
   }
 
   // Pacman
-  if (millis() - lastMillis >= 75) {
+  if (millis() - lastMillis >= 62) {
     
     // on a junction (not between two, and not in the tunnel past the edge of the map)
     int col = colAt(pacman->getX());
