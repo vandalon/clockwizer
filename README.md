@@ -9,7 +9,7 @@ A fork of [Clockwise](https://github.com/jnthas/clockwise) by Jonathas Barbosa (
 - The firmware location is a setting, so you can host your own builds
 - Several clocks on one network list each other on the settings page
 
-All the clockfaces from upstream are still here (Mario, Time in Words, World Map, Castlevania, Pacman, Pokemon and Tetris). **Luigi** is new: Mario in other colours. **Mario** has been extended (a coin pops out of the block and there is a plant), and **Pacman** and **Pokemon** have been updated, and Tetris now also runs on 64x32 panels. Thanks to everyone who made them; credits are in the clockface folders and the [LICENSE](LICENSE) (MIT).
+All the clockfaces from upstream are still here (Mario, Time in Words, World Map, Castlevania, Pacman, Pokemon and Tetris). **Luigi** is new: Mario in other colours. **Mario** has been extended (a coin pops out of the block and there is a plant); **Pacman** and **Pokemon** have been updated; and Tetris now also runs on 64x32 panels. Thanks to everyone who made them; credits are in the clockface folders and the [LICENSE](LICENSE) (MIT).
 
 ## What you need
 
