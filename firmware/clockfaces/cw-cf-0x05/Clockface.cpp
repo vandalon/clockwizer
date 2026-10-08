@@ -4,7 +4,7 @@
 
 
 unsigned long lastMillis = 0;
-unsigned long lastMillisTime = 0;
+int shownMinute = -1;
 unsigned long lastMillisSec = 0;
 
 
@@ -69,8 +69,8 @@ Clockface::Clockface(Adafruit_GFX* display) {
 void Clockface::setup(CWDateTime *dateTime) {
   this->_dateTime = dateTime;
   Locator::getDisplay()->setFont(&hourFont);
-  randomSeed(dateTime->getMilliseconds() + millis());
-  if (!generateLevel()) loadLevel(FALLBACK_MAP);
+  randomSeed(esp_random());
+  if (!generateLevel()) loadLevel(FALLBACK_MAP, 2);
   drawMap();
   updateClock();
 }
@@ -107,11 +107,8 @@ void Clockface::update()
   }
 
   // Clock
-  if (millis() - lastMillisTime >= 60000) {
-
+  if (_dateTime->getMinute() != shownMinute) {
     updateClock();
-    
-    lastMillisTime = millis();
   }
 
 
@@ -194,6 +191,7 @@ void Clockface::updateClock(bool clear) {
     Locator::getDisplay()->print(this->_dateTime->getHour("00"));
     Locator::getDisplay()->print(" ");
     Locator::getDisplay()->print(this->_dateTime->getMinute("00"));
+    shownMinute = this->_dateTime->getMinute();
 }
 
 // At a junction, score every open way and take the best: food nearby is good, a ghost nearby is bad (good while powered up),
@@ -272,7 +270,7 @@ void Clockface::directionDecision() {
 void Clockface::resetMap() {
 
   // a new random maze
-  if (!generateLevel()) loadLevel(FALLBACK_MAP);
+  if (!generateLevel()) loadLevel(FALLBACK_MAP, 2);
   drawMap();
   updateClock();
 
@@ -344,7 +342,10 @@ bool Clockface::contains(int v, const int* values) {
   return false;
 }
 
-void Clockface::loadLevel(const char* const* rows) {
+void Clockface::loadLevel(const char* const* rows, int clockRow) {
+  _clockRow = clockRow;
+  _clockY = ROW_Y[clockRow] - 3;   // the clock box starts 5px above the lane and has a 2px margin
+  _holeY = ROW_Y[clockRow] + 10;
   for (int c = 0; c < MAP_COLS; c++) {
     _TUNNEL_V[c] = rows[0][2*c+1] == '=' && rows[10][2*c+1] == '=';
   }
@@ -366,20 +367,22 @@ void Clockface::loadLevel(const char* const* rows) {
 }
 
 // ---- random mazes ----
-// Mirrored left/right, junctions may be left out (solid), every junction has at least 2 corridors (the tunnel counts as one),
+// Mirrored left/right (some mazes get a few one-sided corridor changes, so they are asymmetrical), junctions may be left out (solid), every junction has at least 2 corridors (the tunnel counts as one),
 // 1 or 2 side tunnels on the middle rows (never next to each other), 4 power pellets at or next to the corners.
-// The ghosts' exits (row 3, columns 1 and 3) always exist. A new maze must differ from the last one.
+// The ghosts' exits (the row below the clock, columns 1 and 3) always exist. The clock box sits on junction row 1, 2 or 3. A new maze must differ from the last one.
 
 static int mazeDegree(const bool h[5][4], const bool v[4][5], const bool* tun, int r, int c) {
   return (c > 0 && h[r][c-1]) + (c < 4 && h[r][c]) + (r > 0 && v[r-1][c]) + (r < 4 && v[r][c]) + (tun[r] && (c == 0 || c == 4));
 }
 
 // Empty space: pixels that drawWalls() leaves black, i.e. no corridor and no wall outline (2px around a corridor).
-// Mirrors drawWalls(). No black area of more than MAX_EMPTY_PX pixels may be left, also where the maze steps inward from the edge of the screen.
-// The fixed margin around the screen (outside the walls of the outermost corridors) is not counted.
-static const int MAX_EMPTY_PX = 32;
+// Mirrors drawWalls(). randomMaze() adds corridors until no black area is bigger than MAX_EMPTY_PX pixels,
+// also where the maze steps inward from the edge of the screen. The margin around the screen (outside the walls
+// of the outermost corridors) counts as empty only where that outer wall is missing.
+static const int MAX_EMPTY_PX = 48;
 
-static bool tooMuchEmpty(const bool node[5][5], const bool h[5][4], const bool v[4][5], const bool* tun) {
+// how many pixels the black areas of this maze are over MAX_EMPTY_PX (0 = all fine)
+static int emptyExcess(const bool node[5][5], const bool h[5][4], const bool v[4][5], const bool* tun, int clockRow) {
   uint64_t open[64] = {};
   auto rect = [&](int x0, int y0, int x1, int y1) {
     uint64_t bits = (x1 - x0 >= 63 ? ~0ULL : ((1ULL << (x1 - x0 + 1)) - 1)) << x0;
@@ -397,56 +400,61 @@ static bool tooMuchEmpty(const bool node[5][5], const bool h[5][4], const bool v
       rect(COL_X[4] + 4, ROW_Y[r], 63, ROW_Y[r] + 4);
     }
   }
-  rect(13, 24, 51, 38);  // inside the clock box
+  rect(13, ROW_Y[clockRow] - 5, 51, ROW_Y[clockRow] + 9);  // inside the clock box
 
-  // empty = not corridor and not within 2px of one; only inside the frame: x 4..60, y 3..59
-  static const int X_LO = 4, X_HI = 60, Y_LO = 3, Y_HI = 59;
-  uint64_t empty[64] = {};
-  for (int y = Y_LO; y <= Y_HI; y++) {
+  static const int X_LO = 4, X_HI = 60, Y_LO = 3, Y_HI = 59;   // where the outer walls of the outermost corridors sit
+  uint64_t blank[64], rem[64] = {};
+  for (int y = 0; y < 64; y++) {
     uint64_t nearOpen = 0;
-    for (int k = y - 2; k <= y + 2; k++) nearOpen |= open[k];
+    for (int k = max(y - 2, 0); k <= min(y + 2, 63); k++) nearOpen |= open[k];
     nearOpen |= (nearOpen << 1) | (nearOpen << 2) | (nearOpen >> 1) | (nearOpen >> 2);
-    empty[y] = ~nearOpen & (((1ULL << (X_HI - X_LO + 1)) - 1) << X_LO);
+    blank[y] = ~nearOpen;
   }
-
-  // flood fill each empty area; stop as soon as one is too big
-  for (int y0 = Y_LO; y0 <= Y_HI; y0++) {
-    for (int x0 = X_LO; x0 <= X_HI; x0++) {
-      if (!((empty[y0] >> x0) & 1)) continue;
-      int stack[MAX_EMPTY_PX * 4 + 4], sp = 0, n = 1;
-      empty[y0] &= ~(1ULL << x0);
-      stack[sp++] = y0 * 64 + x0;
-      while (sp) {
-        int cur = stack[--sp];
-        int y = cur / 64, x = cur % 64;
-        static const int DX[4] = {1, -1, 0, 0}, DY[4] = {0, 0, 1, -1};
-        for (int k = 0; k < 4; k++) {
-          int nx = x + DX[k], ny = y + DY[k];
-          if (nx < X_LO || nx > X_HI || ny < Y_LO || ny > Y_HI || !((empty[ny] >> nx) & 1)) continue;
-          empty[ny] &= ~(1ULL << nx);
-          if (++n > MAX_EMPTY_PX) return true;
-          stack[sp++] = ny * 64 + nx;
-        }
-      }
+  // the margin is empty only when the nearest pixel of the frame is
+  for (int y = 0; y < 64; y++) {
+    int ry = min(max(y, Y_LO), Y_HI);
+    for (int x = 0; x < 64; x++) {
+      int rx = min(max(x, X_LO), X_HI);
+      if (((blank[y] >> x) & 1) && ((blank[ry] >> rx) & 1)) rem[y] |= 1ULL << x;
     }
   }
-  return false;
+
+  int excess = 0;
+  for (int y0 = 0; y0 < 64; y0++) {
+    while (rem[y0]) {
+      uint64_t reg[64] = {};
+      reg[y0] = rem[y0] & -rem[y0];   // the first empty pixel
+      for (bool grown = true; grown;) {   // grow the area from this pixel until it stops
+        grown = false;
+        for (int y = 0; y < 64; y++) {
+          uint64_t n = reg[y] | (reg[y] << 1) | (reg[y] >> 1) | (y > 0 ? reg[y-1] : 0) | (y < 63 ? reg[y+1] : 0);
+          n &= rem[y];
+          if (n != reg[y]) { reg[y] = n; grown = true; }
+        }
+      }
+      int count = 0;
+      for (int y = 0; y < 64; y++) { count += __builtin_popcountll(reg[y]); rem[y] &= ~reg[y]; }
+      if (count > MAX_EMPTY_PX) excess += count - MAX_EMPTY_PX;
+    }
+  }
+  return excess;
 }
 
 bool Clockface::randomMaze(Maze& m) {
   memset(&m, 0, sizeof(m));
+  m.clockRow = 1 + random(3);
   static const uint8_t TUNNEL_SETS[4] = {1 << 1, 1 << 2, 1 << 3, (1 << 1) | (1 << 3)};
   uint8_t tmask = TUNNEL_SETS[random(4)];
   for (int r = 0; r < MAP_ROWS; r++) m.tun[r] = (tmask >> r) & 1;
 
   for (int r = 0; r < MAP_ROWS; r++) {
-    for (int c = 0; c < MAP_COLS; c++) m.node[r][c] = !(r == 2 && c >= 1 && c <= 3);
+    for (int c = 0; c < MAP_COLS; c++) m.node[r][c] = !(r == m.clockRow && c >= 1 && c <= 3);
   }
   // leave out up to 3 junctions (and their mirror), not the ghost exits or the ends of a tunnel
   for (int k = 0; k < 3; k++) {
     int r = random(MAP_ROWS), c = random(3);
-    if (r == 2 && c >= 1) continue;
-    if (r == 3 && (c == 1 || c == 2)) continue;   // the ghost exit, and pacman's start below the clock
+    if (r == m.clockRow && c >= 1) continue;
+    if (r == m.clockRow + 1 && (c == 1 || c == 2)) continue;   // the ghost exit, and pacman's start below the clock
     if (m.tun[r] && c == 0) continue;
     if (random(2)) { m.node[r][c] = false; m.node[r][4-c] = false; }
   }
@@ -502,6 +510,72 @@ bool Clockface::randomMaze(Maze& m) {
     expand();
   }
 
+  // black areas that are too big: open another corridor (or bring back a left-out junction with its corridors).
+  // Everything is mirrored, so a black area on one side is halved on both sides, and one in the middle is split by a corridor down the middle.
+  // Each round takes a random change that leaves fewer black pixels over the limit.
+  // candidates: 0..9 a closed horizontal corridor, 10..21 a closed vertical one, 22..46 a left-out junction
+  auto apply = [&](int cand) {
+    if (cand < 10) { hOpen[cand / 2][cand % 2] = true; return; }
+    if (cand < 22) { vOpen[(cand - 10) / 3][(cand - 10) % 3] = true; return; }
+    int r = (cand - 22) / 5, c = (cand - 22) % 5, u = c <= 2 ? c : 4-c;
+    m.node[r][c] = m.node[r][4-c] = true;
+    for (int rr = 0; rr < MAP_ROWS; rr++) for (int cc = 0; cc < 2; cc++) hOk[rr][cc] = m.node[rr][cc] && m.node[rr][cc+1];
+    for (int rr = 0; rr < MAP_ROWS-1; rr++) for (int cc = 0; cc < 3; cc++) vOk[rr][cc] = m.node[rr][cc] && m.node[rr+1][cc];
+    for (int cc = 0; cc < 2; cc++) if (hOk[r][cc] && (cc == u || cc+1 == u)) hOpen[r][cc] = true;
+    for (int rr = 0; rr < MAP_ROWS-1; rr++) if (vOk[rr][u] && (rr == r || rr+1 == r)) vOpen[rr][u] = true;
+  };
+  for (int round = 0; round < 20; round++) {
+    int before = emptyExcess(m.node, m.h, m.v, m.tun, m.clockRow), better[47], nbetter = 0;
+    if (!before) break;
+    bool nodeSave[MAP_ROWS][MAP_COLS], hOkSave[MAP_ROWS][2], vOkSave[MAP_ROWS-1][3], hSave[MAP_ROWS][2], vSave[MAP_ROWS-1][3];
+    memcpy(nodeSave, m.node, sizeof(nodeSave));
+    memcpy(hOkSave, hOk, sizeof(hOkSave));
+    memcpy(vOkSave, vOk, sizeof(vOkSave));
+    memcpy(hSave, hOpen, sizeof(hSave));
+    memcpy(vSave, vOpen, sizeof(vSave));
+    auto restore = [&]() {
+      memcpy(m.node, nodeSave, sizeof(nodeSave));
+      memcpy(hOk, hOkSave, sizeof(hOkSave));
+      memcpy(vOk, vOkSave, sizeof(vOkSave));
+      memcpy(hOpen, hSave, sizeof(hSave));
+      memcpy(vOpen, vSave, sizeof(vSave));
+    };
+    for (int cand = 0; cand < 47; cand++) {
+      if (cand < 10) {
+        if (!hOk[cand / 2][cand % 2] || hOpen[cand / 2][cand % 2]) continue;
+      } else if (cand < 22) {
+        if (!vOk[(cand - 10) / 3][(cand - 10) % 3] || vOpen[(cand - 10) / 3][(cand - 10) % 3]) continue;
+      } else {
+        int r = (cand - 22) / 5, c = (cand - 22) % 5;
+        if (m.node[r][c] || (r == m.clockRow && c >= 1 && c <= 3)) continue;   // not the clock
+      }
+      apply(cand);
+      expand();
+      int size = emptyExcess(m.node, m.h, m.v, m.tun, m.clockRow);
+      if (size < before) better[nbetter++] = cand;
+      restore();
+    }
+    if (!nbetter) return false;
+    apply(better[random(nbetter)]);
+    expand();
+  }
+  if (emptyExcess(m.node, m.h, m.v, m.tun, m.clockRow) > 0) return false;
+
+  // about 1 in 3 mazes: break the symmetry by flipping 1 to 3 corridors on one side only.
+  // The checks below (2+ corridors per junction, reachability) and the black-area check here throw out a flip that goes wrong.
+  if (random(3) == 0) {
+    for (int k = 1 + random(3); k > 0; k--) {
+      if (random(2)) {
+        int r = random(MAP_ROWS), c = random(MAP_COLS-1);
+        if (m.node[r][c] && m.node[r][c+1]) m.h[r][c] = !m.h[r][c];
+      } else {
+        int r = random(MAP_ROWS-1), c = random(MAP_COLS);
+        if (m.node[r][c] && m.node[r+1][c]) m.v[r][c] = !m.v[r][c];
+      }
+    }
+    if (emptyExcess(m.node, m.h, m.v, m.tun, m.clockRow) > 0) return false;
+  }
+
   // every junction ok, and all of them reachable from the ghost exit (the tunnel joins its two ends)
   int total = 0;
   for (int r = 0; r < MAP_ROWS; r++) {
@@ -513,8 +587,8 @@ bool Clockface::randomMaze(Maze& m) {
   }
   bool seen[MAP_ROWS][MAP_COLS] = {};
   int stack[25], sp = 0, reached = 0;
-  stack[sp++] = 3 * MAP_COLS + 1;
-  seen[3][1] = true;
+  stack[sp++] = (m.clockRow + 1) * MAP_COLS + 1;
+  seen[m.clockRow + 1][1] = true;
   while (sp) {
     int cur = stack[--sp];
     int r = cur / MAP_COLS, c = cur % MAP_COLS;
@@ -529,7 +603,7 @@ bool Clockface::randomMaze(Maze& m) {
       if (!seen[nr[i]][nc[i]]) { seen[nr[i]][nc[i]] = true; stack[sp++] = nr[i] * MAP_COLS + nc[i]; }
     }
   }
-  return reached == total && !tooMuchEmpty(m.node, m.h, m.v, m.tun);
+  return reached == total;
 }
 
 // how many corridors (a mirrored pair counts once), junctions and tunnels differ
@@ -543,6 +617,7 @@ int Clockface::mazeDiff(const Maze& a, const Maze& b) {
   for (int r = 0; r < MAP_ROWS-1; r++) {
     for (int c = 0; c < MAP_COLS; c++) d += a.v[r][c] != b.v[r][c];
   }
+  d += (a.clockRow != b.clockRow) * 6;
   return d / 2;
 }
 
@@ -579,7 +654,7 @@ bool Clockface::mazeToLevel(const Maze& m) {
     _levelRows[1+2*(pick / MAP_COLS)][1+2*(pick % MAP_COLS)] = 'o';
   }
 
-  _levelRows[1+2*3][1+2*2] = 'P';   // always the same start, right below the clock
+  _levelRows[1+2*(m.clockRow+1)][1+2*2] = 'P';   // always the same start, right below the clock
   return true;
 }
 
@@ -592,7 +667,7 @@ bool Clockface::generateLevel() {
     if (!mazeToLevel(m)) continue;
     _prevMaze = m;
     _hasPrevMaze = true;
-    loadLevel(_levelRowPtrs);
+    loadLevel(_levelRowPtrs, m.clockRow);
     return true;
   }
   _hasPrevMaze = false;
@@ -755,7 +830,7 @@ void Clockface::drawWalls(uint16_t color) {
       rect(COL_X[c], ROW_Y[MAP_ROWS-1] + 4, COL_X[c] + 4, 63);
     }
   }
-  rect(13, 24, 51, 38);  // inside the clock box: 39x15, the time is 34x11
+  rect(13, ROW_Y[_clockRow] - 5, 51, ROW_Y[_clockRow] + 9);  // inside the clock box: 39x15, the time is 34x11
 
   for (int y = 0; y < 64; y++) {
     uint64_t nearOpen = 0;   // pixels with corridor within 2px
@@ -879,11 +954,11 @@ Clockface::MapBlock Clockface::blockAt(int row, int col, Direction dir) {
 }
 
 void Clockface::openHole(int i) {
-  Locator::getDisplay()->fillRect(ghostHouseX(i), HOLE_Y, Ghost::SPRITE_SIZE, 2, 0);
+  Locator::getDisplay()->fillRect(ghostHouseX(i), _holeY, Ghost::SPRITE_SIZE, 2, 0);
 }
 
 void Clockface::closeHole(int i) {
-  Locator::getDisplay()->fillRect(ghostHouseX(i), HOLE_Y, Ghost::SPRITE_SIZE, 2, ClockwiseParams::getInstance()->wallColor());
+  Locator::getDisplay()->fillRect(ghostHouseX(i), _holeY, Ghost::SPRITE_SIZE, 2, ClockwiseParams::getInstance()->wallColor());
 }
 
 // straight down through the hole onto the lane below, then the wall closes behind it
@@ -893,10 +968,10 @@ void Clockface::exitGhost(int i) {
   ghost._direction = Direction::DOWN;
   ghost.move();
 
-  if (ghost.getY() < HOLE_Y) {
+  if (ghost.getY() < _holeY) {
     updateClock(false);  // the ghost wiped part of the time on its way: draw over it, no blank frame
   }
-  if (ghost.getY() >= ROW_Y[3]) {
+  if (ghost.getY() >= ROW_Y[_clockRow+1]) {
     closeHole(i);
     _ghostExiting[i] = false;
     _ghostGraceUntil[i] = millis() + GRACE_MS;

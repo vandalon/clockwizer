@@ -22,7 +22,7 @@
 
 class Clockface: public IClockface {
   private:
-    // junctions of the maze: 5 columns x 5 rows, the clock box takes the middle of row 2
+    // junctions of the maze: 5 columns x 5 rows, the clock box takes the middle of row _clockRow (1..3)
     enum { MAP_COLS = 5, MAP_ROWS = 5 };
     Adafruit_GFX* _display;
     CWDateTime* _dateTime;
@@ -40,7 +40,7 @@ class Clockface: public IClockface {
     // eaten ghosts sit on the clock until this time (the clock dims), 0 = out and about
     unsigned long _ghostHouseUntil[GHOST_COUNT] = {0, 0};
     // an eaten ghost sits on the clock above the lane of junction col 1 / 3 of row 3 (ghostHouseX), and leaves through a hole in the bottom wall
-    static const int HOLE_Y = 39;    // the bottom wall of the clock box is 2px thick
+    int _holeY = 39;                 // the bottom wall of the clock box is 2px thick
     bool _ghostExiting[GHOST_COUNT] = {false, false};
     // a ghost that just left the box cannot catch (or be caught) until this time
     unsigned long _ghostGraceUntil[GHOST_COUNT] = {0, 0};
@@ -49,8 +49,8 @@ class Clockface: public IClockface {
     static const unsigned long EXIT_GAP_MS = 2500;
     unsigned long _nextExitAt = 0;
     uint32_t _colorKey = 0xFFFFFFFF;
-    static const int CLOCK_Y = 26;   // top of the time, centred in the clock box (2px margin all round)
-    int _clockY = CLOCK_Y;
+    int _clockRow = 2;               // the junction row the clock box sits on: 1, 2 or 3 (the ghosts' lane and pacman start are the row below)
+    int _clockY = 26;                // top of the time, centred in the clock box (2px margin all round)
     static const unsigned long GHOUSE_MS = 3000;
     unsigned long _deathUntil = 0;
     unsigned long _deathBlink = 0;
@@ -77,14 +77,15 @@ class Clockface: public IClockface {
     };
 
 
-    // a random maze: mirrored left/right, see generateLevel()
+    // a random maze: mostly mirrored left/right, sometimes asymmetrical, see generateLevel()
     struct Maze {
       bool node[MAP_ROWS][MAP_COLS];
       bool h[MAP_ROWS][MAP_COLS-1];   // junction to the one on its right
       bool v[MAP_ROWS-1][MAP_COLS];   // junction to the one below it
       bool tun[MAP_ROWS];             // side tunnel on this row
+      int clockRow;                   // the row the clock box sits on
     };
-    static const int MIN_MAZE_DIFF = 4;   // a new maze differs at least this much from the last one
+    static const int MIN_MAZE_DIFF = 12;   // a new maze differs at least this much from the last one
     Maze _prevMaze;
     bool _hasPrevMaze = false;
     char _levelRows[11][12];              // the generated maze in the FALLBACK_MAP format
@@ -123,7 +124,7 @@ class Clockface: public IClockface {
     void updateClock(bool clear = true);
     void drawFoodBlock(int row, int col);
     void drawWalls(uint16_t color);
-    void loadLevel(const char* const* rows);
+    void loadLevel(const char* const* rows, int clockRow);
     bool generateLevel();
     bool randomMaze(Maze& m);
     bool mazeToLevel(const Maze& m);
