@@ -78,6 +78,9 @@ class F1Ticker {
     unsigned long fetchSeason();
     void fetchTimes(Session &session, int count);
     bool getJson(const char *url, JsonDocument &filter, JsonDocument &doc);
+    bool ensureDoc();  // the big parse buffer, allocated again when it was handed back
+    void dropDoc();
+    void loadCache();  // the standings and the next race of the last download, from flash
 
     CWDateTime *_dateTime = nullptr;
     DynamicJsonDocument *_doc = nullptr;
@@ -87,6 +90,7 @@ class F1Ticker {
     Session _lastTimed;  // the last session once its times are in, so they are downloaded once
     uint32_t _version = 0;
     bool _started = false;
+    bool _cacheLoaded = false;
     TaskHandle_t _task = nullptr;  // the download task; none while a firmware update needs the memory
     unsigned long _weekendAt = 0, _standingsAt = 0, _seasonAt = 0;  // millis() of the next download
 };

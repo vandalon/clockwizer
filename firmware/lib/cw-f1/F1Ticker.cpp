@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <HTTPClient.h>
 #include <TelnetStream.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <ezTime.h>
@@ -159,18 +160,80 @@ void F1Ticker::task(void *self) {
   }
 }
 
+bool F1Ticker::ensureDoc() {
+  if (_doc) return true;
+  _doc = new (std::nothrow) DynamicJsonDocument(20480);
+  if (_doc && _doc->capacity()) return true;
+  delete _doc;
+  _doc = nullptr;
+  return false;
+}
+
+void F1Ticker::dropDoc() {
+  delete _doc;
+  _doc = nullptr;
+}
+
 // Milliseconds until the millis() value at, 0 when it has passed
 static unsigned long until(unsigned long at) {
   long left = (long)(at - millis());
   return left > 0 ? left : 0;
 }
 
+// The standings and the next race change slowly, so the last download is kept in flash: it shows right after
+// a boot and the HTTPS download only runs once it is older than its refresh time
+void F1Ticker::loadCache() {
+  _cacheLoaded = true;
+  Preferences prefs;
+  if (!prefs.begin("f1cache", true)) return;
+  time_t now = ezt::now();
+  Standing standings[STANDINGS];
+  uint8_t count = prefs.getUChar("standN", 0);
+  time_t at = prefs.getUInt("standAt", 0);
+  if (count > 0 && count <= STANDINGS && prefs.getBytesLength("stand") == sizeof(standings) && at && now >= at) {
+    prefs.getBytes("stand", standings, sizeof(standings));
+    unsigned long age = (now - at) * 1000UL;
+    std::lock_guard<std::mutex> guard(_lock);
+    for (int i = 0; i < count; i++) _snap.standings[i] = standings[i];
+    _snap.standingsCount = count;
+    _version++;
+    if (age < STANDINGS_REFRESH_MS) _standingsAt = millis() + (STANDINGS_REFRESH_MS - age);
+  }
+  Race race;
+  at = prefs.getUInt("raceAt", 0);
+  if (prefs.getBytesLength("race") == sizeof(race) && at && now >= at) {
+    prefs.getBytes("race", &race, sizeof(race));
+    unsigned long age = (now - at) * 1000UL;
+    if (race.city[0] && race.start > now) {
+      std::lock_guard<std::mutex> guard(_lock);
+      _snap.upcoming[0] = race;
+      _snap.upcomingCount = 1;
+      _version++;
+      if (age < SEASON_REFRESH_MS) _seasonAt = millis() + (SEASON_REFRESH_MS - age);
+    }
+  }
+  prefs.end();
+  f1log("[F1] from flash: %d standings, next race %s, next downloads in %lu and %lu s\n", _snap.standingsCount,
+        _snap.upcomingCount ? _snap.upcoming[0].city : "-", until(_standingsAt) / 1000, until(_seasonAt) / 1000);
+}
+
 // Does whatever download is due. Returns how long to wait before looking again.
 unsigned long F1Ticker::refresh() {
   if (WiFi.status() != WL_CONNECTED || ezt::timeStatus() != timeSet) return 10 * 1000UL;
-  if (until(_weekendAt) == 0) _weekendAt = millis() + fetchWeekend();
-  if (until(_standingsAt) == 0) _standingsAt = millis() + fetchStandings();
-  if (until(_seasonAt) == 0) _seasonAt = millis() + fetchSeason();  
+  if (!_cacheLoaded) loadCache();
+  if (until(_weekendAt) == 0) _weekendAt = millis() + (ensureDoc() ? fetchWeekend() : RETRY_MS);
+  // The two Jolpica downloads are HTTPS with small documents of their own: the big buffer goes back for the
+  // TLS handshake, which needs the room, and is allocated again right after
+  if (until(_standingsAt) == 0) {
+    dropDoc();
+    _standingsAt = millis() + fetchStandings();
+    ensureDoc();
+  }
+  if (until(_seasonAt) == 0) {
+    dropDoc();
+    _seasonAt = millis() + fetchSeason();
+    ensureDoc();
+  }
   return std::max(1000UL, std::min(until(_weekendAt), std::min(until(_standingsAt), until(_seasonAt))));
 }
 
@@ -367,6 +430,13 @@ unsigned long F1Ticker::fetchStandings() {
   for (int i = 0; i < count; i++) _snap.standings[i] = standings[i];
   _snap.standingsCount = count;
   _version++;
+  Preferences prefs;
+  if (prefs.begin("f1cache", false)) {
+    prefs.putBytes("stand", standings, sizeof(standings));
+    prefs.putUChar("standN", count);
+    prefs.putUInt("standAt", ezt::now());
+    prefs.end();
+  }
   return STANDINGS_REFRESH_MS;
 }
 
@@ -480,6 +550,12 @@ unsigned long F1Ticker::fetchSeason() {
   _snap.upcoming[0] = upcoming;
   _snap.upcomingCount = 1;
   _version++;
+  Preferences prefs;
+  if (prefs.begin("f1cache", false)) {
+    prefs.putBytes("race", &upcoming, sizeof(upcoming));
+    prefs.putUInt("raceAt", ezt::now());
+    prefs.end();
+  }
   return SEASON_REFRESH_MS;
 }
 
