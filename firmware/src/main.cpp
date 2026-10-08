@@ -627,6 +627,19 @@ static bool restartForUpdateCheck(const char *msg, const String &knownMd5 = "") 
   return true;
 }
 
+// Switching clockface restarts first, like an update: the boot downloads the new face with a whole heap
+// (see bootUpdateCheck()), whatever the current face (Football, F1) has allocated.
+static void restartForFace(const String &id) {
+  Preferences prefs;
+  prefs.begin("fwupdate", false);
+  prefs.putString("bootFace", id);
+  prefs.putBool("skipQr", true);
+  prefs.end();
+  ClockwiseWebServer::getInstance()->update_status = "restarting";
+  restartAt = millis() + 1000;  // the web UI sees the status first
+  TelnetStream.println(currentTimeWithSeconds + " [Face] Switching to " + id + ", restarting to install it");
+}
+
 static bool userCheck = false;  // asked for by a person (web UI, telnet): goes through even during a live match
 
 // Compare the running firmware with the one on the update server and install
@@ -781,7 +794,13 @@ static void bootUpdateCheck() {
   if (wanted) prefs.remove("bootCheck");
   String knownMd5 = prefs.getString("bootMd5", "");
   prefs.remove("bootMd5");
+  String face = prefs.getString("bootFace", "");  // removed first: a failed download can't restart again
+  prefs.remove("bootFace");
   prefs.end();
+  if (face.length()) {
+    TelnetStream.println("[Face] Installing the clockface chosen before the restart");
+    updateFirmware(face);  // restarts on success; on failure the current firmware carries on
+  }
   if (wanted && fwValidated) {
     if (knownMd5.length() == 32) {  // the check before the restart already found the build: skip a second TLS handshake
       TelnetStream.println("[Update] Installing the update found before the restart");
@@ -878,7 +897,7 @@ void loop() {
         if (ClockwiseWebServer::getInstance()->face_requested.length() > 0 && md5Fetch == MD5_IDLE) {  // not while a fetch holds the heap
           String id = ClockwiseWebServer::getInstance()->face_requested;
           ClockwiseWebServer::getInstance()->face_requested = "";
-          updateFirmware(id);
+          restartForFace(id);
         }
         ClockPeers::getInstance()->loop();
         ezt::events();
@@ -931,34 +950,34 @@ void loop() {
             break;
           }
           case '1':
-            updateFirmware("0x01");
+            restartForFace("0x01");
             break;
           case '2':
-            updateFirmware("0x02");
+            restartForFace("0x02");
             break;
           case '3':
-            updateFirmware("0x03");
+            restartForFace("0x03");
             break;
           case '4':
-            updateFirmware("0x04");
+            restartForFace("0x04");
             break;
           case '5':
-            updateFirmware("0x05");
+            restartForFace("0x05");
             break;
           case '6':
-            updateFirmware("0x06");
+            restartForFace("0x06");
             break;
           case '8':
-            updateFirmware("0x08");
+            restartForFace("0x08");
             break;
           case '9':
-            updateFirmware("0x09");
+            restartForFace("0x09");
             break;
           case 'B':
-            updateFirmware("0x0B");
+            restartForFace("0x0B");
             break;
           case 'F':
-            updateFirmware("0x0C");
+            restartForFace("0x0C");
             break;
           case 'T':
             if (millis() < birthdayPreviewUntil) {
