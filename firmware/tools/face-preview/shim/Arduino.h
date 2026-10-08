@@ -2,6 +2,7 @@
 #pragma once
 
 #include <algorithm>
+#include <limits.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -19,7 +20,14 @@ static inline size_t cw_strlcpy(char *dst, const char *src, size_t size) {
 }
 #define strlcpy cw_strlcpy
 
+// Arduino's random(max) and random(min, max); a fixed seed keeps the pictures the same every time
+inline long cw_random(long hi) { return hi <= 0 ? 0 : rand() % hi; }
+inline long cw_random(long lo, long hi) { return hi <= lo ? lo : lo + rand() % (hi - lo); }
+inline void randomSeed(unsigned long seed) { srand((unsigned)seed); }
+#define random cw_random
 #define PROGMEM
+#define pgm_read_byte(addr) (*(const uint8_t *)(addr))
+#define pgm_read_word(addr) (*(const uint16_t *)(addr))
 #define PI 3.14159265358979f
 typedef bool boolean;
 typedef uint8_t byte;

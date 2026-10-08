@@ -1,7 +1,8 @@
 #!/bin/bash
 # Makes the clockface pictures for the web flasher (docs/images/faces) from the real firmware code:
-# Tetris, Football and Formula 1 are drawn by their own Clockface.cpp on a fake panel, Luigi is the
-# Mario picture with the red turned green.
+# Tetris, Football, Formula 1, Mario, Luigi, Pacman and Pokemon are drawn by their own Clockface.cpp
+# on a fake panel, at a moment that shows the face at its best (Mario and Luigi: just after the hit
+# on the minute block, with the coin or the 1-UP and the plant out).
 #
 #   ./thumbs.sh [outdir]       default: ../../../docs/images/faces
 #
@@ -25,18 +26,34 @@ CXX=(c++ -std=c++14 -O2 -DARDUINO=100 -w -I shim -I "$GFX")
 	$FB/GoalAnimation.cpp $FB/TeamColors.cpp "$GFX/Adafruit_GFX.cpp" -o "$WORK/football"
 "${CXX[@]}" -I $F1 -I ../../clockfaces/cw-cf-0x0C thumb_f1.cpp ../../clockfaces/cw-cf-0x0C/Clockface.cpp "$GFX/Adafruit_GFX.cpp" -o "$WORK/f1"
 
+# The faces built on the small game engine (lib/cw-gfx-engine)
+ENGINE=(../../lib/cw-gfx-engine/Sprite.cpp ../../lib/cw-gfx-engine/EventBus.cpp ../../lib/cw-gfx-engine/Locator.cpp "$GFX/Adafruit_GFX.cpp")
+ENG=(c++ -std=c++14 -O2 -fno-rtti -DARDUINO=100 -DARDUINO_ESP32_DEV -w -I ../../lib/cw-gfx-engine -I shim -I "$GFX" -I ../../lib/cw-commons)
+M=../../clockfaces/cw-cf-0x01
+for v in mario luigi; do
+	"${ENG[@]}" $([ $v = luigi ] && echo -DCW_LUIGI) -I $M thumb_mario.cpp $M/Clockface.cpp $M/gfx/block.cpp $M/gfx/mario.cpp $M/gfx/plant.cpp "${ENGINE[@]}" -o "$WORK/$v"
+	mkdir "$WORK/$v-frames" && (cd "$WORK/$v-frames" && "$WORK/$v" .)
+done
+P=../../clockfaces/cw-cf-0x05
+"${ENG[@]}" -DFACE_HEADER='"../../clockfaces/cw-cf-0x05/Clockface.h"' -I $P thumb_engine.cpp $P/Clockface.cpp $P/pacman.cpp $P/ghost.cpp "${ENGINE[@]}" -o "$WORK/pacman"
+K=../../clockfaces/cw-cf-0x06
+"${ENG[@]}" -DFACE_HEADER='"../../clockfaces/cw-cf-0x06/Clockface.h"' -I $K thumb_engine.cpp $K/Clockface.cpp "${ENGINE[@]}" -o "$WORK/pokemon"
+
 "$WORK/tetris" "$WORK"
 "$WORK/football" "$WORK"
 "$WORK/f1" "$WORK" 3 f1      # the race scenario of the face's own test screens
+mkdir "$WORK/pacman-out" "$WORK/pokemon-out"
+"$WORK/pacman" "$WORK/pacman-out" 10     # seconds the face runs before the picture is taken
+"$WORK/pokemon" "$WORK/pokemon-out" 5
 
-python3 - "$WORK" "$OUT" ../../../docs/images/faces/cw-cf-0x01.jpg <<'PYEOF'
-import colorsys, sys
+python3 - "$WORK" "$OUT" <<'PYEOF'
+import sys
 from PIL import Image, ImageDraw
-work, out, mario = sys.argv[1:4]
+work, out = sys.argv[1:3]
 S = 8
 
-def panel(name):
-    img = Image.open(work + "/" + name + ".ppm").convert("RGB")
+def panel(ppm):
+    img = Image.open(ppm).convert("RGB")
     big = Image.new("RGB", (64 * S, 64 * S), (8, 8, 10))
     d = ImageDraw.Draw(big)
     for y in range(64):
@@ -46,17 +63,18 @@ def panel(name):
             d.ellipse((x * S + 1, y * S + 1, x * S + S - 2, y * S + S - 2), fill=c)
     return big.resize((400, 400), Image.LANCZOS)
 
-for name, face in (("tetris", "0x08"), ("football", "0x0B"), ("f1", "0x0C")):
-    panel(name).save("%s/cw-cf-%s.jpg" % (out, face), quality=90)
-
-# Luigi: Mario's red (cap and shirt) turned green, only around the sprite
-im = Image.open(mario).convert("RGB")
-px = im.load()
-for y in range(240, 352):
-    for x in range(135, 235):
-        h, s, v = colorsys.rgb_to_hsv(*(c / 255 for c in px[x, y]))
-        if (h > 0.95 or h < 0.06) and s > 0.4 and v > 0.3:
-            px[x, y] = tuple(int(c * 255) for c in colorsys.hsv_to_rgb(0.34, s, v))
-im.save(out + "/cw-cf-0x09.jpg", quality=88)
+# face id: picture. Mario and Luigi are numbered frames (20 ms apart from the start of the jump):
+# the coin / the 1-UP is out and the plant is up
+PICTURES = {
+    "0x08": "tetris.ppm",
+    "0x0B": "football.ppm",
+    "0x0C": "f1.ppm",
+    "0x01": "mario-frames/mario_027.ppm",
+    "0x09": "luigi-frames/mario_024.ppm",
+    "0x05": "pacman-out/face.ppm",
+    "0x06": "pokemon-out/face.ppm",
+}
+for face, ppm in PICTURES.items():
+    panel(work + "/" + ppm).save("%s/cw-cf-%s.jpg" % (out, face), quality=90)
 PYEOF
 echo "Wrote pictures to $OUT"

@@ -6,6 +6,11 @@
 class CWDateTime {
  public:
   int year = 2026, hour = 21, minute = 34, second = 0, day = 4, month = 10, weekday = 0;
+  int getMilliseconds() { return 0; }
+  String getHour(const char *fmt) { char b[8]; snprintf(b, sizeof(b), fmt[0] == '0' && fmt[1] == '0' ? "%02d" : "%d", hour); return String(b); }
+  String getMinute(const char *fmt) { char b[8]; snprintf(b, sizeof(b), fmt[0] == '0' && fmt[1] == '0' ? "%02d" : fmt, minute); return String(b); }
+  bool is24hFormat() { return true; }
+  bool isAM() { return hour < 12; }
   int getYear() { return year; }
   int getHour() { return hour; }
   int getMinute() { return minute; }
