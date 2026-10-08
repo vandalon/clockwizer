@@ -42,11 +42,11 @@ struct ClockwiseWebServer
   {
     server.begin();
 
-    // Every path that brings the web UI up announces clockwise.local as well
-    // A second clock on the network is renamed (clockwise-2.local) by mDNS itself; the _clockwise
+    // Every path that brings the web UI up announces clockwizer.local as well
+    // A second clock on the network is renamed (clockwizer-2.local) by mDNS itself; the _clockwise
     // service below is how clocks find each other whatever their host names became.
     static bool mdnsStarted = false;
-    if (!mdnsStarted && MDNS.begin("clockwise"))
+    if (!mdnsStarted && MDNS.begin("clockwizer"))
     {
       MDNS.addService("http", "tcp", 80);
       MDNS.addService("clockwise", "tcp", 80);
@@ -56,11 +56,11 @@ struct ClockwiseWebServer
     }
   }
 
-  // What this clock is called: the name the user chose, else "Clockwise"
+  // What this clock is called: the name the user chose, else "Clockwizer"
   String displayName()
   {
     String name = ClockwiseParams::getInstance()->clockName;
-    return name.length() ? name : String("Clockwise");
+    return name.length() ? name : String("Clockwizer");
   }
 
   // The name goes out as the mDNS instance name (what service browsers list) and as a TXT field

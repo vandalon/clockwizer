@@ -5,6 +5,8 @@
 #include <vector>
 #include <algorithm>
 
+extern volatile bool firmwareUpdating;  // main.cpp
+
 // The other clocks on the network, found over mDNS (service _clockwise._tcp). The search runs in
 // the background a little at a time, so the web UI only ever reads the list built up so far. Clocks
 // are remembered and only forgotten after missing a day of searches, so one
@@ -36,6 +38,7 @@ struct ClockPeers
   {
     if (!search)
     {
+      if (firmwareUpdating) return;  // no search while an update needs the memory
       if ((long)(millis() - nextSearchAt) < 0) return;
       search = mdns_query_async_new(NULL, "_clockwise", "_tcp", MDNS_TYPE_PTR, SEARCH_TIMEOUT_MS, 10, NULL);
       nextSearchAt = millis() + SEARCH_EVERY_MS;

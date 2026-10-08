@@ -4,7 +4,7 @@ Clocks update themselves over WiFi. They **pull**: a clock asks a web server whe
 
 ## How a clock updates
 
-1. Every hour (and when you press *Check for update*, or send `C` over telnet) the clock downloads a tiny file `cw-cf-0xNN.md5` from its **firmware location** (`NN` is the clockface it runs). The file holds the md5 of the newest build of that clockface.
+1. Once a day (and when you press *Check for update*, or send `C` over telnet) the clock downloads a tiny file `cw-cf-0xNN.md5` from its **firmware location** (`NN` is the clockface it runs). The file holds the md5 of the newest build of that clockface.
 2. It compares that with the md5 of the firmware it is running. Same: nothing to do, the web page says "up to date".
 3. Different: the clock downloads `cw-cf-0xNN.bin`, shows `UPDATING...` with a progress bar, installs it and restarts.
 
@@ -14,11 +14,13 @@ The same download is used when you pick another clockface on the settings page o
 
 ### Quiet hours
 
-The hourly check doesn't run between the *Pause automatic updates at night* hours (default 22:00 to 08:00). A check that came due in the quiet hours runs when they end. Checking by hand, and picking a clockface, always work.
+The daily check doesn't run between the *Pause automatic updates at night* hours (default 22:00 to 08:00). A check that came due in the quiet hours runs when they end. Checking by hand, and picking a clockface, always work.
 
 ### What if an update goes wrong
 
 - **Download fails:** the clock keeps running the old firmware and retries at the next check. After three failed downloads of the same build it stops trying that build until a different one appears. (Telnet `X` forces another try.)
+- **Out of memory:** a check that runs out of memory for the secure connection restarts the clock once and checks again right after the restart, when memory is free. The settings page follows it through the restart.
+- **Crash loop:** a build that crashes (panic or watchdog) three times without staying up for 10 minutes in between is rolled back to the previous firmware, and the clock then leaves that build alone until a different one appears.
 - **The new firmware doesn't work:** a freshly installed build is "pending". It has to reach the update server (fetch the md5) within five minutes of getting on WiFi, otherwise the clock restarts into the previous firmware. The build that was rolled back isn't tried again until a newer one is published (telnet `X` forces it).
 - **Telnet `R` (restart) or `P` (switch panel height) while a build is pending** counts as a deliberate restart and confirms the new build.
 

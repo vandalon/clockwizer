@@ -1,6 +1,6 @@
 # The web settings page
 
-Every clock serves its own settings page. Open `http://clockwise.local`, the clock's IP address, or scan the QR code the clock shows at startup. The page works on a phone and a computer, and can be added to a phone's home screen.
+Every clock serves its own settings page. Open `http://clockwizer.local`, the clock's IP address, or scan the QR code the clock shows at startup. The page works on a phone and a computer, and can be added to a phone's home screen.
 
 **Changes are saved by themselves**, about half a second after you stop touching a control. A short "Saved" message confirms it. Only two settings need a restart, the timezone and the 24-hour switch; a bar appears at the bottom with a *Restart now* button when you change them.
 
@@ -39,7 +39,7 @@ The match data come from ESPN's public scoreboard feed. The clock polls it in th
 
 ## Other clocks on your network
 
-Shown when the clock has found other Clockwise clocks. They announce themselves over mDNS (`_clockwise._tcp`) and are sorted by name. Each entry shows the clock's name, its clockface and IP address; tap it to open that clock's settings page. A clock is only dropped from the list after it has been missing for about a day.
+Shown when the clock has found other Clockwizer clocks. They announce themselves over mDNS (`_clockwise._tcp`) and are sorted by name. Each entry shows the clock's name, its clockface and IP address; tap it to open that clock's settings page. A clock is only dropped from the list after it has been missing for about a day.
 
 ## Display
 
@@ -57,7 +57,7 @@ Auto brightness also drives night mode (below).
 
 ## Updates
 
-- **Pause automatic updates at night**: the clock checks for a new version every hour. With this on it stays quiet between the two hours you choose (default 22:00 until 08:00), so a restart doesn't wake anyone. Checking by hand always works. If the clock has no time yet it can't tell the hour and doesn't pause.
+- **Pause automatic updates at night**: the clock checks for a new version once a day. With this on it stays quiet between the two hours you choose (default 22:00 until 08:00), so a restart doesn't wake anyone. Checking by hand always works. If the clock has no time yet it can't tell the hour and doesn't pause.
 - **Firmware location**: the web folder the clock downloads firmware from. The default is the build published with this project. Clear the field to go back to the default. See [updating-firmware.md](updating-firmware.md).
 
 ## Clock
@@ -66,7 +66,7 @@ Auto brightness also drives night mode (below).
 - **QR code at startup**: show or hide the code at boot.
 - **Who can open this page**: *only devices on this network* (default), *any private network* (10.x, 172.16-31.x, 192.168.x) or *anyone who can reach the clock*. The page has no password, so leave it on the default unless the clock sits behind something you trust. Devices on the clock's own network, including its setup network, are always allowed.
 - **Check for update**: looks for a new build right now. The status shows what happened (checking, up to date, installing).
-- **WiFi setup**: restarts the clock into the `Clockwise-Wifi` setup network so you can choose another network. Your current network stays saved until you pick a new one.
+- **WiFi setup**: restarts the clock into the `Clockwizer-Wifi` setup network so you can choose another network. Your current network stays saved until you pick a new one.
 - **Reboot**: restarts the clock.
 - **Reset to factory settings**: erases the settings and the WiFi network after a confirmation. The settings tied to your particular panel (colour order, rotation, light-sensor pin and panel height) are kept.
 

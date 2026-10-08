@@ -99,6 +99,7 @@ class FootballTicker {
     // to copy it then.
     void overview(Overview &out);
     uint32_t version();
+    void resume();  // restarts the task after a firmware update; version() does it
 
     // How the downloads are going: nothing yet, fine, or the last attempt failed with nothing to show
     enum Status { LOADING, OK, FAILED };
@@ -153,6 +154,7 @@ class FootballTicker {
 
     CWDateTime *_dateTime = nullptr;
     bool _started = false;
+    TaskHandle_t _task = nullptr;  // the fetch task; none while a firmware update needs the memory
     bool _withRace = true;
     bool _extras = false;
     uint32_t _resultWindowSecs = 0;

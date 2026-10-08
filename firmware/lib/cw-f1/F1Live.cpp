@@ -280,6 +280,7 @@ void F1Live::run() {
       liveLog("[F1 live] message too big for the parser\n");
     }
 
+    if (firmwareUpdating) break;  // hand the connection's memory to the update
     if (_wanted) {
       unwantedSince = 0;
     } else if (!unwantedSince) {

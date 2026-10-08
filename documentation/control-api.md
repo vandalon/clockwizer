@@ -2,7 +2,7 @@
 
 Besides the settings page, a clock has a small HTTP interface (the page itself uses it) and a telnet console. Both are meant for a trusted home network: neither has a password. Who may use the HTTP interface follows the *Who can open this page* setting; telnet is not limited by it.
 
-Replace `clockwise.local` with the clock's IP address if your computer can't resolve it.
+Replace `clockwizer.local` with the clock's IP address if your computer can't resolve it.
 
 ## HTTP interface (port 80)
 
@@ -14,7 +14,7 @@ Replace `clockwise.local` with the clock's IP address if your computer can't res
 | `POST /face?id=0x05` | Installs a clockface: `0x0B 0x0C 0x08 0x01 0x09 0x05 0x06 0x04 0x03 0x02` |
 | `POST /cmd?c=update` | Checks for a firmware update now |
 | `POST /cmd?c=reboot` | Restarts the clock |
-| `POST /cmd?c=wifi` | Restarts into the `Clockwise-Wifi` setup |
+| `POST /cmd?c=wifi` | Restarts into the `Clockwizer-Wifi` setup |
 | `POST /cmd?c=reset` | Factory reset (erases settings and WiFi) |
 | `POST /restart` | Restarts the clock |
 | `GET /read?pin=35` | Reads an analog pin, used by the light-sensor display on the page |
@@ -27,14 +27,14 @@ Examples:
 
 ```bash
 # all settings
-curl -sI http://clockwise.local/get | grep -i '^x-'
+curl -sI http://clockwizer.local/get | grep -i '^x-'
 
 # 24-hour clock off, then restart to apply it
-curl -X POST "http://clockwise.local/set?use24hFormat=0"
-curl -X POST "http://clockwise.local/cmd?c=reboot"
+curl -X POST "http://clockwizer.local/set?use24hFormat=0"
+curl -X POST "http://clockwizer.local/cmd?c=reboot"
 
 # switch to Pacman
-curl -X POST "http://clockwise.local/face?id=0x05"
+curl -X POST "http://clockwizer.local/face?id=0x05"
 ```
 
 ### Settings
@@ -76,7 +76,7 @@ Settings that change the panel (`swapBlueGreen`, `displayRotation`, `displayHeig
 
 ## Telnet commands
 
-Connect with `nc clockwise.local 23` (or `telnet clockwise.local 23`). The clock prints its log there, and a single key is a command; `h` lists them. No Enter is needed with `nc` in raw mode, otherwise Enter after the letter works too.
+Connect with `nc clockwizer.local 23` (or `telnet clockwizer.local 23`). The clock prints its log there, and a single key is a command; `h` lists them. No Enter is needed with `nc` in raw mode, otherwise Enter after the letter works too.
 
 | Key | What it does |
 |-----|--------------|

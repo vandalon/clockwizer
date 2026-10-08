@@ -5,11 +5,11 @@
 - Only **2.4 GHz** networks work. A router that merges 2.4 and 5 GHz under one name usually works, but if setup fails, create a separate 2.4 GHz network name.
 - Check the password. WiFi setup stays open for five minutes and then the clock gives up until the next restart.
 - Start the setup again: *Clock → WiFi setup* on the settings page (if you can still reach it), or power the clock off and on with no network available. You can also re-run the WiFi step of the [web flasher](https://vandalon.github.io/clockwizer/) over USB.
-- The display shows `Clockwise-Wifi` and a QR code when it waits for you in setup mode. Join that network from your phone and a setup page opens.
+- The display shows `Clockwizer-Wifi` and a QR code when it waits for you in setup mode. Join that network from your phone and a setup page opens.
 
 ## I can't open the settings page
 
-- Try the IP address instead of `clockwise.local`. Windows without mDNS support and some routers don't resolve `.local` names. Your router's list of devices shows the IP, and the clock prints it on its serial log at start-up (`pio device monitor`).
+- Try the IP address instead of `clockwizer.local`. Windows without mDNS support and some routers don't resolve `.local` names. Your router's list of devices shows the IP, and the clock prints it on its serial log at start-up (`pio device monitor`).
 - Your phone or computer must be on the same network as the clock. By default the page refuses devices from other networks (*Who can open this page*). A VPN or a guest network counts as another network.
 - Another clock's page lists this clock under *Other clocks on your network*, with its IP, if it is on the same network.
 
@@ -50,7 +50,7 @@ The clock must know the number of rows of the panel (64 or 32). The Tetris face 
 
 - **"Check for update" says no server:** the clock couldn't read `cw-cf-0xNN.md5` from its firmware location. Open `<firmware location>/cw-cf-0xNN.md5` in a browser (replace `NN` with your face's id, as shown by the face list). It must show 32 hex characters. Check the location in *Updates → Firmware location*.
 - **It says the update was skipped:** this exact build failed before (it was rolled back, or the download failed three times). Publish a new build, or send `X` over telnet to try again.
-- **Nothing happens at night:** the hourly check pauses in the quiet hours.
+- **Nothing happens at night:** the daily check pauses in the quiet hours.
 - **The clock keeps rolling back:** a new firmware has to reach the update server within five minutes of getting on WiFi. If your server is slow or blocked after a restart, that fails. Check the telnet log for the `[Update]` lines.
 - **GitHub Pages serves an old file:** Pages caches for a few minutes. Wait and check again.
 

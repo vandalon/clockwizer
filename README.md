@@ -5,7 +5,7 @@ A fork of [Clockwise](https://github.com/jnthas/clockwise) by Jonathas Barbosa (
 **What's different from upstream**
 - New clockfaces: **Football** (live scores, results, goal celebrations), and **Formula 1** (live sessions, standings, next race); **Tetris** also runs on 64x32 panels, with a ticker row that shows football scores and, if you switch it on, the F1 race
 - A redesigned web settings page: pick the clockface, colours, brightness, update behaviour and more from your phone
-- Automatic firmware updates: the clock checks for a new build every hour and rolls back by itself if the new one can't reach the update server
+- Automatic firmware updates: the clock checks for a new build once a day and rolls back by itself if the new one can't reach the update server
 - The firmware location is a setting, so you can host your own builds
 - Several clocks on one network list each other on the settings page
 
@@ -26,8 +26,8 @@ Ready-made options: Brian Lough's [ESP32 Trinity](https://github.com/witnessmeno
 ## Getting started
 
 1. **Flash a clockface** onto the ESP32 over USB, see [Installing](#installing) below.
-2. **Connect it to WiFi.** On first boot the clock opens its own network called `Clockwise-Wifi` and shows a QR code. Scan it, or join that network, pick your WiFi (it must be 2.4 GHz) and enter the password. You can also set up WiFi while flashing from the browser, via the Improv step.
-3. **Open the settings page.** For a few seconds after every start the clock shows a QR code that opens it. Or browse to `http://clockwise.local` or to the clock's IP address.
+2. **Connect it to WiFi.** On first boot the clock opens its own network called `Clockwizer-Wifi` and shows a QR code. Scan it, or join that network, pick your WiFi (it must be 2.4 GHz) and enter the password. You can also set up WiFi while flashing from the browser, via the Improv step.
+3. **Open the settings page.** For a few seconds after every start the clock shows a QR code that opens it. Or browse to `http://clockwizer.local` or to the clock's IP address.
 4. Choose your timezone, and you're done. The clock gets the time over NTP.
 
 ## Installing
@@ -76,7 +76,7 @@ Out of the box it follows the Eredivisie, the KNVB Cup and the Netherlands natio
 
 ## Using the clock from your phone
 
-Open the settings page (`http://clockwise.local`, the IP address, or scan the QR code at startup). Changes are saved by themselves a moment after you make them; a few of them ask for a restart. The top of the page names the clockface, firmware version and WiFi network.
+Open the settings page (`http://clockwizer.local`, the IP address, or scan the QR code at startup). Changes are saved by themselves a moment after you make them; a few of them ask for a restart. The top of the page names the clockface, firmware version and WiFi network.
 
 **Clockface**
 Switch to another clockface from the list. The clock downloads it, installs it and restarts, which takes a minute. Panels with 32 rows only list the faces that fit.
@@ -87,7 +87,7 @@ Switch to another clockface from the list. The clock downloads it, installs it a
 - *Football* (Football and Tetris faces): see [The Football clockface](#the-football-clockface).
   The football and F1 data come from ESPN's public scoreboard feeds and the Jolpica F1 API.
 
-**Other clocks on your network**: lists every Clockwise on the same network by name, with a link to its own settings page.
+**Other clocks on your network**: lists every Clockwizer on the same network by name, with a link to its own settings page.
 
 **Display**
 - *Brightness*: the fixed brightness.
@@ -98,14 +98,14 @@ Switch to another clockface from the list. The clock downloads it, installs it a
 - *Timezone*: pick yours, or use the button to take your phone's timezone.
 
 **Updates**
-- *Pause automatic updates at night*: the clock checks for a new version every hour; this keeps it quiet between the hours you choose (default 22:00 to 08:00). *Check for update* always works.
+- *Pause automatic updates at night*: the clock checks for a new version once a day; this keeps it quiet between the hours you choose (default 22:00 to 08:00). *Check for update* always works.
 - *Firmware location*: the web folder the clock downloads firmware from. Leave it on the default for the builds published with this project, or point it at your own server, see [Updates](#updates).
 
 **Clock**
 - *Name*: how this clock appears in the list of clocks on your network.
 - *QR code at startup*: show or hide the setup code.
 - *Who can open this page*: only devices on the clock's own network (default), any private network (10.x, 172.16-31.x, 192.168.x), or anyone who can reach it. The page has no password, so leave this on the default unless you know why you'd change it.
-- *Check for update*, *Reboot*, and *WiFi setup* (restarts into the `Clockwise-Wifi` setup, your saved network stays until you choose a new one).
+- *Check for update*, *Reboot*, and *WiFi setup* (restarts into the `Clockwizer-Wifi` setup, your saved network stays until you choose a new one).
 - *Factory reset*: erases all settings and the WiFi network. The panel wiring options (colour order, rotation, LDR pin, height) are kept.
 
 ### Advanced settings
@@ -113,7 +113,7 @@ Switch to another clockface from the list. The clock downloads it, installs it a
 Options tied to your particular panel have no switch on the page. Set them with a POST request to the clock, for example:
 
 ```
-curl -X POST "http://clockwise.local/set?displayRotation=2"
+curl -X POST "http://clockwizer.local/set?displayRotation=2"
 ```
 
 | Key | Value |

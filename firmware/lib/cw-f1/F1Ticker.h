@@ -65,6 +65,7 @@ class F1Ticker {
     void snapshot(Snapshot &out);
     // Changes whenever a download changed anything
     uint32_t version();
+    void resume();  // restarts the task after a firmware update; version() does it
 
     // The team colour of a driver by his 3-letter code, white when unknown
     static uint16_t driverColor(const char *code);
@@ -86,5 +87,6 @@ class F1Ticker {
     Session _lastTimed;  // the last session once its times are in, so they are downloaded once
     uint32_t _version = 0;
     bool _started = false;
+    TaskHandle_t _task = nullptr;  // the download task; none while a firmware update needs the memory
     unsigned long _weekendAt = 0, _standingsAt = 0, _seasonAt = 0;  // millis() of the next download
 };

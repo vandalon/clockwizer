@@ -2,14 +2,14 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Clockwise</title>
+<title>Clockwizer</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/png" href="/icon.png">
 <link rel="apple-touch-icon" href="/icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Clockwise">
+<meta name="apple-mobile-web-app-title" content="Clockwizer">
 <meta name="theme-color" content="#155799">
 <style>
   :root { --bg:#f2f4f7; --card:#fff; --text:#1c2430; --muted:#6b7785; --line:#dfe4ea; --accent:#155799; --danger:#c0392b; }
@@ -75,7 +75,7 @@
 </head>
 <body>
 <header>
-  <h1 id="title">Clockwise</h1>
+  <h1 id="title">Clockwizer</h1>
   <small id="info">&nbsp;</small>
 </header>
 
@@ -204,7 +204,7 @@
   <section>
     <h2>Updates</h2>
     <div class="row">
-      <div><strong>Pause automatic updates at night</strong><p class="hint">The clock checks for a new version every hour. Checking by hand always works.</p></div>
+      <div><strong>Pause automatic updates at night</strong><p class="hint">The clock checks for a new version once a day. Checking by hand always works.</p></div>
       <input type="checkbox" class="switch" id="quiet" onchange="showQuiet(); scheduleSave()">
     </div>
     <div id="quietBox" class="row split" style="display:none">
@@ -219,7 +219,7 @@
   <section>
     <h2>Clock</h2>
     <label for="name">Name</label>
-    <input type="text" id="name" maxlength="24" placeholder="Clockwise" autocomplete="off" onchange="scheduleSave()">
+    <input type="text" id="name" maxlength="24" placeholder="Clockwizer" autocomplete="off" onchange="scheduleSave()">
     <p class="hint">Shown in the list of clocks on your network, so you can tell them apart.</p>
     <div class="row" style="margin-top:12px">
       <div><strong>QR code at startup</strong><p class="hint">Shows a code on the display for a few seconds that opens this page</p></div>
@@ -334,7 +334,7 @@
   // With auto brightness the sensor sets the brightness, so the manual slider goes away
   // The clock's name is the page heading, the tab title and the name a home screen shortcut gets
   function setTitle(name) {
-    const title = name || 'Clockwise';
+    const title = name || 'Clockwizer';
     $('title').textContent = title;
     document.title = title;
     document.querySelector('meta[name="apple-mobile-web-app-title"]').content = title;
@@ -347,7 +347,7 @@
       const peers = await r.json();
       $('peersBox').style.display = peers.length ? 'block' : 'none';
       $('peersHint').textContent = 'Found ' + peers.length + (peers.length === 1 ? ' other clock' : ' other clocks') +
-        '. You are on "' + (orig.name || 'Clockwise') + '". Tap a clock to open its settings.';
+        '. You are on "' + (orig.name || 'Clockwizer') + '". Tap a clock to open its settings.';
       const list = $('peerList');
       list.textContent = '';
       for (const p of peers) {
@@ -686,6 +686,16 @@
         const status = r.headers.get('X-updateStatus');
         if (status === 'checking') return;
         clearInterval(poll);
+        if (status === 'restarting') {  // out of memory: the clock restarts and checks again
+          clearBusy();
+          waitForClock('The clock was low on memory. Restarting to check again...', r2 => {
+            const s2 = r2.headers.get('X-updateStatus');
+            if (s2 === 'installing') waitForClock('A new version was found. Installing, the clock restarts...', reloadPage);
+            else if (s2) showUpdateResult(s2);
+            else location.reload();
+          });
+          return;
+        }
         if (!status) { location.reload(); return; }  // restarted since: a new version is running
         clearBusy();
         showUpdateResult(status);

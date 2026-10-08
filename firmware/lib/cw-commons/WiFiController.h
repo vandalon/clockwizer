@@ -112,15 +112,15 @@ struct WiFiController
     // One clear screen in the same look as the settings page
     const char* menu[] = {"wifi"};
     wifiManager.setMenu(menu, 1);
-    wifiManager.setTitle("Clockwise");
+    wifiManager.setTitle("Clockwizer");
     wifiManager.setCustomHeadElement(PORTAL_STYLE);
-    wifiManager.startConfigPortal("Clockwise-Wifi");
+    wifiManager.startConfigPortal("Clockwizer-Wifi");
 
     if (ClockwiseParams::getInstance()->displayHeight == 64)
     {
       // Tested on a real panel: lit modules on black at half brightness scan reliably
       if (setBrightness) setBrightness(128);
-      StatusController::getInstance()->wifiSetupQr("Clockwise-Wifi");
+      StatusController::getInstance()->wifiSetupQr("Clockwizer-Wifi");
     }
     else
     {
@@ -169,13 +169,13 @@ struct WiFiController
 
   bool begin()
   {
-    WiFi.setHostname("clockwise");  // before the mode is set, so DHCP sees it
+    WiFi.setHostname("clockwizer");  // before the mode is set, so DHCP sees it
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     WiFi.setAutoReconnect(true);
     esp_wifi_set_ps(WIFI_PS_NONE);
 
-    improvSerial.setDeviceInfo(ImprovTypes::ChipFamily::CF_ESP32, CW_FW_NAME, CW_FW_VERSION, "Clockwise");
+    improvSerial.setDeviceInfo(ImprovTypes::ChipFamily::CF_ESP32, CW_FW_NAME, CW_FW_VERSION, "Clockwizer");
     improvSerial.onImprovError(onImprovWiFiErrorCb);
     improvSerial.onImprovConnected(onImprovWiFiConnectedCb);
 

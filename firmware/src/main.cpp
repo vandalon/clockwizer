@@ -49,13 +49,14 @@ bool autoBrightEnabled;
 bool forceRefresh;
 bool nightMode;
 bool updateInProgress = false;
+volatile bool liveEventOn = false;      // set by the football/F1 tickers while a match or session is live: no automatic update then
 volatile bool firmwareUpdating = false;  // from the start of a firmware update: the football downloads wait (FootballTicker)
 bool logLDR = false;
 int64_t lastNow;
 int64_t ldrCheckDue = 0;
 int64_t loopDue = 0;
-unsigned long updateCheckDue = 30000; // first check 30s after boot, then hourly; compared wrap-safe
-#define UPDATE_CHECK_MS 3600000
+unsigned long updateCheckDue = 30000; // first check 30s after boot, then daily; compared wrap-safe
+#define UPDATE_CHECK_MS 86400000
 #define UPDATE_MAX_TRIES 3        // failed downloads per build before giving up
 #define BOOT_QR_MS 10000          // how long the startup QR code stays up
 #define VALIDATE_AFTER_MS 60000   // from this long on, running + on WiFi, try to prove the update check works
@@ -197,10 +198,22 @@ void applyBrightnessSettings() {
   }
 }
 
+static void bootUpdateCheck();
+static void crashGuard();
+
+// A restart for an update leaves a flag, so the next boot doesn't show the QR code again
+static void skipQrNextBoot() {
+  Preferences prefs;
+  prefs.begin("fwupdate", false);
+  prefs.putBool("skipQr", true);
+  prefs.end();
+}
+
 void setup()
 {
   Serial.begin(115200);
   pinMode(ESP32_LED_BUILTIN, INPUT);
+  crashGuard();
 
   ClockwiseParams::getInstance()->load();
 
@@ -214,7 +227,6 @@ void setup()
   ldrAverage.begin();
   automaticBrightControl();
 
-  StatusController::getInstance()->clockwiseLogo();
   if (panelResY == 64) StatusController::getInstance()->wifiConnecting();
   #ifdef DOUBLE_BUFFER_ON
     dma_display->flipDMABuffer();
@@ -240,7 +252,15 @@ void setup()
   wifiUpAt = millis();
 
   // Point phones at the settings page: a QR code for a few seconds, if not switched off in the web UI
-  if (ClockwiseParams::getInstance()->showQrOnBoot && panelResY == 64) {
+  bool skipQr;
+  {
+    Preferences prefs;
+    prefs.begin("fwupdate", false);
+    skipQr = prefs.getBool("skipQr", false);
+    if (skipQr) prefs.remove("skipQr");
+    prefs.end();
+  }
+  if (ClockwiseParams::getInstance()->showQrOnBoot && panelResY == 64 && !skipQr) {
     dma_display->setBrightness8(128);  // the brightness it was tested at
     // Keep serving the web UI meanwhile; switching the QR off there ends it early.
     // The frame is redrawn every second for the countdown (double buffering needs the whole frame).
@@ -250,7 +270,7 @@ void setup()
       int secondsLeft = (qrUntil - millis() + 999) / 1000;
       if (secondsLeft != shown) {
         shown = secondsLeft;
-        StatusController::getInstance()->showQr("http://clockwise.local", "SCAN FOR SETTINGS", secondsLeft);
+        StatusController::getInstance()->showQr("http://clockwizer.local", "SCAN FOR SETTINGS", secondsLeft);
         #ifdef DOUBLE_BUFFER_ON
           dma_display->flipDMABuffer();
         #endif
@@ -278,6 +298,7 @@ void setup()
   currentTimeWithSeconds = String(hour) + ":" + String(minute) + ":" + String(second);
 
   TelnetStream.begin();
+  bootUpdateCheck();  // before the clockface starts its downloads: the heap is still whole
 
   Serial.println("Ready");
   Serial.print("IP address: ");
@@ -321,6 +342,10 @@ void updateFirmware( String id ) {
   #ifdef DOUBLE_BUFFER_ON
     dma_display->flipDMABuffer();
   #endif
+
+  // The football/F1 tasks hand back their parse buffers once they see firmwareUpdating (the update
+  // check cleared it a moment ago, so they may have taken them again); the TLS handshake needs the block
+  delay(2500);
 
   httpUpdate.rebootOnUpdate(false); // remove automatic update
   TelnetStream.println(("Updating to " + id + " now!"));
@@ -411,9 +436,12 @@ void updateFirmware( String id ) {
       #ifdef DOUBLE_BUFFER_ON
         dma_display->flipDMABuffer();
       #endif
+      skipQrNextBoot();
       esp_restart();  
   }
 }
+
+static String md5Failure;  // why the last md5 fetch failed, for the log (a 404 on the per-panel file is overwritten by the shared one)
 
 // Fetch the md5 that update-fw.sh publishes next to each firmware image.
 // reachable is false when the server could not be connected to at all.
@@ -421,10 +449,12 @@ static String fetchServerMd5(const String &url, bool &reachable) {
   HTTPClient http;
   std::unique_ptr<WiFiClient> client = makeClient(url);
   String md5 = "";
-  http.setConnectTimeout(2000);
-  http.setTimeout(3000);
+  http.setConnectTimeout(5000);  // an HTTPS handshake is slow on the ESP32
+  http.setTimeout(8000);
   reachable = false;
   http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  size_t freeBefore = ESP.getFreeHeap(), blockBefore = ESP.getMaxAllocHeap();  // before the handshake
+  size_t lowestBefore = ESP.getMinFreeHeap();
   if (http.begin(*client, url)) {
     int code = http.GET();
     reachable = code > 0;
@@ -432,6 +462,31 @@ static String fetchServerMd5(const String &url, bool &reachable) {
       md5 = http.getString();
       md5.trim();
     }
+    if (md5.length() != 32) {
+      // Negative codes are connection errors (e.g. -1 refused or handshake failed, -11 read timeout)
+      String why = code > 0 ? "HTTP " + String(code) : HTTPClient::errorToString(code);
+      md5Failure = why + (code == HTTP_CODE_OK ? ", " + String(md5.length()) + " chars" : "");
+    }
+  } else {
+    md5Failure = "could not start the request";
+  }
+  if (md5.length() != 32 && !reachable) {
+    // -1 covers DNS, TCP, TLS and timeouts alike: say which one it was
+    char tlsError[100] = "";
+    if (url.startsWith("https://")) static_cast<WiFiClientSecure *>(client.get())->lastError(tlsError, sizeof(tlsError));
+    int hostStart = url.indexOf("//") + 2;
+    String host = url.substring(hostStart, url.indexOf('/', hostStart));
+    IPAddress ip;
+    md5Failure += " [tls: " + String(tlsError[0] ? tlsError : "none") + ", dns " + host + ": " +
+                  (WiFi.hostByName(host.c_str(), ip) == 1 ? ip.toString() : String("failed")) +
+                  ", wifi " + String(WiFi.status()) + ", rssi " + String(WiFi.RSSI()) +
+                  ", before the handshake free " + String(freeBefore) + " block " + String(blockBefore) +
+                  ", lowest before " + String(lowestBefore) +
+                  ", lowest ever " + String(ESP.getMinFreeHeap()) + "]";
+  }
+  if (md5.length() != 32) {
+    md5Failure += " (" + url + ", heap free " + String(ESP.getFreeHeap()) + ", largest block " +
+                  String(ESP.getMaxAllocHeap()) + ")";
   }
   http.end();
   return md5;
@@ -458,7 +513,12 @@ static bool md5IgnoreSkips = false;
 static bool checkPending = false;      // an update check was asked for and waits for the fetch task
 static bool checkPendingForce = false;
 
+static bool md5HoldsDownloads = false;  // this fetch set firmwareUpdating, so it must clear it
+
 static void md5Task(void *) {
+  // The football/F1 tasks stop starting downloads while firmwareUpdating is set; give one that is
+  // already running a moment to finish and free its memory, the TLS handshake needs a big block
+  if (md5HoldsDownloads) vTaskDelay(pdMS_TO_TICKS(2500));
   md5Result = fetchLatestMd5();
   md5Fetch = MD5_DONE;
   vTaskDelete(NULL);
@@ -469,8 +529,14 @@ static bool startMd5Fetch(bool forValidation, bool ignoreSkips) {
   md5ForValidation = forValidation;
   md5IgnoreSkips = ignoreSkips;
   md5Fetch = MD5_RUNNING;
+  if (!firmwareUpdating) {
+    firmwareUpdating = true;
+    md5HoldsDownloads = true;
+  }
   if (xTaskCreate(md5Task, "md5fetch", 10240, NULL, 1, NULL) != pdPASS) {
     md5Fetch = MD5_IDLE;
+    if (md5HoldsDownloads) firmwareUpdating = false;
+    md5HoldsDownloads = false;
     return false;
   }
   return true;
@@ -497,7 +563,7 @@ void checkFirmwareValid(int64_t now) {
   }
 }
 
-// The automatic hourly check stays quiet between two hours of the day (22:00 to 08:00 unless changed
+// The automatic daily check stays quiet between two hours of the day (22:00 to 08:00 unless changed
 // in the web UI), so nobody is woken by a restart. From = until means never quiet. Checking by hand
 // (web UI, telnet) still works. Without a synced clock the hour is unknown.
 static bool inUpdateQuietHours() {
@@ -507,6 +573,15 @@ static bool inUpdateQuietHours() {
   return from < until ? (hour >= from && hour < until) : (hour >= from || hour < until);
 }
 
+static bool inBootCheck = false;  // the check right after a restart: a failure there doesn't restart again
+static unsigned long restartAt = 0;  // millis() of a restart for a clean update check, 0 for none
+static String bootLog;               // what the check right after a restart said: nobody is on telnet yet, so it is replayed later
+
+static void updateLog(const String &msg) {
+  TelnetStream.println(currentTimeWithSeconds + msg);
+  if (inBootCheck) bootLog += "[after the restart]" + msg + "\n";
+}
+
 // Compare the running firmware with the one on the update server and install
 // it when they differ.
 // ignoreSkips = telnet 'X': also retry builds that failed or rolled back.
@@ -514,12 +589,23 @@ static void applyUpdateCheck(const String &md5, bool ignoreSkips) {
   String &status = ClockwiseWebServer::getInstance()->update_status;  // what the web UI shows
 
   if (md5.length() != 32) {
-    TelnetStream.println(currentTimeWithSeconds + " [Update] No version info on server");
+    updateLog(" [Update] No version info on server: " + md5Failure);
     status = "noserver";
+    // Out of memory for the TLS handshake: a restart starts with a whole heap, so check again there
+    if (md5Failure.indexOf("emory") >= 0 && !inBootCheck && fwValidated) {
+      Preferences prefs;
+      prefs.begin("fwupdate", false);
+      prefs.putBool("bootCheck", true);
+      prefs.putBool("skipQr", true);
+      prefs.end();
+      status = "restarting";
+      restartAt = millis() + 3000;  // the web UI sees the status first
+      updateLog(" [Update] Low on memory, restarting to check again");
+    }
     return;
   }
   if (md5.equalsIgnoreCase(ESP.getSketchMD5())) {
-    TelnetStream.println(currentTimeWithSeconds + " [Update] Firmware is up to date");
+    updateLog(" [Update] Firmware is up to date");
     status = "uptodate";
     return;
   }
@@ -528,13 +614,13 @@ static void applyUpdateCheck(const String &md5, bool ignoreSkips) {
   Preferences prefs;
   prefs.begin("fwupdate", false);
   if (!ignoreSkips && prefs.getString("tried", "") == md5) {
-    TelnetStream.println(currentTimeWithSeconds + " [Update] Skipping build that failed before (X to force)");
+    updateLog(" [Update] Skipping build that failed before (X to force)");
     status = "skipped";
     prefs.end();
     return;
   }
   if (!ignoreSkips && prefs.getString("failMd5", "") == md5 && prefs.getUChar("fails", 0) >= UPDATE_MAX_TRIES) {
-    TelnetStream.println(currentTimeWithSeconds + " [Update] Giving up on this build after repeated download failures (X to force)");
+    updateLog(" [Update] Giving up on this build after repeated download failures (X to force)");
     status = "skipped";
     prefs.end();
     return;
@@ -542,7 +628,7 @@ static void applyUpdateCheck(const String &md5, bool ignoreSkips) {
   prefs.putString("tried", md5);
   prefs.end();
 
-  TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware available, installing");
+  updateLog(" [Update] New firmware available, installing");
   status = "installing";
   updateFirmware(CW_FW_ID);
   status = "failed";  // only reached when the download failed, success restarts
@@ -576,21 +662,118 @@ static void pollMd5Fetch() {
   String md5 = md5Result;
   bool forValidation = md5ForValidation, ignoreSkips = md5IgnoreSkips;
   md5Fetch = MD5_IDLE;
+  if (md5HoldsDownloads) firmwareUpdating = false;  // applyUpdateCheck sets it again for an install
+  md5HoldsDownloads = false;
   if (forValidation) {
     if (md5.length() == 32) {
       esp_ota_mark_app_valid_cancel_rollback();
       fwValidated = true;
-      TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware confirmed");
+      updateLog(" [Update] New firmware confirmed");
     } else {
-      TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware can't reach the update server yet");
+      updateLog(" [Update] New firmware can't reach the update server yet: " + md5Failure);
     }
     return;
   }
   applyUpdateCheck(md5, ignoreSkips);
 }
 
+// Early in the boot, before the clockface starts its downloads, the heap is still whole and the secure
+// connection to the update server fits. Two things happen here:
+//  - a build that has not been confirmed yet proves it can reach the update server (the loop does it
+//    too, but there the heap is often too small and the build would roll back after a few minutes)
+//  - a check that ran out of memory leaves a flag and restarts (see applyUpdateCheck()); here the next
+//    boot runs the check once more and installs what it finds
+static void waitForFetch(const char *text) {
+  dma_display->setFont(&smallMessageFont);
+  dma_display->setTextColor(0x0412);
+  dma_display->fillScreen(0);
+  printCenter(text, (panelResY / 2) - 5);
+  #ifdef DOUBLE_BUFFER_ON
+    dma_display->flipDMABuffer();
+  #endif
+  unsigned long giveUp = millis() + 30000;
+  while (md5Fetch != MD5_DONE && (long)(millis() - giveUp) < 0) {
+    ClockwiseWebServer::getInstance()->handleHttpRequest();  // the web page and telnet stay reachable meanwhile
+    delay(50);
+  }
+  pollMd5Fetch();  // handles the result; the loop picks up a fetch that is still running
+  dma_display->fillScreen(0);
+  #ifdef DOUBLE_BUFFER_ON
+    dma_display->flipDMABuffer();
+  #endif
+}
+
+static void bootUpdateCheck() {
+  inBootCheck = true;
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state;
+  if (esp_ota_get_state_partition(running, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY &&
+      startMd5Fetch(true, false))
+    waitForFetch("CHECKING...");
+
+  Preferences prefs;
+  prefs.begin("fwupdate", false);
+  bool wanted = prefs.getBool("bootCheck", false);
+  if (wanted) prefs.remove("bootCheck");
+  prefs.end();
+  if (wanted && fwValidated) {
+    TelnetStream.println("[Update] Checking for an update right after a restart");
+    if (startMd5Fetch(false, false)) waitForFetch("CHECKING...");
+  }
+  inBootCheck = false;
+}
+
+// A build that crashes over and over (panic, watchdog) without staying up for CRASH_STABLE_MS in between is
+// rolled back to the previous firmware. That build is also marked as tried, so the older firmware
+// doesn't install it again at its next check. Restarts we ask for ourselves don't count.
+static const uint8_t CRASH_LIMIT = 3;
+static const unsigned long CRASH_STABLE_MS = 10 * 60 * 1000UL;
+static bool crashesCleared = false;
+
+static void crashGuard() {
+  esp_reset_reason_t reason = esp_reset_reason();
+  if (reason != ESP_RST_PANIC && reason != ESP_RST_INT_WDT && reason != ESP_RST_TASK_WDT && reason != ESP_RST_WDT) return;
+  Preferences prefs;
+  prefs.begin("fwupdate", false);
+  uint8_t crashes = prefs.getUChar("crashes", 0) + 1;
+  if (crashes >= CRASH_LIMIT) {
+    prefs.putString("tried", ESP.getSketchMD5());
+    prefs.remove("crashes");
+    prefs.end();
+    esp_ota_mark_app_invalid_rollback_and_reboot();  // returns when there is no earlier firmware to go back to
+    return;
+  }
+  prefs.putUChar("crashes", crashes);
+  prefs.end();
+}
+
+// For the uptime lines: the crashes still counted against this build
+static String crashCountText() {
+  Preferences prefs;
+  prefs.begin("fwupdate", true);
+  uint8_t crashes = prefs.getUChar("crashes", 0);
+  prefs.end();
+  return String(", crash count ") + crashes + "/" + CRASH_LIMIT;
+}
+
 void loop() {
     int64_t now = millis();  // Keep this single now declaration
+    if (!crashesCleared && now > CRASH_STABLE_MS) {  // it stayed up: earlier crashes no longer count
+      crashesCleared = true;
+      Preferences prefs;
+      prefs.begin("fwupdate", false);
+      prefs.remove("crashes");
+      prefs.end();
+    }
+    if (bootLog.length() && millis() > 20000) {  // a telnet session is probably open by now; 'U' shows it again
+      TelnetStream.print(bootLog);
+      bootLog = "";
+    }
+    if (restartAt && (long)(millis() - restartAt) >= 0) {
+      TelnetStream.stop();
+      delay(100);
+      ESP.restart();
+    }
     if (!fwValidated) checkFirmwareValid(now);
     pollMd5Fetch();
 #ifdef CW_TEST_CRASH
@@ -628,9 +811,9 @@ void loop() {
         }
         ClockPeers::getInstance()->loop();
         ezt::events();
-        // Hourly update check, not in the quiet hours. The timer only advances when it runs, so a
-        // check that comes due during them happens when they end.
-        if ((long)(millis() - updateCheckDue) >= 0 && fwValidated && updateInProgress == false && !inUpdateQuietHours()) {
+        // Daily update check, not in the quiet hours and not during a live match or session. The timer
+        // only advances when it runs, so a check that comes due during them happens when they end.
+        if ((long)(millis() - updateCheckDue) >= 0 && fwValidated && updateInProgress == false && !liveEventOn && !inUpdateQuietHours()) {
           updateCheckDue = millis() + UPDATE_CHECK_MS;
           checkForUpdate();
         }
@@ -659,7 +842,7 @@ void loop() {
             }
             break;
           case 'U':
-            TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime() + ", reset reason " +
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime() + crashCountText() + ", reset reason " +
                                  String((int)esp_reset_reason()) + " (1 power on, 3 software, 4 panic/exception, 5-7 watchdog, 9 brownout), heap free " +
                                  String(ESP.getFreeHeap()) + ", largest block " + String(ESP.getMaxAllocHeap()) + ", lowest ever " +
                                  String(ESP.getMinFreeHeap()));
@@ -879,7 +1062,7 @@ void loop() {
         clockface->update();
       }
       if (currentTime != lastTime) {
-        TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime());
+        TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime() + crashCountText());
       }
       lastTime = currentTime;
       loopDue = now + CLOCKFACE_UPDATE_MS;

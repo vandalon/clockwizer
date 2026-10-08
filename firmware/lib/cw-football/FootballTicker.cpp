@@ -128,6 +128,7 @@ static const int NEXT_EXTRA_DAYS = 2;  // ESPN's undated board is one day: this 
 // Downloads that aren't urgent (a quiet league, the coming matches) go one league at a time, this far apart
 static const unsigned long STAGGER_MS = 15 * 1000UL;
 static const unsigned long FIRST_STAGGER_MS = 2 * 1000UL;  // leagues or teams that have no data yet follow each other quickly
+extern volatile bool firmwareUpdating;  // main.cpp
 static const uint32_t TASK_STACK_BYTES = 14336;  // a busy evening needs more than a quiet one (the retry without events)
 static const uint32_t MIN_FREE_BLOCK = 10000;    // below this largest free block a refresh is skipped: an out of memory aborts the chip
 static const size_t MAX_UPCOMING = 24;  // a Champions League evening kicks off nine at once
@@ -200,17 +201,34 @@ void FootballTicker::begin(CWDateTime *dateTime, bool withRace, bool extras, uin
   loadConfig();
   _doc = new DynamicJsonDocument(16384);  // a full Champions League evening needs ~7KB, a Formula 1 weekend ~10KB
   // Core 0, so fetching never stalls the display loop on core 1
-  xTaskCreatePinnedToCore(task, "football", TASK_STACK_BYTES, this, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(task, "football", TASK_STACK_BYTES, this, 1, &_task, 0);
 }
 
-extern volatile bool firmwareUpdating;  // main.cpp
+// After an update check the task is gone (see task()): start it again once the update is over
+void FootballTicker::resume() {
+  if (!_started || _task || firmwareUpdating) return;
+  _doc = new (std::nothrow) DynamicJsonDocument(16384);
+  if (!_doc || _doc->capacity() == 0) {
+    delete _doc;
+    _doc = nullptr;
+    return;  // the heap has not recovered yet: try again at the next frame
+  }
+  xTaskCreatePinnedToCore(task, "football", TASK_STACK_BYTES, this, 1, &_task, 0);
+}
+
+extern volatile bool liveEventOn;       // main.cpp: no automatic update while true
 
 void FootballTicker::task(void *self) {
   FootballTicker *ticker = static_cast<FootballTicker *>(self);
   for (;;) {
     if (firmwareUpdating) {  // the update has the network and the heap to itself
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      continue;
+      // The TLS handshake needs big free blocks: hand back the parse buffer and the task stack.
+      // The scores stay in the ticker; resume() starts the task again after the update.
+      delete ticker->_doc;
+      ticker->_doc = nullptr;
+      ticker->_fetching = false;
+      ticker->_task = nullptr;
+      vTaskDelete(nullptr);
     }
     unsigned long wait = RETRY_MS;
     if (ESP.getMaxAllocHeap() < MIN_FREE_BLOCK) {
@@ -231,7 +249,12 @@ void FootballTicker::task(void *self) {
       }
     }
     wait = std::min(wait, CONFIG_POLL_MS);  // a change on the settings page is picked up within seconds
-    vTaskDelay(pdMS_TO_TICKS(wait));
+    // in slices, so an update that starts meanwhile is seen within a second
+    for (unsigned long left = wait; left > 0 && !firmwareUpdating;) {
+      unsigned long slice = std::min(left, 1000UL);
+      vTaskDelay(pdMS_TO_TICKS(slice));
+      left -= slice;
+    }
   }
 }
 
@@ -252,6 +275,7 @@ void FootballTicker::dropOldDay() {
   if (!_resultWindowSecs) _entries.clear();  // with a result window, older matches stay
   _results.clear();
   _race = Race();
+  liveEventOn = !_overview.live.empty();
 }
 
 // Fetches today's matches, updates the ticker and looks for goals.
@@ -519,6 +543,7 @@ unsigned long FootballTicker::fetchRace() {
   {
     std::lock_guard<std::mutex> guard(_lock);
     _race = live;
+    liveEventOn = !_overview.live.empty() || _race.live;
     _results.swap(results);
   }
 
@@ -1214,6 +1239,7 @@ void FootballTicker::buildOverview(const MatchList &matches, const std::vector<c
 
   std::lock_guard<std::mutex> guard(_lock);
   _overview = std::move(o);
+  liveEventOn = !_overview.live.empty() || _race.live;
   _version++;
 }
 
@@ -1233,6 +1259,7 @@ FootballTicker::Status FootballTicker::status() {
 }
 
 uint32_t FootballTicker::version() {
+  resume();
   std::lock_guard<std::mutex> guard(_lock);
   return _version;
 }

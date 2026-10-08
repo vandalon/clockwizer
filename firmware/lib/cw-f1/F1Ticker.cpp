@@ -17,6 +17,7 @@ static const unsigned long RETRY_MS = 60 * 1000UL;
 static const time_t WEEKEND_TAIL_SECS = 3 * 60 * 60;  // the weekend lasts this long after the race started
 
 extern volatile bool firmwareUpdating;  // main.cpp
+extern volatile bool liveEventOn;       // main.cpp: no automatic update while true
 
 #define RGB565(r, g, b) ((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3))
 
@@ -95,7 +96,19 @@ void F1Ticker::begin(CWDateTime *dateTime) {
   _dateTime = dateTime;
   _doc = new DynamicJsonDocument(20480);  // a Grand Prix weekend with 22 drivers per session needs ~10KB
   // Core 0, so downloading never stalls the display loop on core 1
-  xTaskCreatePinnedToCore(task, "f1", 12288, this, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(task, "f1", 12288, this, 1, &_task, 0);
+}
+
+// After an update check the task is gone (see task()): start it again once the update is over
+void F1Ticker::resume() {
+  if (!_started || _task || firmwareUpdating) return;
+  _doc = new (std::nothrow) DynamicJsonDocument(20480);
+  if (!_doc || _doc->capacity() == 0) {
+    delete _doc;
+    _doc = nullptr;
+    return;  // the heap has not recovered yet: try again at the next frame
+  }
+  xTaskCreatePinnedToCore(task, "f1", 12288, this, 1, &_task, 0);
 }
 
 // The running order from the live feed replaces ESPN's while it is up to date; ESPN still says which session it is
@@ -121,6 +134,7 @@ void F1Ticker::snapshot(Snapshot &out) {
 }
 
 uint32_t F1Ticker::version() {
+  resume();
   std::lock_guard<std::mutex> guard(_lock);
   return _version + _live.updates();
 }
@@ -129,10 +143,19 @@ void F1Ticker::task(void *self) {
   F1Ticker *ticker = static_cast<F1Ticker *>(self);
   for (;;) {
     if (firmwareUpdating) {  // the update has the network and the heap to itself
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      continue;
+      // The TLS handshake needs big free blocks: hand back the parse buffer and the task stack.
+      // The data stays in the ticker; resume() starts the task again after the update.
+      delete ticker->_doc;
+      ticker->_doc = nullptr;
+      ticker->_task = nullptr;
+      vTaskDelete(nullptr);
     }
-    vTaskDelay(pdMS_TO_TICKS(ticker->refresh()));
+    // in slices, so an update that starts meanwhile is seen within a second
+    for (unsigned long left = ticker->refresh(); left > 0 && !firmwareUpdating;) {
+      unsigned long slice = std::min(left, 1000UL);
+      vTaskDelay(pdMS_TO_TICKS(slice));
+      left -= slice;
+    }
   }
 }
 
@@ -277,6 +300,7 @@ unsigned long F1Ticker::fetchWeekend() {
     std::lock_guard<std::mutex> guard(_lock);
     _snap.weekend = snap.weekend;
     _snap.live = snap.live;
+    liveEventOn = snap.live.valid;
     _snap.last = snap.last;
     _snap.next = snap.next;
     _version++;
