@@ -4,16 +4,16 @@ Each clockface is its own firmware build, named `cw-cf-0xNN`. You switch between
 
 | Id | Name | Panel | Needs internet for more than the time |
 |----|------|-------|----------------------------------------|
-| `0x01` | Mario | 64x64 | no |
-| `0x02` | Time in Words | 64x64 | no |
-| `0x03` | World Map | 64x64 | no |
-| `0x04` | Castlevania | 64x64 | no |
-| `0x05` | Pacman | 64x64 | no |
-| `0x06` | Pokemon | 64x64 | no |
-| `0x08` | Tetris | 64x64 and 64x32 | on 64x32: football and F1 ticker |
-| `0x09` | Luigi | 64x64 | no |
 | `0x0B` | Football | 64x64 | yes, ESPN |
 | `0x0C` | Formula 1 | 64x64 | yes, ESPN and Jolpica |
+| `0x08` | Tetris | 64x64 and 64x32 | on 64x32: football and F1 ticker |
+| `0x01` | Mario | 64x64 | no |
+| `0x09` | Luigi | 64x64 | no |
+| `0x05` | Pacman | 64x64 | no |
+| `0x06` | Pokemon | 64x64 | no |
+| `0x04` | Castlevania | 64x64 | no |
+| `0x03` | World Map | 64x64 | no |
+| `0x02` | Time in Words | 64x64 | no |
 
 All faces get the time over NTP, so they all need the internet once to show the right time (and the connection again after a power cut).
 
@@ -22,12 +22,12 @@ All faces get the time over NTP, so they all need the internet once to show the 
 These come from upstream Clockwise. The thumbnails are in the clockface folders under `firmware/clockfaces/`.
 
 - **Mario (`0x01`)**: the time in blocks that Mario bumps, with the Super Mario world around it.
-- **Time in Words (`0x02`)**: the time and date written out in words. The date text exists in English and Portuguese (`DateI18nEN.h`, `DateI18nPT.h`).
-- **World Map (`0x03`)**: a map of the world with the day and night side, and the time. The map follows UTC and moves a pixel every 12 minutes.
-- **Castlevania (`0x04`)**: the clock tower, with a second hand.
+- **Luigi (`0x09`)**: the Mario clockface in Luigi's colours (it is built from the same folder as Mario).
 - **Pacman (`0x05`)**: Pacman and the ghosts run through a maze that shows the time. The wall, ghost and dot colours can be set on the [settings page](web-ui.md#pacman-colours-pacman).
 - **Pokemon (`0x06`)**: a Pokedex-style screen with the time.
-- **Luigi (`0x09`)**: the Mario clockface in Luigi's colours (it is built from the same folder as Mario).
+- **Castlevania (`0x04`)**: the clock tower, with a second hand.
+- **World Map (`0x03`)**: a map of the world with the day and night side, and the time. The map follows UTC and moves a pixel every 12 minutes.
+- **Time in Words (`0x02`)**: the time and date written out in words. The date text exists in English and Portuguese (`DateI18nEN.h`, `DateI18nPT.h`).
 
 ## Tetris (`0x08`)
 

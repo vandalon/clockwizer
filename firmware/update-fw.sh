@@ -51,7 +51,7 @@ if [ $GITHUB -eq 1 ]; then
 fi
 
 FACES=("$@")
-[ ${#FACES[@]} -eq 0 ] && FACES=(01 02 03 04 05 06 08 09 0B 0C)
+[ ${#FACES[@]} -eq 0 ] && FACES=(0B 0C 08 01 09 05 06 04 03 02)
 
 ENV_ARGS=()
 for f in "${FACES[@]}"; do

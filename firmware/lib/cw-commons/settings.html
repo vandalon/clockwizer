@@ -251,9 +251,8 @@
   const $ = id => document.getElementById(id);
   let faceId = '';
   let ldrPin = 35;
-  const FACES = [['0x01', 'Mario'], ['0x02', 'Time in Words'], ['0x03', 'World Map'], ['0x04', 'Castlevania'],
-                 ['0x05', 'Pacman'], ['0x06', 'Pokemon'], ['0x08', 'Tetris'], ['0x09', 'Luigi'], ['0x0B', 'Football'], ['0x0C', 'Formula 1']]
-    .sort((a, b) => a[1].localeCompare(b[1]));
+  const FACES = [['0x0B', 'Football'], ['0x0C', 'Formula 1'], ['0x08', 'Tetris'], ['0x01', 'Mario'], ['0x09', 'Luigi'],
+                 ['0x05', 'Pacman'], ['0x06', 'Pokemon'], ['0x04', 'Castlevania'], ['0x03', 'World Map'], ['0x02', 'Time in Words']];
   // Only these faces are drawn for a 64x32 panel; all the others need 64x64
   const FACES_32 = ['0x08'];
 

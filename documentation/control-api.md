@@ -11,7 +11,7 @@ Replace `clockwise.local` with the clock's IP address if your computer can't res
 | `GET /` | The settings page (gzipped HTML) |
 | `GET /get` | The current settings, as response headers named `X-<setting>`, plus `X-updateStatus`, `X-CW_FW_VERSION`, `X-CW_FW_NAME`, `X-CLOCKFACE_NAME` and `X-CW_FW_ID` |
 | `POST /set?<setting>=<value>` | Changes one setting and saves it |
-| `POST /face?id=0x05` | Installs a clockface: `0x01 0x02 0x03 0x04 0x05 0x06 0x08 0x09 0x0B 0x0C` |
+| `POST /face?id=0x05` | Installs a clockface: `0x0B 0x0C 0x08 0x01 0x09 0x05 0x06 0x04 0x03 0x02` |
 | `POST /cmd?c=update` | Checks for a firmware update now |
 | `POST /cmd?c=reboot` | Restarts the clock |
 | `POST /cmd?c=wifi` | Restarts into the `Clockwise-Wifi` setup |

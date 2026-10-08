@@ -43,16 +43,16 @@ pio run -e cw-cf-0x05 -t upload     # Pacman
 
 | Id | Clockface | Panel |
 |----|-----------|-------|
-| `cw-cf-0x01` | Mario | 64x64 |
-| `cw-cf-0x02` | Time in Words | 64x64 |
-| `cw-cf-0x03` | World Map | 64x64 |
-| `cw-cf-0x04` | Castlevania | 64x64 |
-| `cw-cf-0x05` | Pacman | 64x64 |
-| `cw-cf-0x06` | Pokemon | 64x64 |
-| `cw-cf-0x08` | Tetris (on 64x32 with a football and F1 ticker) | 64x64 and 64x32 |
-| `cw-cf-0x09` | Luigi (Mario in other colours) | 64x64 |
 | `cw-cf-0x0B` | Football | 64x64 |
 | `cw-cf-0x0C` | Formula 1 | 64x64 |
+| `cw-cf-0x08` | Tetris (on 64x32 with a football and F1 ticker) | 64x64 and 64x32 |
+| `cw-cf-0x01` | Mario | 64x64 |
+| `cw-cf-0x09` | Luigi (Mario in other colours) | 64x64 |
+| `cw-cf-0x05` | Pacman | 64x64 |
+| `cw-cf-0x06` | Pokemon | 64x64 |
+| `cw-cf-0x04` | Castlevania | 64x64 |
+| `cw-cf-0x03` | World Map | 64x64 |
+| `cw-cf-0x02` | Time in Words | 64x64 |
 
 The clockface folders are in `firmware/clockfaces/`, shared code in `firmware/lib/`, and the entry point is `firmware/src/main.cpp`. Panels with a different wiring or orientation need a few settings that have no button on the web page, see [Advanced settings](#advanced-settings).
 
