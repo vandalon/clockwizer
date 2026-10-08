@@ -595,6 +595,8 @@ static void restartForUpdateCheck(const char *msg, const String &knownMd5 = "") 
   if (msg) updateLog(msg);
 }
 
+static bool userCheck = false;  // asked for by a person (web UI, telnet): goes through even during a live match
+
 // Compare the running firmware with the one on the update server and install
 // it when they differ.
 // ignoreSkips = telnet 'X': also retry builds that failed or rolled back.
@@ -631,6 +633,12 @@ static void applyUpdateCheck(const String &md5, bool ignoreSkips) {
     prefs.end();
     return;
   }
+  if (liveEventOn && !userCheck) {  // a match started while the check ran: look again once it is over
+    prefs.end();
+    updateLog(" [Update] New firmware available, waiting until the live match is over");
+    updateCheckDue = millis();
+    return;
+  }
   // Every clock installs from a fresh boot: the heap is whole there, so the download and the TLS
   // handshake fit whatever the clockface (Football, F1) has allocated
   if (!inBootCheck && !ignoreSkips && fwValidated) {  // telnet X installs on the spot
@@ -658,14 +666,16 @@ static void applyUpdateCheck(const String &md5, bool ignoreSkips) {
 }
 
 // Asks for an update check; the fetch runs in the background and pollMd5Fetch() finishes the job.
-void checkForUpdate(bool ignoreSkips = false) {
+void checkForUpdate(bool ignoreSkips = false, bool byUser = false) {
   checkPending = true;
+  userCheck = userCheck || byUser;
   checkPendingForce = checkPendingForce || ignoreSkips;
 }
 
 // Called every loop: starts a wanted check and handles a finished fetch.
 static void pollMd5Fetch() {
   if (md5Fetch == MD5_IDLE && checkPending) {
+    if (liveEventOn && !userCheck) return;  // not during a live match or session: starts when it ends
     if (startMd5Fetch(false, checkPendingForce)) {
       checkPending = false;
       checkPendingForce = false;
@@ -689,6 +699,7 @@ static void pollMd5Fetch() {
     return;
   }
   applyUpdateCheck(md5, ignoreSkips);
+  userCheck = false;
 }
 
 // Early in the boot, before the clockface starts its downloads, the heap is still whole and the secure
@@ -823,7 +834,7 @@ void loop() {
         if (ClockwiseWebServer::getInstance()->update_requested) {
           ClockwiseWebServer::getInstance()->update_requested = false;
           TelnetStream.println(currentTimeWithSeconds + " [INFO] Web UI asked for a firmware update check...");
-          checkForUpdate();
+          checkForUpdate(false, true);
         }
         if (ClockwiseWebServer::getInstance()->face_requested.length() > 0 && md5Fetch == MD5_IDLE) {  // not while a fetch holds the heap
           String id = ClockwiseWebServer::getInstance()->face_requested;
@@ -852,7 +863,7 @@ void loop() {
             break;
           case 'X':
             TelnetStream.println(currentTimeWithSeconds + " [INFO] Forcing a firmware update, ignoring earlier failures...");
-            checkForUpdate(true);
+            checkForUpdate(true, true);
             break;
           case 'L':
             logLDR = (logLDR == false) ? true : false;
