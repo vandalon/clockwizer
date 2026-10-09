@@ -1134,7 +1134,9 @@ void loop() {
     if (wifi.connectionSucessfulOnce && ( now > loopDue || now < lastNow ) && updateInProgress == false)
     {
       // Not while a match or an F1 session is live: that is what the clock is for then
-      const Birthdays::Entry *birthday = liveEventOn ? nullptr : todaysBirthday(cwDateTime.getMonth(), cwDateTime.getDay());
+      // Not before the time is known either: until the first NTP sync the date reads 1 January 1970
+      const Birthdays::Entry *birthday = (liveEventOn || ezt::timeStatus() != timeSet) ? nullptr
+                                         : todaysBirthday(cwDateTime.getMonth(), cwDateTime.getDay());
       if (millis() < birthdayPreviewUntil) birthday = &BIRTHDAY_PREVIEW;
       if (nightMode == true) {
         if (currentTime != lastTime || altDisplay != 1) {
