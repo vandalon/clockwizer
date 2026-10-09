@@ -192,24 +192,24 @@ void F1Ticker::loadCache() {
   time_t at = prefs.getUInt("standAt", 0);
   if (count > 0 && count <= STANDINGS && prefs.getBytesLength("stand") == sizeof(standings) && at && now >= at) {
     prefs.getBytes("stand", standings, sizeof(standings));
-    unsigned long age = (now - at) * 1000UL;
+    unsigned long age = now - at;  // seconds: in milliseconds it wraps after 49 days
     std::lock_guard<std::mutex> guard(_lock);
     for (int i = 0; i < count; i++) _snap.standings[i] = standings[i];
     _snap.standingsCount = count;
     _version++;
-    if (age < STANDINGS_REFRESH_MS) _standingsAt = millis() + (STANDINGS_REFRESH_MS - age);
+    if (age < STANDINGS_REFRESH_MS / 1000) _standingsAt = millis() + (STANDINGS_REFRESH_MS / 1000 - age) * 1000UL;
   }
   Race race;
   at = prefs.getUInt("raceAt", 0);
   if (prefs.getBytesLength("race") == sizeof(race) && at && now >= at) {
     prefs.getBytes("race", &race, sizeof(race));
-    unsigned long age = (now - at) * 1000UL;
+    unsigned long age = now - at;  // seconds
     if (race.city[0] && race.start > now) {
       std::lock_guard<std::mutex> guard(_lock);
       _snap.upcoming[0] = race;
       _snap.upcomingCount = 1;
       _version++;
-      if (age < SEASON_REFRESH_MS) _seasonAt = millis() + (SEASON_REFRESH_MS - age);
+      if (age < SEASON_REFRESH_MS / 1000) _seasonAt = millis() + (SEASON_REFRESH_MS / 1000 - age) * 1000UL;
     }
   }
   prefs.end();
