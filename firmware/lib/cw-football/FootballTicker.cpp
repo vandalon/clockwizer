@@ -13,6 +13,7 @@
 #include <ezTime.h>
 
 #include <CWPreferences.h>
+#include <EspnFeed.h>
 #include "FootballCatalog.h"
 
 // Which competitions and favourite teams to follow is set on the settings page (see FootballCatalog.h
@@ -132,38 +133,6 @@ extern volatile bool firmwareUpdating;  // main.cpp
 static const uint32_t TASK_STACK_BYTES = 14336;  // a busy evening needs more than a quiet one (the retry without events)
 static const uint32_t MIN_FREE_BLOCK = 10000;    // below this largest free block a refresh is skipped: an out of memory aborts the chip
 static const size_t MAX_UPCOMING = 24;  // a Champions League evening kicks off nine at once
-
-// Feeds the HTTP stream to ArduinoJson without busy-waiting. Stream's own
-// timed read spins while waiting for data, which starves the idle task on
-// core 0 and trips the task watchdog during a slow download.
-struct YieldingReader {
-  Stream &stream;
-  unsigned long timeoutMs;
-  size_t count = 0;
-
-  YieldingReader(Stream &s, unsigned long timeout) : stream(s), timeoutMs(timeout) {}
-
-  int read() {
-    if (++count % 1024 == 0) vTaskDelay(1);
-    unsigned long start = millis();
-    do {
-      int c = stream.read();
-      if (c >= 0) return c;
-      vTaskDelay(1);
-    } while (millis() - start < timeoutMs);
-    return -1;
-  }
-
-  size_t readBytes(char *buffer, size_t length) {
-    size_t n = 0;
-    for (; n < length; n++) {
-      int c = read();
-      if (c < 0) break;
-      buffer[n] = c;
-    }
-    return n;
-  }
-};
 
 // The debug messages go to the serial port and the telnet server. One lock: the ticker task and the clock loop
 // both write to the telnet stream.

@@ -8,6 +8,8 @@
 #include <WiFiClientSecure.h>
 #include <ezTime.h>
 
+#include <EspnFeed.h>
+
 static const unsigned long LIVE_REFRESH_MS = 15 * 1000UL;  // plus a request per driver for the times
 static const unsigned long WEEKEND_REFRESH_MS = 5 * 60 * 1000UL;  // between sessions
 static const unsigned long START_REFRESH_MS = 30 * 1000UL;        // a session is about to start
@@ -43,36 +45,6 @@ uint16_t F1Ticker::driverColor(const char *code) {
   return 0xFFFF;
 }
 
-// Feeds the HTTP stream to ArduinoJson without busy-waiting, see YieldingReader in FootballTicker.cpp
-struct YieldingReader {
-  Stream &stream;
-  unsigned long timeoutMs;
-  size_t count = 0;
-
-  YieldingReader(Stream &s, unsigned long timeout) : stream(s), timeoutMs(timeout) {}
-
-  int read() {
-    if (++count % 1024 == 0) vTaskDelay(1);
-    unsigned long start = millis();
-    do {
-      int c = stream.read();
-      if (c >= 0) return c;
-      vTaskDelay(1);
-    } while (millis() - start < timeoutMs);
-    return -1;
-  }
-
-  size_t readBytes(char *buffer, size_t length) {
-    size_t n = 0;
-    for (; n < length; n++) {
-      int c = read();
-      if (c < 0) break;
-      buffer[n] = c;
-    }
-    return n;
-  }
-};
-
 static void f1log(const char *format, ...) {
   static std::mutex lock;
   char line[256];
@@ -85,11 +57,6 @@ static void f1log(const char *format, ...) {
   TelnetStream.print(line);
 }
 
-static time_t parseEspnDate(const char *date) {
-  int y, mo, d, h, mi;
-  if (sscanf(date, "%d-%d-%dT%d:%d", &y, &mo, &d, &h, &mi) != 5) return 0;
-  return ezt::makeTime(h, mi, 0, d, mo, y);
-}
 
 void F1Ticker::begin(CWDateTime *dateTime) {
   if (_started) return;
