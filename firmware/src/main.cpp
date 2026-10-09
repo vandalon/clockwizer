@@ -19,6 +19,7 @@
 #include <esp_ota_ops.h>
 #include <uptime_formatter.h>
 #include "NotificationServer.h"
+#include "BackgroundWait.h"
 
 #include "messageFont.h"  // Include the smallMessageFont font
 
@@ -318,6 +319,12 @@ void setup()
     #endif
   }
   notificationServer.begin();
+  // What keeps running while an animation or a message holds the loop (see BackgroundWait.h)
+  cwBackgroundWork() = []() {
+    ClockwiseWebServer::getInstance()->handleHttpRequest();
+    notificationServer.handle();
+    ezt::events();
+  };
   TelnetStream.println("[Main] Device IP: " + WiFi.localIP().toString());
   
   char hour[3] = {0};
@@ -441,7 +448,7 @@ void updateFirmware( String id ) {
       #ifdef DOUBLE_BUFFER_ON
         dma_display->flipDMABuffer();
       #endif
-      delay(5000);
+      cwWait(5000);
       firmwareUpdating = false;
       updateInProgress = false;  // set by the progress callback; the clock loop needs it clear
       forceRefresh = true;
@@ -455,7 +462,7 @@ void updateFirmware( String id ) {
       #ifdef DOUBLE_BUFFER_ON
         dma_display->flipDMABuffer();
       #endif
-      delay(5000);
+      cwWait(5000);
       firmwareUpdating = false;
       updateInProgress = false;
       forceRefresh = true;

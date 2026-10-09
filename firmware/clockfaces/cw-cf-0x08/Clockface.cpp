@@ -3,6 +3,7 @@
 #include <TelnetStream.h>
 #include "FootballTicker.h"
 #include "GoalAnimation.h"
+#include <BackgroundWait.h>
 
 unsigned long oneSecondLoopDue = 0;
 bool showColon = true;
@@ -96,7 +97,7 @@ void Clockface::update()
     playGoalAnimation(_display, goal.home.c_str(), goal.away.c_str(), goal.homeScore, goal.awayScore,
                       goal.homeScored, goal.homeKit, goal.awayKit, [this](int ms) {
                         _display->flipDMABuffer();
-                        delay(ms);
+                        cwWait(ms);
                       });
     setup(_dateTime);  // rebuild the time from scratch
     return;

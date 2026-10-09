@@ -3,6 +3,7 @@
 #include "GoalAnimation.h"
 #include "TeamColors.h"
 #include "FlipDigits.h"
+#include <BackgroundWait.h>
 #include <CWPreferences.h>
 #include <TelnetStream.h>
 #include <ezTime.h>
@@ -1387,7 +1388,7 @@ void Clockface::update() {
     playGoalAnimation(display, goal.home.c_str(), goal.away.c_str(), goal.homeScore, goal.awayScore, goal.homeScored,
                       goal.homeKit, goal.awayKit, [display](int ms) {
                         display->flipDMABuffer();
-                        delay(ms);
+                        cwWait(ms);
                       });
     lastKey[0] = 0;
     return;
@@ -1399,7 +1400,7 @@ void Clockface::update() {
     MatrixPanel_I2S_DMA *display = _display;
     playIncident(display, incident, [display](int ms) {
       display->flipDMABuffer();
-      delay(ms);
+      cwWait(ms);
     });
     lastKey[0] = 0;
     return;
