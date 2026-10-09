@@ -36,7 +36,7 @@ void Clockface::setup(CWDateTime *dateTime) {
 
 void Clockface::update()
 { 
-  if (millis() - lastMillis >= 1000) { 
+  if (millis() - lastMillis >= 100) {
     lastMillis = millis();
     if (_dateTime->getSecond() != lastSecond) drawHands(true);
   }
@@ -78,7 +78,7 @@ void Clockface::drawClockPointer(float angle, byte pointerSize, uint16_t color)
 
 float Clockface::degreesToRadians(float degrees)
 {
-    return (degrees * 3.14) / 180;
+    return degrees * PI / 180;
 }
 
 void Clockface::updateClock() 
