@@ -24,10 +24,8 @@ class Clockface: public IClockface {
   private:
     Adafruit_GFX* _display;
     CWDateTime* _dateTime;
-    void timeInWords(int h, int m, char* hWords, char* mWords);
     void updateTime();
     void updateDate();
-    void updateTemperature();
 
   public:
     Clockface(Adafruit_GFX* display);
