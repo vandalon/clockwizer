@@ -57,11 +57,6 @@ class Clockface: public IClockface {
     int _pacmanStartX = 0;
     int _pacmanStartY = 0;
 
-    const char* _weekDayWords = "SUN\0MON\0TUE\0WED\0THU\0FRI\0SAT\0";
-    const char* _monthWords = "JAN\0FEB\0MAR\0APR\0MAY\0JUN\0JUL\0AUG\0SEP\0OCT\0NOV\0DEC\0";
-    char weekDayTemp[4]= "\0";
-    char monthTemp[4]= "\0";
-
 
 
     enum MapBlock {
@@ -149,8 +144,6 @@ class Clockface: public IClockface {
     void checkGhostCollisions();
     void updateDeath();
     MapBlock blockAt(int row, int col, Direction dir);
-    const char* weekDayName(int weekday);
-    const char* monthName(int month);
     
     
   public:

@@ -166,18 +166,6 @@ void Clockface::update()
 }
 
 
-const char* Clockface::weekDayName(int weekday) {
-  strncpy(weekDayTemp, _weekDayWords + (weekday*4), 4);
-  return weekDayTemp;
-}
-
-const char* Clockface::monthName(int month) {
-  strncpy(monthTemp, _monthWords + ((month-1)*4), 4);
-  return monthTemp;
-}
-
-
-
 void Clockface::updateClock(bool clear) {
 
     // a fade step only changes the colour: draw over the old digits, no blank frame in between
@@ -295,17 +283,11 @@ int Clockface::countBlocks(Clockface::MapBlock elem) {
 
 
 void Clockface::turnRandom() {
-  int dir = random(4);
-  //int dir = 3;
-  //pacman->_state = Pacman::State::TURNING;
-
-  do {
-    pacman->turn(static_cast<Direction>(dir));
-    dir = random(4);
-    //dir++;
-
-    
-  } while (!contains(nextBlock(), PACMAN_MOVING_BLOCKS));
+  // every junction has a way out, but never spin forever if one doesn't
+  for (int tries = 0; tries < 50; tries++) {
+    pacman->turn(static_cast<Direction>(random(4)));
+    if (contains(nextBlock(), PACMAN_MOVING_BLOCKS)) break;
+  }
 
   Serial.print("New direction: ");
   Serial.println(pacman->_direction);
