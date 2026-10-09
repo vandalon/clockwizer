@@ -86,14 +86,15 @@ struct ClockwiseWebServer
     return out;
   }
 
-  // %20 and + in a query value, as sent by the browser
-  static String urlDecode(const String &text)
+  // %20 and + in a query value, as sent by the browser. Where a + can be part of the value (a password,
+  // a Posix time zone) the callers pass plusIsSpace = false: the page encodes a real + as %2B anyway.
+  static String urlDecode(const String &text, bool plusIsSpace = true)
   {
     String out;
     for (size_t i = 0; i < text.length(); i++)
     {
       char c = text[i];
-      if (c == '+') out += ' ';
+      if (c == '+' && plusIsSpace) out += ' ';
       else if (c == '%' && i + 2 < text.length() && isxdigit(text[i + 1]) && isxdigit(text[i + 2]))
       {
         out += (char)strtol(text.substring(i + 1, i + 3).c_str(), nullptr, 16);
@@ -319,9 +320,9 @@ struct ClockwiseWebServer
       } else if (key == ClockwiseParams::getInstance()->PREF_DISPLAY_BRMIN) {
         ClockwiseParams::getInstance()->displayBrMin = constrain(value.toInt(), 3, 255);  // never fully dark
       } else if (key == ClockwiseParams::getInstance()->PREF_WIFI_SSID) {
-        ClockwiseParams::getInstance()->wifiSsid = value;
+        ClockwiseParams::getInstance()->wifiSsid = urlDecode(value, false);
       } else if (key == ClockwiseParams::getInstance()->PREF_WIFI_PASSWORD) {
-        ClockwiseParams::getInstance()->wifiPwd = value;
+        ClockwiseParams::getInstance()->wifiPwd = urlDecode(value, false);
       } else if (key == "autoBright") {   //autoBright=0010,0800
         ClockwiseParams::getInstance()->autoBrightMin = value.substring(0,4).toInt();
         ClockwiseParams::getInstance()->autoBrightMax = value.substring(5,9).toInt();
@@ -332,13 +333,13 @@ struct ClockwiseWebServer
       } else if (key == ClockwiseParams::getInstance()->PREF_LDR_PIN) {
         ClockwiseParams::getInstance()->ldrPin = value.toInt();
       } else if (key == ClockwiseParams::getInstance()->PREF_TIME_ZONE) {
-        ClockwiseParams::getInstance()->timeZone = value;
+        ClockwiseParams::getInstance()->timeZone = urlDecode(value, false);
         // A leftover Posix string would override the zone chosen here, and the web UI can't edit it
         ClockwiseParams::getInstance()->manualPosix = "";
       } else if (key == ClockwiseParams::getInstance()->PREF_NTP_SERVER) {
-        ClockwiseParams::getInstance()->ntpServer = value;
+        ClockwiseParams::getInstance()->ntpServer = urlDecode(value, false);
       } else if (key == ClockwiseParams::getInstance()->PREF_MANUAL_POSIX) {
-        ClockwiseParams::getInstance()->manualPosix = value;
+        ClockwiseParams::getInstance()->manualPosix = urlDecode(value, false);
       } else if (key == ClockwiseParams::getInstance()->PREF_CLOCK_NAME) {
         ClockwiseParams::getInstance()->clockName = cleanName(urlDecode(value));
       } else if (key == ClockwiseParams::getInstance()->PREF_UPD_QUIET_FROM) {
