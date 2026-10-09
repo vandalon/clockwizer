@@ -15,8 +15,6 @@ int lastNoonCol = -1;  // map column under the red line when the map was drawn
 unsigned long lastMillis = 0;
 int lastMinute = -1;  // minute the time text shows
 
-const unsigned short MASK = 0xF81F;
-
 
 Clockface::Clockface(Adafruit_GFX* display) {
   _display = display;
@@ -69,10 +67,7 @@ void Clockface::updateMap()
   {
     for (int x = 0; x < 64; x++)
     {
-      unsigned short pixel = _WORLD_MAP[y * MAP_WIDTH + (left + x) % MAP_WIDTH];
-      if (pixel != MASK) {
-        Locator::getDisplay()->drawPixel(x, y, pixel);
-      }
+      Locator::getDisplay()->drawPixel(x, y, _WORLD_MAP[y * MAP_WIDTH + (left + x) % MAP_WIDTH]);
     }
   }
 

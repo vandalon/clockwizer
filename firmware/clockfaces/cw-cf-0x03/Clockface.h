@@ -14,7 +14,6 @@
 
 #include "small4pt7b.h"
 #include "worldmap.h"
-#include "worldmap_mask.h"
 
 class Clockface: public IClockface {
   private:
