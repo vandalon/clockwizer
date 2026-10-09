@@ -136,7 +136,8 @@ void displaySetup(bool swapBlueGreen, uint8_t displayBright, uint8_t displayRota
 
 // Today's birthday: the fixed ones of the build, then the ones from the settings. nullptr when there is none.
 // Called on every frame, so the list is only parsed again when the setting has changed.
-const Birthdays::Entry *todaysBirthday(int month, int day) {
+// A 29 February birthday falls on 1 March in the years that have no 29 February.
+const Birthdays::Entry *todaysBirthday(int year, int month, int day) {
   static Birthdays::Entry list[Birthdays::MAX * 2];
   static String parsedFrom;  // the setting the list was parsed from
   static int count = -1;     // -1 = not parsed yet
@@ -146,8 +147,11 @@ const Birthdays::Entry *todaysBirthday(int month, int day) {
     count = Birthdays::parse(CW_FIXED_BIRTHDAYS, list);
     count += Birthdays::parse(setting, list + count);
   }
-  for (int i = 0; i < count; i++)
+  bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+  for (int i = 0; i < count; i++) {
     if (list[i].month == month && list[i].day == day) return &list[i];
+    if (!leap && month == 3 && day == 1 && list[i].month == 2 && list[i].day == 29) return &list[i];
+  }
   return nullptr;
 }
 
@@ -1106,7 +1110,7 @@ void loop() {
       // Not while a match or an F1 session is live: that is what the clock is for then
       // Not before the time is known either: until the first NTP sync the date reads 1 January 1970
       const Birthdays::Entry *birthday = (liveEventOn || ezt::timeStatus() != timeSet) ? nullptr
-                                         : todaysBirthday(cwDateTime.getMonth(), cwDateTime.getDay());
+                                         : todaysBirthday(cwDateTime.getYear(), cwDateTime.getMonth(), cwDateTime.getDay());
       if (millis() < birthdayPreviewUntil) birthday = &BIRTHDAY_PREVIEW;
       if (nightMode == true) {
         if (currentTime != lastTime || altDisplay != 1) {
