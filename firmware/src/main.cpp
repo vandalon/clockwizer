@@ -61,10 +61,10 @@ unsigned long updateCheckDue = 30000; // first check 30s after boot, then daily;
 #define SETUP_INFO_MS 10000       // how long the screen with the clock's address stays up after the WiFi setup
 #define VALIDATE_AFTER_MS 60000   // from this long on, running + on WiFi, try to prove the update check works
 #define VALIDATE_RETRY_MS 30000   // between tries
-#define ROLLBACK_AFTER_MS 300000  // never proved it: go back to the old firmware
+#define ASSUME_OK_AFTER_MS 600000 // update server still not reachable: it is probably down, not the build, so keep this firmware
 bool fwValidated = false;
 int64_t validateDue = 0;
-int64_t wifiUpAt = 0;  // the rollback deadline counts from here, not from boot: setup portals take minutes
+int64_t wifiUpAt = 0;  // the deadline for assuming the firmware is fine counts from here, not from boot: setup portals take minutes
 unsigned int altDisplay;
 unsigned int curBrightness;
 unsigned int currentLDRValue;
@@ -574,8 +574,9 @@ static bool startMd5Fetch(bool forValidation, bool ignoreSkips) {
 
 // A new firmware must prove itself before the bootloader keeps it: it has to
 // run and be able to fetch version info from the update server, the same way
-// checkForUpdate() does. A build that can't update itself would be stuck on
-// the panel, so it rolls back instead.
+// checkForUpdate() does. If the server stays unreachable for ASSUME_OK_AFTER_MS
+// it is more likely down than the build broken, so the build is kept (a build that
+// crashes still rolls back through the bootloader).
 void checkFirmwareValid(int64_t now) {
   const esp_partition_t *running = esp_ota_get_running_partition();
   esp_ota_img_states_t state;
@@ -587,9 +588,10 @@ void checkFirmwareValid(int64_t now) {
     validateDue = now + VALIDATE_RETRY_MS;
     startMd5Fetch(true, false);  // the result is handled in pollMd5Fetch()
   }
-  if (now - wifiUpAt > ROLLBACK_AFTER_MS) {
-    TelnetStream.println(currentTimeWithSeconds + " [Update] New firmware could not check for updates, rolling back");
-    esp_ota_mark_app_invalid_rollback_and_reboot();
+  if (now - wifiUpAt > ASSUME_OK_AFTER_MS) {
+    esp_ota_mark_app_valid_cancel_rollback();
+    fwValidated = true;
+    TelnetStream.println(currentTimeWithSeconds + " [Update] Update server not reachable, assuming the new firmware is fine");
   }
 }
 
