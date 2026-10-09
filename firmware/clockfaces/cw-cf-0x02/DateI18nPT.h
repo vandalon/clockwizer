@@ -6,13 +6,13 @@
 class DateI18nPT: public IDateI18n 
 {
   private:
-    char buffer[5];
+    char buffer[6];  // "31/12" and the terminator
     char weekDayTemp[4]="";
     const char* _weekDayWords = "DOM\0SEG\0TER\0QUA\0QUI\0SEX\0SAB\0";
 
   public:
     virtual const char* formatDate(int day, int month) {
-      sprintf(buffer, "%d/%d", day, month);
+      snprintf(buffer, sizeof(buffer), "%d/%d", day, month);
       return buffer;
     }
 

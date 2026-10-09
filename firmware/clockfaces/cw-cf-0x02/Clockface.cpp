@@ -90,7 +90,7 @@ void Clockface::updateDate()
   Locator::getDisplay()->setCursor(0, 61);
   Locator::getDisplay()->setTextColor(0x02ed);
     
-  const char* fmt = i18n.formatDate(_dateTime->getMonth(), _dateTime->getDay());
+  const char* fmt = i18n.formatDate(_dateTime->getDay(), _dateTime->getMonth());
 
   Locator::getDisplay()->print(fmt);
 
