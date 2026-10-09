@@ -28,6 +28,8 @@ for face in faces:
         raise SystemExit("faces.json: bad id %r" % face["id"])
     if len(face["key"]) != 1 or face["key"] in RESERVED:
         raise SystemExit("faces.json: %s: key %r is not one character that is free" % (face["id"], face["key"]))
+    if not re.fullmatch(r"[A-Za-z0-9 .+-]+", face["name"]):
+        raise SystemExit("faces.json: %s: the name goes into JSON and C strings as it is: letters, digits, space and .+-" % face["id"])
     if face["id"] in ids or face["key"] in keys:
         raise SystemExit("faces.json: %s: id or key used twice" % face["id"])
     ids.add(face["id"])

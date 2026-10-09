@@ -8,6 +8,7 @@
 #include "AppIcon.h"
 #include "ClockPeers.h"
 #include "Birthdays.h"
+#include "Faces.h"
 #ifdef CW_FOOTBALL_CATALOG
 #include "FootballCatalog.h"
 #endif
@@ -236,6 +237,23 @@ struct ClockwiseWebServer
       client.println();
       for (const char *piece : FOOTBALL_TEAMS_JSON) client.print(piece);
 #endif
+    } else if (method == "GET" && path == "/faces") {
+      // The clock faces that can be installed, with their little pictures (see Faces.h)
+      client.println("HTTP/1.0 200 OK");
+      client.println("Content-Type: application/json");
+      client.println("Cache-Control: no-cache");
+      client.println();
+      client.print("[");
+      for (size_t i = 0; i < CW_FACE_COUNT; i++) {
+        const FaceInfo &face = CW_FACES[i];
+        client.printf("%s{\"id\":\"%s\",\"name\":\"%s\",\"fits32\":%s,\"palette\":\"", i ? "," : "", face.id, face.name,
+                      face.fits32 ? "true" : "false");
+        if (face.iconPalette) client.print(face.iconPalette);
+        client.print("\",\"pixels\":\"");
+        if (face.iconPixels) client.print(face.iconPixels);
+        client.print("\"}");
+      }
+      client.print("]");
     } else if (method == "GET" && path == "/peers") {
       client.println("HTTP/1.0 200 OK");
       client.println("Content-Type: application/json");
@@ -275,9 +293,8 @@ struct ClockwiseWebServer
     } else if (method == "POST" && path == "/face") {
       client.println("HTTP/1.0 204 No Content");
       client.println();
-      static const char *const FACES[] = {"0x01", "0x02", "0x03", "0x04", "0x05", "0x06", "0x08", "0x09", "0x0B", "0x0C"};
-      for (const char *face : FACES)
-        if (value == face) face_requested = value;
+      for (size_t i = 0; i < CW_FACE_COUNT; i++)
+        if (value == CW_FACES[i].id) face_requested = value;
     } else if (method == "POST" && path == "/cmd") {
       client.println("HTTP/1.0 204 No Content");
       client.println();

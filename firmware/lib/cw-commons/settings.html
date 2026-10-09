@@ -51,6 +51,11 @@
   .picks div { padding:10px 12px; border-bottom:1px solid var(--line); }
   .picks div:last-child { border-bottom:0; }
   .picks small { color:var(--muted); }
+  .facebtn { display:flex; align-items:center; gap:12px; margin-top:0; text-align:left; }
+  .facebtn .name { flex:1; }
+  .faces div { display:flex; align-items:center; gap:12px; cursor:pointer; }
+  .faces div.current { background:var(--bg); }
+  .faceicon { width:48px; height:48px; flex:none; border-radius:6px; background:#000; }
   .leagues details { border-top:1px solid var(--line); padding:8px 0; }
   .leagues summary { cursor:pointer; font-weight:600; }
   .leagues summary small { color:var(--muted); font-weight:400; }
@@ -88,7 +93,8 @@
 <main>
   <section id="faceBox">
     <h2>Clockface</h2>
-    <select id="face" onchange="switchFace()"></select>
+    <button type="button" id="faceBtn" class="facebtn" onclick="toggleFaces()"></button>
+    <div id="faceList" class="picks faces" style="display:none"></div>
     <p class="hint">Choosing a clockface installs it: the clock downloads it and restarts.</p>
   </section>
 
@@ -261,10 +267,7 @@
   const $ = id => document.getElementById(id);
   let faceId = '';
   let ldrPin = 35;
-  const FACES = [['0x0B', 'Football'], ['0x0C', 'Formula 1'], ['0x08', 'Tetris'], ['0x01', 'Mario'], ['0x09', 'Luigi'],
-                 ['0x05', 'Pacman'], ['0x06', 'Pokemon'], ['0x04', 'Castlevania'], ['0x03', 'World Map'], ['0x02', 'Time in Words']];
-  // Only these faces are drawn for a 64x32 panel; all the others need 64x64
-  const FACES_32 = ['0x08'];
+  let faces = [];  // what the clock can install, from /faces: id, name, fits32 and the little picture
 
   // Used when the browser can't list timezones itself
   const FALLBACK_ZONES = ['Africa/Cairo', 'Africa/Johannesburg', 'America/Argentina/Buenos_Aires', 'America/Chicago', 'America/Denver',
@@ -425,9 +428,10 @@
     $('pacmanBox').style.display = faceId === '0x05' ? 'block' : 'none';
     $('f1Box').style.display = faceId === '0x08' && g('displayHeight') === '32' ? 'block' : 'none';
     const rows32 = g('displayHeight') === '32';
-    $('face').innerHTML = FACES.filter(f => !rows32 || FACES_32.includes(f[0]) || f[0] === faceId).map(f => '<option value="' + f[0] + '">' + f[1] + '</option>').join('');
-    $('face').value = faceId;
-    $('faceBox').style.display = $('face').options.length > 1 ? 'block' : 'none';
+    faces = await fetch('/faces', { cache: 'no-cache' }).then(r => r.ok ? r.json() : []).catch(() => []);
+    const shown = faces.filter(f => !rows32 || f.fits32 || f.id === faceId);
+    showFaces(shown);
+    $('faceBox').style.display = shown.length > 1 ? 'block' : 'none';
     const ticker = faceId === '0x0B' || (faceId === '0x08' && rows32);  // Tetris shows football on the 64x32 panel only
     $('footballBox').style.display = ticker ? 'block' : 'none';
     const ms = g('matchSecs') || '8';
@@ -710,16 +714,82 @@
     saving = false;
   }
 
-  async function switchFace() {
-    const id = $('face').value, name = $('face').selectedOptions[0].text;
+  // The little pictures of the faces are 32x32, 12 colours at most, as base64 of raw deflate (see tools/make_face_minis.py).
+  // Drawn as LED dots, like the real panel. A browser that can't inflate just shows the names.
+  const iconCache = {};
+  async function faceIcon(face) {
+    if (!face.pixels || !window.DecompressionStream) return null;
+    if (!iconCache[face.id]) iconCache[face.id] = (async () => {
+      const bytes = Uint8Array.from(atob(face.pixels), c => c.charCodeAt(0));
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      const pixels = new Uint8Array(await new Response(stream).arrayBuffer());
+      const colors = face.palette.match(/.{6}/g).map(h => '#' + h);
+      const cell = 3, canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 32 * cell;
+      canvas.className = 'faceicon';
+      const ctx = canvas.getContext('2d');
+      pixels.forEach((p, i) => {
+        if (colors[p] === '#000000') return;  // an LED that is off
+        ctx.fillStyle = colors[p];
+        ctx.beginPath();
+        ctx.arc((i % 32) * cell + cell / 2, Math.floor(i / 32) * cell + cell / 2, cell * 0.42, 0, 7);
+        ctx.fill();
+      });
+      return canvas;
+    })().catch(() => null);
+    return iconCache[face.id];
+  }
+
+  // A canvas can only sit in one place: each use gets a copy
+  async function faceIconCopy(face) {
+    const icon = await faceIcon(face);
+    if (!icon) return null;
+    const copy = icon.cloneNode();
+    copy.getContext('2d').drawImage(icon, 0, 0);
+    return copy;
+  }
+
+  async function showFaces(shown) {
+    const current = faces.find(f => f.id === faceId) || { id: faceId, name: faceId };
+    const button = $('faceBtn');
+    button.textContent = '';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = current.name;
+    button.append(name, '\u25be');
+    const list = $('faceList');
+    list.textContent = '';
+    for (const face of shown) {
+      const row = document.createElement('div');
+      if (face.id === faceId) row.className = 'current';
+      row.onclick = () => switchFace(face.id);
+      const label = document.createElement('span');
+      label.textContent = face.name;
+      row.append(label);
+      list.append(row);
+    }
+    // The pictures come a moment later: they are inflated by the browser
+    const icon = await faceIconCopy(current);
+    if (icon) button.prepend(icon);
+    for (const [i, face] of shown.entries()) {
+      const copy = await faceIconCopy(face);
+      if (copy) list.children[i].prepend(copy);
+    }
+  }
+
+  function toggleFaces() { $('faceList').style.display = $('faceList').style.display === 'none' ? 'block' : 'none'; }
+
+  async function switchFace(id) {
+    $('faceList').style.display = 'none';
     if (id === faceId) return;
-    if (!confirm('Install the ' + name + ' clockface? The clock downloads it and restarts.')) { $('face').value = faceId; return; }
+    const name = (faces.find(f => f.id === id) || { name: id }).name;
+    if (!confirm('Install the ' + name + ' clockface? The clock downloads it and restarts.')) return;
     try { await fetch('/face?id=' + id, { method: 'POST' }); }
-    catch (e) { toast('Could not reach the clock', 4000); $('face').value = faceId; return; }
+    catch (e) { toast('Could not reach the clock', 4000); return; }
     // The clock doesn't answer while it downloads. Once it is back, either the new face runs or the install failed.
     waitForClock('Installing ' + name + '. The clock restarts when it is done...', r => {
       if (r.headers.get('X-CW_FW_ID') === id) location.reload();
-      else { $('face').value = faceId; toast('Install failed, the clock is still on its old clockface', 6000); }
+      else toast('Install failed, the clock is still on its old clockface', 6000);
     });
   }
 
