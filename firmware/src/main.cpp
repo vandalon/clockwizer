@@ -135,12 +135,19 @@ void displaySetup(bool swapBlueGreen, uint8_t displayBright, uint8_t displayRota
 
 #define BIRTHDAY_FRAME_MS 60  // ~16 frames per second for the birthday animation
 
-// Today's birthday: the fixed ones of the build, then the ones from the settings. nullptr when there is none
+// Today's birthday: the fixed ones of the build, then the ones from the settings. nullptr when there is none.
+// Called on every frame, so the list is only parsed again when the setting has changed.
 const Birthdays::Entry *todaysBirthday(int month, int day) {
   static Birthdays::Entry list[Birthdays::MAX * 2];
-  int n = Birthdays::parse(CW_FIXED_BIRTHDAYS, list);
-  n += Birthdays::parse(ClockwiseParams::getInstance()->birthdays, list + n);
-  for (int i = 0; i < n; i++)
+  static String parsedFrom;  // the setting the list was parsed from
+  static int count = -1;     // -1 = not parsed yet
+  const String &setting = ClockwiseParams::getInstance()->birthdays;
+  if (count < 0 || setting != parsedFrom) {
+    parsedFrom = setting;
+    count = Birthdays::parse(CW_FIXED_BIRTHDAYS, list);
+    count += Birthdays::parse(setting, list + count);
+  }
+  for (int i = 0; i < count; i++)
     if (list[i].month == month && list[i].day == day) return &list[i];
   return nullptr;
 }
