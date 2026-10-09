@@ -560,23 +560,30 @@ unsigned long FootballTicker::fetchRace() {
 
 // Reads the followed leagues and favourite teams from the settings. Returns true when they changed.
 bool FootballTicker::loadConfig() {
+  // Looked at every couple of seconds, so read into fixed buffers: Strings are only made when something changed
+  static char leagues[401], favourites[401];  // the settings page keeps them to 400 characters
+  static char lastLeagues[401] = "\x01", lastFavourites[401];  // the first call always finds a change
   Preferences prefs;
   prefs.begin("clockwise", true);
-  String leagues = prefs.getString(PREF_LEAGUES, CW_DEFAULT_FOOTBALL_LEAGUES);
-  String favourites = prefs.getString(PREF_FAVOURITES, CW_DEFAULT_FOOTBALL_TEAMS);
+  // A missing key is the default; the buffer version of getString() logs an error for one, so ask first
+  auto read = [&](const char *key, char *out, const char *fallback) {
+    if (!prefs.isKey(key) || prefs.getString(key, out, 401) == 0) strlcpy(out, fallback, 401);
+  };
+  read(PREF_LEAGUES, leagues, CW_DEFAULT_FOOTBALL_LEAGUES);
+  read(PREF_FAVOURITES, favourites, CW_DEFAULT_FOOTBALL_TEAMS);
   _pageMs = constrain(prefs.getUInt("matchSecs", 8), 3, 60) * 1000UL;
   prefs.end();
-  String config = leagues + "|" + favourites;
-  if (config == _config) return false;
-  _config = config;
+  if (strcmp(leagues, lastLeagues) == 0 && strcmp(favourites, lastFavourites) == 0) return false;
+  strlcpy(lastLeagues, leagues, sizeof(lastLeagues));
+  strlcpy(lastFavourites, favourites, sizeof(lastFavourites));
 
   _leagues.clear();
-  for (const String &code : splitList(leagues)) {
+  for (const String &code : splitList(String(leagues))) {
     const FootballLeague *league = findLeague(code);
     if (league && _leagues.size() < MAX_LEAGUES) _leagues.push_back(league);
   }
   _favourites.clear();
-  for (const String &item : splitList(favourites)) {
+  for (const String &item : splitList(String(favourites))) {
     int first = item.indexOf(':'), last = item.lastIndexOf(':');
     if (first <= 0 || last <= first || _favourites.size() >= MAX_FAVOURITES) continue;
     Favourite fav;

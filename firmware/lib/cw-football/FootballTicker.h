@@ -192,7 +192,6 @@ class FootballTicker {
     };
     std::vector<const FootballLeague *> _leagues;
     std::vector<Favourite> _favourites;
-    String _config;
     volatile uint32_t _pageMs = 8000;  // how long a match is shown, from the settings (read by the display)
 
     // The Formula 1 race, shown as one more page of the ticker while it runs
