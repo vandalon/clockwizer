@@ -14,6 +14,7 @@
 
 #include <CWPreferences.h>
 #include <EspnFeed.h>
+#include <F1Drivers.h>
 #include "FootballCatalog.h"
 
 // Which competitions and favourite teams to follow is set on the settings page (see FootballCatalog.h
@@ -390,28 +391,6 @@ unsigned long FootballTicker::refresh() {
   return wait;
 }
 
-// The 2026 grid by surname, as ESPN spells it: the driver's code and team colour
-#define RGB565(r, g, b) ((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3))
-static const struct { const char *surname, *code; uint16_t color; } DRIVERS[] = {
-  {"Verstappen", "VER", RGB565(54, 113, 255)},  {"Hadjar", "HAD", RGB565(54, 113, 255)},      // Red Bull
-  {"Russell", "RUS", RGB565(39, 244, 210)},     {"Antonelli", "ANT", RGB565(39, 244, 210)},   // Mercedes
-  {"Leclerc", "LEC", RGB565(232, 0, 45)},       {"Hamilton", "HAM", RGB565(232, 0, 45)},      // Ferrari
-  {"Norris", "NOR", RGB565(255, 128, 0)},       {"Piastri", "PIA", RGB565(255, 128, 0)},      // McLaren
-  {"Alonso", "ALO", RGB565(34, 153, 113)},      {"Stroll", "STR", RGB565(34, 153, 113)},      // Aston Martin
-  {"Gasly", "GAS", RGB565(255, 135, 188)},      {"Colapinto", "COL", RGB565(255, 135, 188)},  // Alpine
-  {"Albon", "ALB", RGB565(100, 196, 255)},      {"Sainz", "SAI", RGB565(100, 196, 255)},      // Williams
-  {"Lawson", "LAW", RGB565(170, 190, 255)},     {"Lindblad", "LIN", RGB565(170, 190, 255)},   // Racing Bulls
-  {"H\xC3\xBClkenberg", "HUL", RGB565(210, 50, 0)}, {"Bortoleto", "BOR", RGB565(210, 50, 0)},  // Audi
-  {"Ocon", "OCO", RGB565(255, 255, 255)},       {"Bearman", "BEA", RGB565(255, 255, 255)},    // Haas
-  {"P\xC3\xA9rez", "PER", RGB565(255, 215, 0)},   {"Bottas", "BOT", RGB565(255, 215, 0)},     // Cadillac
-};
-
-static uint16_t driverColor(const char *code) {
-  for (const auto &driver : DRIVERS)
-    if (strcmp(driver.code, code) == 0) return driver.color;
-  return 0xFFFF;
-}
-
 // Downloads the Formula 1 scoreboard when due. Returns how long until the next
 // download is due.
 unsigned long FootballTicker::refreshRace() {
@@ -473,11 +452,10 @@ unsigned long FootballTicker::fetchRace() {
       name = name.substring(name.lastIndexOf(' ') + 1, name.length());
       String code = name.substring(0, 3);
       code.toUpperCase();
-      for (const auto &driver : DRIVERS)
-        if (name == driver.surname) {
-          code = driver.code;
-          r.color[order - 1] = driver.color;
-        }
+      if (const F1Driver *known = f1DriverBySurname(name.c_str())) {
+        code = known->code;
+        r.color[order - 1] = known->color;
+      }
       r.top[order - 1] = code;
     }
     if (running) {

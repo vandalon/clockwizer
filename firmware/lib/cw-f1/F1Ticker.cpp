@@ -9,6 +9,7 @@
 #include <ezTime.h>
 
 #include <EspnFeed.h>
+#include <F1Drivers.h>
 
 static const unsigned long LIVE_REFRESH_MS = 15 * 1000UL;  // plus a request per driver for the times
 static const unsigned long WEEKEND_REFRESH_MS = 5 * 60 * 1000UL;  // between sessions
@@ -22,28 +23,7 @@ static const time_t WEEKEND_TAIL_SECS = 3 * 60 * 60;  // the weekend lasts this 
 extern volatile bool firmwareUpdating;  // main.cpp
 extern volatile bool liveEventOn;       // main.cpp: no automatic update while true
 
-#define RGB565(r, g, b) ((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3))
-
-// The 2026 grid by surname, as ESPN spells it: the driver's code and team colour
-static const struct { const char *surname, *code; uint16_t color; } DRIVERS[] = {
-  {"Verstappen", "VER", RGB565(54, 113, 255)},  {"Hadjar", "HAD", RGB565(54, 113, 255)},      // Red Bull
-  {"Russell", "RUS", RGB565(39, 244, 210)},     {"Antonelli", "ANT", RGB565(39, 244, 210)},   // Mercedes
-  {"Leclerc", "LEC", RGB565(232, 0, 45)},       {"Hamilton", "HAM", RGB565(232, 0, 45)},      // Ferrari
-  {"Norris", "NOR", RGB565(255, 128, 0)},       {"Piastri", "PIA", RGB565(255, 128, 0)},      // McLaren
-  {"Alonso", "ALO", RGB565(34, 153, 113)},      {"Stroll", "STR", RGB565(34, 153, 113)},      // Aston Martin
-  {"Gasly", "GAS", RGB565(255, 135, 188)},      {"Colapinto", "COL", RGB565(255, 135, 188)},  // Alpine
-  {"Albon", "ALB", RGB565(100, 196, 255)},      {"Sainz", "SAI", RGB565(100, 196, 255)},      // Williams
-  {"Lawson", "LAW", RGB565(170, 190, 255)},     {"Lindblad", "LIN", RGB565(170, 190, 255)},   // Racing Bulls
-  {"H\xC3\xBClkenberg", "HUL", RGB565(210, 50, 0)}, {"Bortoleto", "BOR", RGB565(210, 50, 0)},  // Audi
-  {"Ocon", "OCO", RGB565(255, 255, 255)},       {"Bearman", "BEA", RGB565(255, 255, 255)},    // Haas
-  {"P\xC3\xA9rez", "PER", RGB565(255, 215, 0)},   {"Bottas", "BOT", RGB565(255, 215, 0)},     // Cadillac
-};
-
-uint16_t F1Ticker::driverColor(const char *code) {
-  for (const auto &driver : DRIVERS)
-    if (strcmp(driver.code, code) == 0) return driver.color;
-  return 0xFFFF;
-}
+uint16_t F1Ticker::driverColor(const char *code) { return f1DriverColor(code); }
 
 static void f1log(const char *format, ...) {
   static std::mutex lock;
@@ -210,12 +190,11 @@ static void copyName(char *to, size_t size, const char *from) { strlcpy(to, from
 static void fillRow(F1Ticker::Row &row, const char *shortName) {
   const char *surname = strrchr(shortName, ' ');
   surname = surname ? surname + 1 : shortName;
-  for (const auto &driver : DRIVERS)
-    if (strcmp(surname, driver.surname) == 0) {
-      strlcpy(row.code, driver.code, sizeof(row.code));
-      row.color = driver.color;
-      return;
-    }
+  if (const F1Driver *known = f1DriverBySurname(surname)) {
+    strlcpy(row.code, known->code, sizeof(row.code));
+    row.color = known->color;
+    return;
+  }
   size_t n = 0;
   for (; n < 3 && surname[n]; n++) row.code[n] = toupper((unsigned char)surname[n]);
   row.code[n] = 0;
