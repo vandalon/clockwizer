@@ -1242,6 +1242,7 @@ Clockface::Clockface(MatrixPanel_I2S_DMA* display) {
 
 void Clockface::setup(CWDateTime *dateTime) {
   _dateTime = dateTime;
+  lastKey[0] = 0;  // whatever was drawn over the face (notification, birthday) must be redrawn
   footballTicker.begin(dateTime, false, true, resultWindowSecs());  // no Formula 1; goals, cards, tables, kick-offs
 }
 
