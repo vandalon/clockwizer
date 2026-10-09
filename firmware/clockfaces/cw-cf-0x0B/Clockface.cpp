@@ -313,11 +313,10 @@ static const FootballTicker::Upcoming *comingToday(CWDateTime *dateTime, size_t 
   return nullptr;
 }
 
-// How many rows there are below the top match: the other results, then today's coming matches
+// How many rows there are below the top match: the other results, then today's coming matches (also next to a live match)
 static size_t belowRows(CWDateTime *dateTime) {
   size_t n = overview.finished.size();
-  if (resultsOnTop)
-    while (comingToday(dateTime, n - overview.finished.size())) n++;
+  while (comingToday(dateTime, n - overview.finished.size())) n++;
   return n;
 }
 
@@ -504,9 +503,10 @@ static void drawText5(MatrixPanel_I2S_DMA *d, const String &s, int x, int y, uin
 
 // A result: kit bars and names around the score, the winner's number green and the loser's grey
 // (a draw white). All in all 63 wide, so a score of double figures gets the small font.
-// A live match has no winner yet: its numbers stay white
+// A live match has no winner yet: its numbers and dash are orange, so it stands out from the results
+static const uint16_t LIVE_ROW = rgb(255, 140, 40);
 static uint16_t scoreColor(const FootballTicker::Entry &m, int own, int other) {
-  return m.live ? INK : resultColor(own, other);
+  return m.live ? LIVE_ROW : resultColor(own, other);
 }
 
 static void drawResult(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, int y) {
@@ -522,14 +522,14 @@ static void drawResult(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, i
   int sx = x + 4 + 17 + 2;
   if (big) {
     drawText5(d, home, sx, y, scoreColor(m, home.toInt(), away.toInt()));
-    drawText5(d, "-", sx + 6, y, DASH);
+    drawText5(d, "-", sx + 6, y, m.live ? LIVE_ROW : DASH);
     drawText5(d, away, sx + 12, y, scoreColor(m, away.toInt(), home.toInt()));
   } else if (split) {
     drawText(d, home, sx, y + 1, scoreColor(m, home.toInt(), away.toInt()));
-    drawText(d, "-", sx + textWidth(home) + 1, y + 1, DASH);
+    drawText(d, "-", sx + textWidth(home) + 1, y + 1, m.live ? LIVE_ROW : DASH);
     drawText(d, away, sx + textWidth(home) + 5, y + 1, scoreColor(m, away.toInt(), home.toInt()));
   } else {
-    drawText(d, m.score, sx, y + 1, INK);
+    drawText(d, m.score, sx, y + 1, m.live ? LIVE_ROW : INK);
   }
   int ax = sx + scoreWidth + 2;
   drawText5(d, m.away.substring(0, 3), ax + 1, y, INK);
@@ -1178,14 +1178,14 @@ static void playSubstitution(MatrixPanel_I2S_DMA *d, const FootballTicker::Incid
     blockDim = 32;
     if (t >= HOLD) drawBigShirt(d, 64 - (int)roundf(31 * u), SHIRT_Y, shirt, trim, in.numberOn);
     if (u >= 1) {
-      drawText(d, "OFF", 11, 50, OFF_RED);
-      fill(d, 9, 57, 5, 1, OFF_RED);  // arrow down
-      fill(d, 10, 58, 3, 1, OFF_RED);
-      fill(d, 11, 59, 1, 1, OFF_RED);
-      drawText(d, "ON", 43, 50, ON_GREEN);
-      fill(d, 43, 57, 1, 1, ON_GREEN);  // arrow up
-      fill(d, 42, 58, 3, 1, ON_GREEN);
-      fill(d, 41, 59, 5, 1, ON_GREEN);
+      drawText(d, "OFF", 12, 50, OFF_RED);  // centred under the shirts, at x 17 and 47
+      fill(d, 15, 57, 5, 1, OFF_RED);  // arrow down
+      fill(d, 16, 58, 3, 1, OFF_RED);
+      fill(d, 17, 59, 1, 1, OFF_RED);
+      drawText(d, "ON", 44, 50, ON_GREEN);
+      fill(d, 47, 57, 1, 1, ON_GREEN);  // arrow up
+      fill(d, 46, 58, 3, 1, ON_GREEN);
+      fill(d, 45, 59, 5, 1, ON_GREEN);
     }
     showFrame(INCIDENT_FRAME_MS);
   }

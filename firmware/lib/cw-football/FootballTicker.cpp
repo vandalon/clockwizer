@@ -758,13 +758,38 @@ void FootballTicker::tablePositions(const Match &m, uint8_t &homePos, uint8_t &a
   }
 }
 
-// The last word of a name, plain letters only (the display has no accents), at most 10
+// A word that is no surname: an initial ("J."), or a suffix (Jr, Sr, II, III, IV)
+static bool notSurname(const char *word, int len) {
+  if (len < 2) return true;
+  if (len > 3) return false;
+  char w[4] = {0};
+  for (int i = 0; i < len; i++) w[i] = tolower((unsigned char)word[i]);
+  return !strcmp(w, "jr") || !strcmp(w, "sr") || !strcmp(w, "ii") || !strcmp(w, "iii") || !strcmp(w, "iv");
+}
+
+// The last word of a name that is a surname (not an initial or Jr), plain letters only (the display
+// has no accents), at most 10
 static void surname(const char *fullName, char *out) {
-  const char *last = strrchr(fullName, ' ');
-  last = last ? last + 1 : fullName;
+  const char *best = fullName;  // when every word is one of those: the last one
+  bool found = false;
+  const char *word = fullName;
+  for (const char *c = fullName;; c++) {
+    if (*c == ' ' || !*c) {
+      int len = 0;
+      for (const char *w = word; w < c; w++) len += isalpha((unsigned char)*w) ? 1 : 0;
+      if (c > word && !notSurname(word, len)) {
+        best = word;
+        found = true;
+      } else if (c > word && !found) {
+        best = word;
+      }
+      word = c + 1;
+      if (!*c) break;
+    }
+  }
   int n = 0;
-  for (; *last && n < 10; last++)
-    if (isalpha((unsigned char)*last) || *last == '-' || *last == '\'') out[n++] = *last;
+  for (const char *c = best; *c && *c != ' ' && n < 10; c++)
+    if (isalpha((unsigned char)*c) || *c == '-' || *c == '\'') out[n++] = *c;
   out[n] = 0;
 }
 
