@@ -1,6 +1,7 @@
 #pragma once
 
-// Private build only: the birthday screen. Slow fireworks that glow, balloons, a cake with
+// The birthday screen, shown on the birthdays from the settings page (and the fixed ones of a private build,
+// see CW_FIXED_BIRTHDAYS in CWPreferences.h). Slow fireworks that glow, balloons, a cake with
 // flickering candles, confetti, the name in a rainbow wave, the age and the time.
 // Everything is a function of the time, so nothing is kept between frames. Drawn into a
 // small RGB buffer first, because the panel can't be read back to blend with.
