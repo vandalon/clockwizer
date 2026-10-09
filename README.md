@@ -2,6 +2,13 @@
 
 A fork of [Clockwise](https://github.com/jnthas/clockwise) by Jonathas Barbosa (@jnthas): a smart clock for a HUB75 LED matrix driven by an ESP32. Clockwizer keeps everything that makes Clockwise fun and adds a bunch of things on top.
 
+<p align="center">
+  <img src="docs/images/faces/cw-cf-0x0B.jpg" width="150" alt="Football clockface">
+  <img src="docs/images/faces/cw-cf-0x0C.jpg" width="150" alt="Formula 1 clockface">
+  <img src="docs/images/faces/cw-cf-0x01.jpg" width="150" alt="Mario clockface">
+  <img src="docs/images/faces/cw-cf-0x08.jpg" width="150" alt="Tetris clockface">
+</p>
+
 **What's different from upstream**
 - New clockfaces: **Football** (live scores, results, goal celebrations), and **Formula 1** (live sessions, standings, next race); **Tetris** also runs on 64x32 panels, with a ticker row that shows football scores and, if you switch it on, the F1 race
 - **Birthdays**: add up to 10 names and dates on the settings page and every clockface plays an animated birthday party (cake, balloons, fireworks) all day, on both panel sizes
