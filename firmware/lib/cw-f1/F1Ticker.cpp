@@ -249,8 +249,9 @@ static void fillRow(F1Ticker::Row &row, const char *shortName) {
       row.color = driver.color;
       return;
     }
-  for (int i = 0; i < 3; i++) row.code[i] = toupper(surname[i]);
-  row.code[3] = 0;
+  size_t n = 0;
+  for (; n < 3 && surname[n]; n++) row.code[n] = toupper((unsigned char)surname[n]);
+  row.code[n] = 0;
   row.color = 0xFFFF;
 }
 
