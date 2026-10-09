@@ -133,7 +133,7 @@ class FootballTicker {
 
   private:
     struct Match {
-      const char *label;  // for the log
+      String label;       // for the log
       const char *competition = "";  // short code shown by faces that draw their own layout
       uint16_t color;     // the competition's colour, for the ticker
       TeamKit homeKit, awayKit;  // the clubs' colours
