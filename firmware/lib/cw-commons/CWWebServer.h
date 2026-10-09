@@ -382,8 +382,6 @@ struct ClockwiseWebServer
 
 
   void readPin(WiFiClient client, String key, uint16_t pin) {
-    ClockwiseParams::getInstance()->load();
-
     client.println("HTTP/1.0 204 No Content");
     client.printf(HEADER_TEMPLATE_D, key, analogRead(pin));
     
@@ -391,9 +389,9 @@ struct ClockwiseWebServer
   }
 
 
+  // The settings in memory are the saved ones: only /set changes them, and it saves right away. No load()
+  // here, it reassigns the Strings that the update check task reads (see firmwareUrl() in main.cpp).
   void getCurrentSettings(WiFiClient client) {
-    ClockwiseParams::getInstance()->load();
-
     client.println("HTTP/1.0 204 No Content");
 
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_DISPLAY_BRIGHT, ClockwiseParams::getInstance()->displayBright);
