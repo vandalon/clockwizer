@@ -359,25 +359,14 @@ unsigned long F1Ticker::fetchWeekend() {
         snap.live.valid ? snap.live.rows[0].code : "", snap.last.valid ? snap.last.name : "-",
         snap.next.valid ? snap.next.name : "-");
 
-  {
-    std::lock_guard<std::mutex> guard(_lock);
-    _snap.weekend = snap.weekend;
-    _snap.live = snap.live;
-    liveEventOn = snap.live.valid;
-    _snap.last = snap.last;
-    _snap.next = snap.next;
-    _version++;
-  }
+  liveEventOn = snap.live.valid;  // no update check from here on, the times below take a while
 
   // The live feed runs from shortly before a session until a few minutes after it
   _live.setWanted(snap.live.valid || (snap.weekend && snap.next.valid && snap.next.start - nowUtc < 10 * 60));
 
   // Times and gaps cost a request per driver: only for the drivers shown, the last session once
-  bool timed = false;
-  if (snap.live.valid && !_live.fresh()) {  // the live feed has them otherwise
+  if (snap.live.valid && !_live.fresh())  // the live feed has them otherwise
     fetchTimes(snap.live, ROWS);
-    timed = true;
-  }
   if (snap.last.valid) {
     if (_lastTimed.valid && _lastTimed.id == snap.last.id) {
       snap.last = _lastTimed;
@@ -385,12 +374,16 @@ unsigned long F1Ticker::fetchWeekend() {
       fetchTimes(snap.last, 3);
       if (snap.last.rows[0].time[0]) _lastTimed = snap.last;
     }
-    timed = true;
   }
-  if (timed) {
+
+  // Published once, with the times in: a first publish without them made the time column blank for the
+  // seconds the requests above take, on every refresh
+  {
     std::lock_guard<std::mutex> guard(_lock);
+    _snap.weekend = snap.weekend;
     _snap.live = snap.live;
     _snap.last = snap.last;
+    _snap.next = snap.next;
     _version++;
   }
 
