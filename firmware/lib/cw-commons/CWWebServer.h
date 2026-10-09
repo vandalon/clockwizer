@@ -173,18 +173,25 @@ struct ClockwiseWebServer
               String key = "";
               String value = "";
 
-              if (path.indexOf('?') > 0)
+              int query = path.indexOf('?');
+              if (query > 0)
               {
-                key = path.substring(path.indexOf('?') + 1, path.indexOf('='));
-                value = path.substring(path.indexOf('=') + 1);
-                path = path.substring(0, path.indexOf('?'));
+                // /set?key=value; "?key" alone is a key with an empty value
+                int eq = path.indexOf('=', query);
+                key = path.substring(query + 1, eq > 0 ? eq : path.length());
+                if (eq > 0) value = path.substring(eq + 1);
+                path = path.substring(0, query);
               }
 
               processRequest(client, method, path, key, value);
             }
             break;
           }
-          if (httpBuffer.length() > HTTP_MAX_REQUEST_LINE) break;
+          if (httpBuffer.length() > HTTP_MAX_REQUEST_LINE)
+          {
+            client.print("HTTP/1.0 414 URI Too Long\r\n\r\n");
+            break;
+          }
         }
         else
         {
