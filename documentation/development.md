@@ -75,7 +75,7 @@ Adding a setting takes five places:
    	-D CW_FW_ID="\"0xNN\""
    ```
    Add `-D DOUBLE_BUFFER_ON` for smooth animation, `-D CLOCKFACE_UPDATE_MS=50` to be called more often than the default.
-3. Make the clock know it: the face list in `settings.html` (`FACES`, and `FACES_32` if it fits 64x32), the allow-list in the `/face` handler in `CWWebServer.h`, a telnet key in `main.cpp`, the default list in `update-fw.sh`, and an entry in `docs/faces.json` (with a `thumb` image in `docs/images/faces/` if you have one).
+3. Make the clock know it: add one entry to `docs/faces.json` (see below). The settings page, the `/face` check, the telnet keys and the default list of `update-fw.sh` all follow from it. Put a photo of the panel in `docs/images/faces/` as the `thumb`, and run `python3 firmware/tools/make_face_minis.py` (needs Pillow and numpy) to give it its little picture on the settings page.
 4. Document it in [clockfaces.md](clockfaces.md) and the table in the README.
 
 ## Tests
@@ -101,7 +101,8 @@ There is only a placeholder test so far (`test/test_native`). Most checking is d
 `docs/` is the source of the flasher page that `update-fw.sh -g` copies to the `gh-pages` branch:
 
 - `index.html` is the page; it reads `faces.json` for the list of faces and uses [ESP Web Tools](https://github.com/esphome/esp-web-tools) from `vendor/esp-web-tools` (copied unchanged, Apache-2.0, no CDN).
-- `faces.json` lists the faces: `id`, `name`, `panel`, optional `thumb`. Add a face here to put it on the page.
+- `faces.json` is the one list of faces, for the page, the build and the clock itself: `id`, `name`, `panel` ("64x64", or "64x64 and 64x32" for a face that is drawn on both), `key` (the telnet key that installs it: one character, not one of `R C X L U P T h S N G Y D W`), optional `thumb` and the `icon` that `tools/make_face_minis.py` makes from it. Add a face here to put it on the page and on the clock.
+- At build time `tools/gen_faces.py` turns it into `lib/cw-commons/Faces.h`, which the clock uses for the face picker (`GET /faces`), the `/face` check and the telnet keys. The build stops when an id or key is wrong or used twice. `update-fw.sh` builds the faces of the list when you don't name any.
 - For every published face the script writes `manifest-cw-cf-0xNN.json`. The manifest lists four files to write to the ESP32's flash: the bootloader at `0x1000`, the partition table at `0x8000`, `boot_app0` at `0xE000` and the app at `0x10000`. The first three are shared and come from the last build (`flash/` on the site).
 - Browsers only allow WebSerial on HTTPS, which GitHub Pages provides. For local testing, serve `docs/` with `python3 -m http.server` and open it on `localhost` (also allowed); copy a `manifest-*.json`, the `flash/` folder and the `.bin` files into it first.
 

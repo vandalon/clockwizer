@@ -51,7 +51,10 @@ if [ $GITHUB -eq 1 ]; then
 fi
 
 FACES=("$@")
-[ ${#FACES[@]} -eq 0 ] && FACES=(0B 0C 08 01 09 05 06 04 03 02)
+# No faces named: all of them, in the order of the list of faces (docs/faces.json: 0x0B becomes 0B)
+if [ ${#FACES[@]} -eq 0 ]; then
+	FACES=($(python3 -c 'import json; print(" ".join(f["id"][2:] for f in json.load(open("../docs/faces.json"))))'))
+fi
 
 ENV_ARGS=()
 for f in "${FACES[@]}"; do
