@@ -420,10 +420,13 @@ unsigned long F1Ticker::fetchStandings() {
   f1log("[F1] standings: %d drivers, leader %s\n", count, count ? standings[0].code : "-");
   if (count == 0) return RETRY_MS;
 
-  std::lock_guard<std::mutex> guard(_lock);
-  for (int i = 0; i < count; i++) _snap.standings[i] = standings[i];
-  _snap.standingsCount = count;
-  _version++;
+  {
+    std::lock_guard<std::mutex> guard(_lock);
+    for (int i = 0; i < count; i++) _snap.standings[i] = standings[i];
+    _snap.standingsCount = count;
+    _version++;
+  }
+  // Flash writes are slow: not while the display thread waits for the lock
   Preferences prefs;
   if (prefs.begin("f1cache", false)) {
     prefs.putBytes("stand", standings, sizeof(standings));
@@ -540,10 +543,12 @@ unsigned long F1Ticker::fetchSeason() {
   f1log("[F1] next race: %s\n", upcoming.city);
   if (!upcoming.city[0] || !upcoming.start) return RETRY_MS;
 
-  std::lock_guard<std::mutex> guard(_lock);
-  _snap.upcoming[0] = upcoming;
-  _snap.upcomingCount = 1;
-  _version++;
+  {
+    std::lock_guard<std::mutex> guard(_lock);
+    _snap.upcoming[0] = upcoming;
+    _snap.upcomingCount = 1;
+    _version++;
+  }
   Preferences prefs;
   if (prefs.begin("f1cache", false)) {
     prefs.putBytes("race", &upcoming, sizeof(upcoming));
