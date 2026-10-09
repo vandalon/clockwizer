@@ -138,11 +138,11 @@ To build and publish, use `firmware/update-fw.sh`:
 ```
 ./update-fw.sh              # build all faces and copy them to your own update server
 ./update-fw.sh 05 08        # only Pacman and Tetris
-./update-fw.sh -i 05        # ...and tell the panels to install their face
+./update-fw.sh -i 05        # ...and tell every clock that runs it to install it
 ./update-fw.sh -g           # build all faces and publish them to GitHub Pages
 ```
 
-Edit the `SERVER` and `PANELS` lines at the top of the script for your own server and clocks.
+Edit the `SERVER` lines at the top of the script for your own server. `-i` finds the clocks on the network by itself (mDNS, needs `avahi-utils`); `-H <address>` adds one by address.
 
 ## More documentation
 

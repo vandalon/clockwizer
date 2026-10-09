@@ -56,12 +56,16 @@ A build can also set a different default location at compile time: define `CW_DE
 ```
 ./update-fw.sh                # build all faces, copy them to your own update server
 ./update-fw.sh 05 08          # only Pacman and Tetris
-./update-fw.sh -i 05 08       # ...and tell the panels in PANELS to install their face (over telnet)
+./update-fw.sh -i 05 08       # ...and tell every clock on the network that runs one of them to install it
+./update-fw.sh -H 192.168.1.50 05   # ...or one clock by address (repeat -H for more)
+./update-fw.sh -n -i 05       # only list the clocks that would be told
 ./update-fw.sh -g             # build all faces and publish them to GitHub Pages
 ./update-fw.sh -g 0B          # only Football
 ```
 
-For your own server, edit the top of the script: `SERVER` (login for `scp`), `SERVER_DIR` (the folder on that server; if it exists locally and is writable the files are simply copied) and `PANELS` (clock host names and the face each one runs, for `-i`).
+For your own server, edit the top of the script: `SERVER` (login for `scp`), `SERVER_DIR` (the folder on that server; if it exists locally and is writable the files are simply copied) .
+
+`-i` finds the clocks with mDNS (they announce `_clockwise._tcp`; it needs `avahi-browse`, from the `avahi-utils` package), asks each one which face it runs (`GET /get`, the `X-CW_FW_ID` header) and tells it to install that face with `POST /face` if you just built it. Use `-H <address>` for a clock mDNS can't reach; `-H` can be given more than once and also works without `-i`.
 
 ### Publishing to GitHub Pages (`-g`)
 

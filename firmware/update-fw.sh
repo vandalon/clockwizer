@@ -3,7 +3,10 @@
 #
 #   ./update-fw.sh              build + upload all clockfaces
 #   ./update-fw.sh 05 08        build + upload only Pacman and Tetris
-#   ./update-fw.sh -i 05 08     ...and tell the panels to install their face
+#   ./update-fw.sh -i 05 08     ...and tell every clock on the network that runs one of them to install it
+#   ./update-fw.sh -H 192.168.1.50 05   ...the same for one clock by address (repeat -H for more; also
+#                               works when mDNS doesn't reach the clock)
+#   ./update-fw.sh -n -i 05     ...only list the clocks that would be told, don't touch them
 #   ./update-fw.sh -g           build + publish all clockfaces to GitHub Pages instead
 #   ./update-fw.sh -g 0B        ...or only the Football one
 #
@@ -15,12 +18,6 @@ cd "$(dirname "$0")"
 SERVER=user@192.168.1.10
 SERVER_DIR=/var/www/html/ledMatrix
 
-# Which face each panel runs, used with -i
-PANELS=(
-	"panel1.local 5"
-	"panel2.local 8"
-)
-
 # Use the PlatformIO install from the VS Code extension: Homebrew's pio lacks
 # the Python modules the ESP32 platform needs.
 PIO=~/.platformio/penv/bin/pio
@@ -31,10 +28,16 @@ PIO=~/.platformio/penv/bin/pio
 PAGES_BRANCH=gh-pages
 
 INSTALL=0
+DISCOVER=0
+DRY=0
+HOSTS=()
 GITHUB=0
 while [[ "${1:-}" == -* ]]; do
 	case "$1" in
-		-i) INSTALL=1 ;;
+		-i) INSTALL=1; DISCOVER=1 ;;
+		-H) [ $# -ge 2 ] || { echo "-H needs an address" >&2; exit 1; }
+			HOSTS+=("$2"); INSTALL=1; shift ;;
+		-n) DRY=1 ;;
 		-g) GITHUB=1 ;;
 		*) echo "Unknown option $1" >&2; exit 1 ;;
 	esac
@@ -134,11 +137,30 @@ else
 fi
 
 if [ $INSTALL -eq 1 ]; then
-	for p in "${PANELS[@]}"; do
-		read -r host face <<< "$p"
-		if [[ " ${FACES[*]} " == *" 0$face "* ]]; then
-			echo "Telling $host to install cw-cf-0x0$face"
-			echo "$face" | nc -w5 "$host" 23 || echo "  $host did not respond"
+	# Clocks announce themselves as _clockwise._tcp; the address is column 8 of avahi's parsable output
+	if [ $DISCOVER -eq 1 ]; then
+		if command -v avahi-browse > /dev/null; then
+			while read -r addr; do
+				[ -n "$addr" ] && HOSTS+=("$addr")
+			done < <(avahi-browse -rtp _clockwise._tcp | awk -F';' '$1 == "=" && $3 == "IPv4" { print $8 }')
+		else
+			echo "avahi-browse not found (apt install avahi-utils): name the clocks with -H instead" >&2
+		fi
+	fi
+	[ ${#HOSTS[@]} -gt 0 ] || echo "No clocks to tell"
+
+	for host in $(printf '%s\n' ${HOSTS[@]+"${HOSTS[@]}"} | sort -u); do
+		# A clock names its face in a response header of /get ("X-CW_FW_ID: 0x05")
+		id=$(curl -fsS -m 5 -D - -o /dev/null "http://$host/get" 2> /dev/null | tr -d '\r' | sed -n 's/^X-CW_FW_ID: 0x//p' || true)
+		if [ -z "$id" ]; then
+			echo "  $host did not answer"
+		elif [[ " ${FACES[*]} " != *" $id "* ]]; then
+			echo "  $host runs 0x$id, not built now: skipped"
+		elif [ $DRY -eq 1 ]; then
+			echo "  $host runs 0x$id: would be told to install it"
+		else
+			echo "Telling $host to install cw-cf-0x$id"
+			curl -fsS -m 5 -X POST "http://$host/face?id=0x$id" || echo "  $host did not respond"
 		fi
 	done
 fi

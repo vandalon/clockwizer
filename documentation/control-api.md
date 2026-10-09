@@ -95,4 +95,4 @@ Connect with `nc clockwizer.local 23` (or `telnet clockwizer.local 23`). The clo
 
 On Football and Formula 1 builds there are also test commands, see [clockfaces.md](clockfaces.md#trying-football-and-formula-1-without-a-match): `G`, `Y`, `D`, `W` on Football and `S`, `N` on Formula 1.
 
-The `1`-`F` keys install the build for that face from the clock's [firmware location](updating-firmware.md). `update-fw.sh -i` uses them to tell a clock to install the face you just published.
+The `1`-`F` keys install the build for that face from the clock's [firmware location](updating-firmware.md). `update-fw.sh -i` tells a clock to install the face you just published with `POST /face`.
