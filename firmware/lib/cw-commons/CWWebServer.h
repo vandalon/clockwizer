@@ -289,6 +289,7 @@ struct ClockwiseWebServer
       }
     } else if (method == "POST" && path == "/restart") {
       client.println("HTTP/1.0 204 No Content");
+      client.println();
       force_restart = true;
     } else if (method == "POST" && path == "/face") {
       client.println("HTTP/1.0 204 No Content");
