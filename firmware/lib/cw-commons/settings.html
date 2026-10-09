@@ -669,6 +669,11 @@
     const quietChanged = now.quiet !== orig.quiet || (now.quiet && (now.qFrom !== orig.qFrom || now.qTo !== orig.qTo));
     if (!autoChanged && !brightChanged && !brMinChanged && !restart && !f1Changed && !ballChanged && !styleChanged && !colorChanged && !pacmanChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged && !birthdaysChanged) return;
     if (now.quiet && now.qFrom === now.qTo) { toast('Choose different start and end times', 3000); return; }
+    // Checked before anything is sent: a refusal halfway would leave the settings after it unsaved
+    if (fwUrlChanged && now.fwUrl && (!/^https?:\/\//i.test(now.fwUrl) || now.fwUrl.length > 120)) {
+      toast('The location must start with http:// or https:// and be at most 120 characters', 4000);
+      return;
+    }
     saving = true;
     try {
       if (brightChanged) await set('displayBright', brRaw(now.bright));
@@ -687,10 +692,7 @@
       if (teamsChanged) await set('fbTeams', now.fbTeams);
       if (birthdaysChanged) await set('birthdays', encodeURIComponent(now.birthdays));
       if (nameChanged) { await set('clockName', encodeURIComponent(now.name)); setTitle(now.name); }
-      if (fwUrlChanged) {
-        if (now.fwUrl && !/^https?:\/\//i.test(now.fwUrl)) { toast('The location must start with http:// or https://', 4000); saving = false; return; }
-        await set('fwUrl', encodeURIComponent(now.fwUrl));
-      }
+      if (fwUrlChanged) await set('fwUrl', encodeURIComponent(now.fwUrl));
       if (quietChanged) {
         await set('updQuietFrom', now.quiet ? now.qFrom : 0);
         await set('updQuietUntil', now.quiet ? now.qTo : 0);
