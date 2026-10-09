@@ -314,7 +314,7 @@ struct ClockwiseWebServer
       ClockwiseParams::getInstance()->load();
       //a baby seal has died due this ifs
       if (key == ClockwiseParams::getInstance()->PREF_DISPLAY_BRIGHT) {
-        ClockwiseParams::getInstance()->displayBright = value.toInt();
+        ClockwiseParams::getInstance()->displayBright = constrain(value.toInt(), 0, 255);
       } else if (key == ClockwiseParams::getInstance()->PREF_DISPLAY_BRMIN) {
         ClockwiseParams::getInstance()->displayBrMin = constrain(value.toInt(), 3, 255);  // never fully dark
       } else if (key == ClockwiseParams::getInstance()->PREF_WIFI_SSID) {
