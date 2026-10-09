@@ -45,7 +45,6 @@ Clockface *clockface;
 WiFiController wifi;
 CWDateTime cwDateTime;
 
-bool autoBrightEnabled;
 bool forceRefresh;
 bool nightMode;
 bool updateInProgress = false;
@@ -194,7 +193,7 @@ void automaticBrightControl()
   snprintf(second, sizeof(second), "%02d", cwDateTime.getSecond());
   currentTimeWithSeconds = String(hour) + ":" + String(minute) + ":" + String(second);
   
-  if (ldrMin == 0 && ldrMax == 0) return;
+  if (ldrMax == 0) return;  // auto brightness is on when the bright threshold is set (see applyBrightnessSettings())
 
   uint8_t mapBright;
 
@@ -227,8 +226,7 @@ void automaticBrightControl()
 // brightness, needs the display set here.
 void applyBrightnessSettings() {
   ClockwiseParams *params = ClockwiseParams::getInstance();
-  autoBrightEnabled = (params->autoBrightMax > 0);
-  if (!autoBrightEnabled) {
+  if (params->autoBrightMax == 0) {
     nightMode = false;
     dma_display->setBrightness8(params->displayBright);
     curBright = params->displayBright;
@@ -265,8 +263,6 @@ void setup()
 
   displaySetup(ClockwiseParams::getInstance()->swapBlueGreen, ClockwiseParams::getInstance()->displayBright, ClockwiseParams::getInstance()->displayRotation);
   clockface = new Clockface(dma_display);
-
-  autoBrightEnabled = (ClockwiseParams::getInstance()->autoBrightMax > 0);
 
   ldrAverage.begin();
   automaticBrightControl();
