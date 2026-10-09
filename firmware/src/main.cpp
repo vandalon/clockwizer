@@ -910,7 +910,8 @@ void loop() {
           updateCheckDue = millis() + UPDATE_CHECK_MS;
           checkForUpdate();
         }
-        switch (TelnetStream.read()) {
+        int c = TelnetStream.read();  // -1 when nothing was typed
+        switch (c) {
           case 'R':
             TelnetStream.println(currentTimeWithSeconds + " [INFO] Restarting device...");
             esp_ota_mark_app_valid_cancel_rollback();  // asked for, so not a failed update
@@ -952,36 +953,6 @@ void loop() {
             ESP.restart();
             break;
           }
-          case '1':
-            restartForFace("0x01");
-            break;
-          case '2':
-            restartForFace("0x02");
-            break;
-          case '3':
-            restartForFace("0x03");
-            break;
-          case '4':
-            restartForFace("0x04");
-            break;
-          case '5':
-            restartForFace("0x05");
-            break;
-          case '6':
-            restartForFace("0x06");
-            break;
-          case '8':
-            restartForFace("0x08");
-            break;
-          case '9':
-            restartForFace("0x09");
-            break;
-          case 'B':
-            restartForFace("0x0B");
-            break;
-          case 'F':
-            restartForFace("0x0C");
-            break;
           case 'T':
             if (millis() < birthdayPreviewUntil) {
               birthdayPreviewUntil = 0;
@@ -1022,16 +993,8 @@ void loop() {
             TelnetStream.println("L - Toggle LDR Data");
             TelnetStream.println("U - Print uptime");
             TelnetStream.println("P - Switch panel height to " + String(ClockwiseParams::getInstance()->displayHeight == 64 ? 32 : 64) + " rows and restart");
-            TelnetStream.println("1 - Install latest 'Mario' firmware");
-            TelnetStream.println("2 - Install latest 'Time in Words' firmware");
-            TelnetStream.println("3 - Install latest 'World map' firmware");
-            TelnetStream.println("4 - Install latest 'Castlevania' firmware");
-            TelnetStream.println("5 - Install latest 'Pacman' firmware");
-            TelnetStream.println("6 - Install latest 'Pokemon' firmware");
-            TelnetStream.println("8 - Install latest 'Tetris' firmware");
-            TelnetStream.println("9 - Install latest 'Luigi' firmware");
-            TelnetStream.println("B - Install latest 'Football' firmware");
-            TelnetStream.println("F - Install latest 'Formula 1' firmware");
+            for (size_t i = 0; i < CW_FACE_COUNT; i++)
+              TelnetStream.println(String(CW_FACES[i].key) + " - Install latest '" + CW_FACES[i].name + "' firmware");
             TelnetStream.println("T - Show the birthday screen for a minute (again to stop)");
 #ifdef CW_FOOTBALL_SIM
             TelnetStream.println("S, N - Football simulator of the Formula 1 face");
@@ -1040,6 +1003,10 @@ void loop() {
             TelnetStream.println("D - Show a test red card");
             TelnetStream.println("W - Show a test substitution");
 #endif
+            break;
+          default:  // the key of a clock face (faces.json) installs it
+            for (size_t i = 0; i < CW_FACE_COUNT; i++)
+              if (CW_FACES[i].key == c) restartForFace(CW_FACES[i].id);
             break;
         }
         
