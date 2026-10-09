@@ -85,7 +85,7 @@ cd firmware
 pio test -e native          # runs on your computer
 ```
 
-There is only a placeholder test so far (`test/test_native`) and a preferences test for the board (`test/test_embedded`, not run by default). Most checking is done on a real panel.
+There is only a placeholder test so far (`test/test_native`). Most checking is done on a real panel.
 
 ## Preview tools
 
