@@ -53,7 +53,7 @@ The firmware uses the `min_spiffs` layout (two OTA slots of about 1.9 MB). The p
 
 ## The settings page
 
-The page is `firmware/lib/cw-commons/settings.html`: plain HTML, CSS and JavaScript in one file, no build tooling. A PlatformIO pre-build step (`tools/gzip_page.py`) compresses it into `SettingsWebPage.h`, which the web server sends. **Edit the `.html`, never the header.** The generated header is checked in so that a plain build works, and is rewritten whenever the page changes.
+The page is `firmware/lib/cw-commons/settings.html`: plain HTML, CSS and JavaScript in one file, no build tooling. A PlatformIO pre-build step (`tools/gzip_page.py`) compresses it into `SettingsWebPage.h`, which the web server sends. **Edit the `.html`, never the header.** The generated header is not checked in (it is in `.gitignore`); every build rewrites it when the page has changed.
 
 Adding a setting takes five places:
 1. `CWPreferences.h`: a `PREF_` name, a field, and the lines in `save()` and `load()`

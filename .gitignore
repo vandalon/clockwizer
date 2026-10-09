@@ -12,3 +12,6 @@ sdkconfig*
 
 dependencies.lock
 .DS_Store
+
+# Generated from settings.html by tools/gzip_page.py at build time
+firmware/lib/cw-commons/SettingsWebPage.h
