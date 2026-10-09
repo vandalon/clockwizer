@@ -17,6 +17,7 @@ static enum { IDLE, ANIMATING_DATE, ANIMATING_TIME } animation = IDLE;
 static unsigned long nextFrameAt = 0;
 static String pendingTimeStamp;
 static String smallDate;  // only set on 64x32 panels
+static int smallDateDay = -1;  // day smallDate was built for
 static int timePos, timePosY, colonPos, datePos, dateSepPos;
 
 uint16_t myBLACK = 0;
@@ -44,8 +45,9 @@ Clockface::Clockface(MatrixPanel_I2S_DMA* display) {
 void Clockface::setup(CWDateTime *dateTime) {
   this->_dateTime = dateTime;
   _display->fillRect(0, 0, 64, 64, 0x0000);
-  lastDate = false;
-  lastTimeStamp = false;
+  lastDate = "";
+  lastTimeStamp = "";
+  smallDateDay = -1;
   fullRefresh = true;
   animation = IDLE;
   tetris->scale = 2;
@@ -193,7 +195,10 @@ void Clockface::update()
       timePosY = 26;
       colonPos = -6;
     } else {
-      smallDate = String(day) + "-" + String(month) + "-" + String(year);
+      if (day != smallDateDay) {  // not every pass: it would churn the heap
+        smallDate = String(day) + "-" + String(month) + "-" + String(year);
+        smallDateDay = day;
+      }
       drawBottomRow(_display, smallDate);
       timePosY = 21;
       colonPos = -11;
