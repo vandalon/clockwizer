@@ -172,6 +172,17 @@ struct ClockwiseParams
 
         preferences.clear();
 
+        // The other namespaces hold a cache and the update bookkeeping: a reset starts from scratch there too
+        for (const char *name : {"f1cache", "fwupdate"})
+        {
+            Preferences other;
+            if (other.begin(name, false))
+            {
+                other.clear();
+                other.end();
+            }
+        }
+
         preferences.putBool(PREF_SWAP_BLUE_GREEN, keepSwap);
         preferences.putUInt(PREF_LDR_PIN, keepLdrPin);
         preferences.putUInt(PREF_DISPLAY_ROTATION, keepRotation);
