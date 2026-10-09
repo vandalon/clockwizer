@@ -9,11 +9,20 @@
 #   ./update-fw.sh -n -i 05     ...only list the clocks that would be told, don't touch them
 #   ./update-fw.sh -g           build + publish all clockfaces to GitHub Pages instead
 #   ./update-fw.sh -g 0B        ...or only the Football one
+#   ./update-fw.sh -h           this help
+#
+# Faces are named by the last two characters of their id (05 for 0x05); none named means all
+# of docs/faces.json. -i needs avahi-browse (avahi-utils) to find clocks; -H does not.
 #
 # Panels fetch <firmware location>/cw-cf-0xNN.bin (see updateFirmware() in
 # src/main.cpp); the location is a setting on the clock, by default the GitHub Pages site.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# The comment block at the top of this file is the help text
+usage() {
+	sed -n '2,/^set /{/^set /d;s/^# \{0,1\}//;p;}' "$0"
+}
 
 SERVER=user@192.168.1.10
 SERVER_DIR=/var/www/html/ledMatrix
@@ -38,8 +47,9 @@ while [[ "${1:-}" == -* ]]; do
 		-H) [ $# -ge 2 ] || { echo "-H needs an address" >&2; exit 1; }
 			HOSTS+=("$2"); INSTALL=1; shift ;;
 		-n) DRY=1 ;;
+		-h|--help) usage; exit 0 ;;
 		-g) GITHUB=1 ;;
-		*) echo "Unknown option $1" >&2; exit 1 ;;
+		*) echo "Unknown option $1 (try -h)" >&2; exit 1 ;;
 	esac
 	shift
 done
