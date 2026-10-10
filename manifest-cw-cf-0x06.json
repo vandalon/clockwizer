@@ -1,0 +1,27 @@
+{
+  "name": "Clockwizer Pokemon",
+  "version": "2026.10.08.1",
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        {
+          "path": "flash/bootloader.bin",
+          "offset": 4096
+        },
+        {
+          "path": "flash/partitions.bin",
+          "offset": 32768
+        },
+        {
+          "path": "flash/boot_app0.bin",
+          "offset": 57344
+        },
+        {
+          "path": "cw-cf-0x06.bin",
+          "offset": 65536
+        }
+      ]
+    }
+  ]
+}
