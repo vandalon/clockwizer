@@ -489,6 +489,7 @@ struct ClockwiseWebServer
     client.printf(HEADER_TEMPLATE_S, "CW_FW_NAME", CW_FW_NAME);
     client.printf(HEADER_TEMPLATE_S, "CLOCKFACE_NAME", CLOCKFACE_NAME);
     client.printf(HEADER_TEMPLATE_S, "CW_FW_ID", CW_FW_ID);
+    client.printf(HEADER_TEMPLATE_S, "CW_FW_MD5", ESP.getSketchMD5().c_str());
     client.println();
   }
   

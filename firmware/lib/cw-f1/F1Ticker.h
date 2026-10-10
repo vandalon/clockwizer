@@ -48,6 +48,8 @@ class F1Ticker {
       uint32_t eventId = 0, id = 0;  // ESPN's, for the times
       Row rows[ROWS];
       uint8_t count = 0;
+      uint8_t timeFails = 0;  // refreshes in a row that got no times
+      bool stale = false;     // the rows are the ones kept in flash from before the boot: nothing new downloaded yet
     };
 
     struct Standing {
@@ -73,6 +75,7 @@ class F1Ticker {
       uint8_t comingCount = 0;
       Standing standings[STANDINGS];
       uint8_t standingsCount = 0;
+      bool standingsStale = false;  // the standings are the ones kept in flash: not downloaded since the boot
       Race upcoming[UPCOMING];  // soonest first
       uint8_t upcomingCount = 0;
     };
@@ -93,6 +96,9 @@ class F1Ticker {
     unsigned long fetchStandings();
     unsigned long fetchSeason();
     void fetchTimes(Session &session, int count);
+    bool fetchOpenF1(Session &session);  // a finished practice or qualifying session's times in a few requests, from OpenF1
+    bool fetchCarNumbers(uint32_t sessionKey);  // car number to driver code, kept in flash
+    const char *carCode(int number);
     bool fetchFastest(Session &session);  // marks the driver with the fastest lap of a finished race or sprint
     bool getScan(const char *url, JsonScan::Leaf leaf, void *sink);  // streams the JSON of a download through the scanner
     void persistLive();  // the latest order and times of a session to flash
@@ -104,6 +110,19 @@ class F1Ticker {
     F1Live _live;
     uint32_t _fastestId = 0;  // the session the fastest lap was last looked up for, and when
     unsigned long _fastestAt = 0;
+    uint32_t _timedId = 0;  // the session whose times were downloaded, and how often
+    uint8_t _timedTries = 0;
+    uint8_t _liveFails = 0;
+    struct CarNumber { uint8_t number = 0; char code[4] = ""; };  // numbers stay the same all season
+    static const int CARS = 32;
+    CarNumber _cars[CARS];
+    uint8_t _carCount = 0;
+    uint32_t _carEvent = 0;  // the race weekend (ESPN's event) the numbers are from
+    bool _feedPaced = false;  // ESPN is polled slowly because the live feed is up to date
+    uint32_t _openId = 0, _openKey = 0;  // the session (ESPN's id) and its number at OpenF1
+    // When each kind of data last came in whole (UTC, 0: not yet since the boot), for the "renewed" log line
+    struct Renewed { time_t weekend = 0, times = 0, standings = 0, season = 0; const char *timesFrom = ""; } _renewed;
+    void logRenewed();
     Session _lastTimed;  // the last session once its times are in, so they are downloaded once
     // The latest live order with its times, kept in flash too: shown while no new data is there
     struct SavedRows {
@@ -114,6 +133,7 @@ class F1Ticker {
       Row rows[ROWS];
     };
     SavedRows _saved;
+    bool _savedFromFlash = false;  // _saved still holds what was in flash at the boot
     bool _savedDirty = false;
     unsigned long _savedAt = 0;
     uint32_t _delayed[8] = {};  // sessions seen delayed, so a later start time is shown as a new one

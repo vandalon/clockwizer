@@ -9,7 +9,7 @@ Replace `clockwizer.local` with the clock's IP address if your computer can't re
 | Request | What it does |
 |---------|--------------|
 | `GET /` | The settings page (gzipped HTML) |
-| `GET /get` | The current settings, as response headers named `X-<setting>`, plus `X-updateStatus`, `X-CW_FW_VERSION`, `X-CW_FW_NAME`, `X-CLOCKFACE_NAME` and `X-CW_FW_ID` |
+| `GET /get` | The current settings, as response headers named `X-<setting>`, plus `X-updateStatus`, `X-CW_FW_VERSION`, `X-CW_FW_NAME`, `X-CLOCKFACE_NAME` and `X-CW_FW_ID` and `X-CW_FW_MD5` (md5 of the running firmware) |
 | `POST /set?<setting>=<value>` | Changes one setting and saves it |
 | `POST /face?id=0x05` | Installs a clockface: `0x0B 0x0C 0x08 0x01 0x09 0x05 0x06 0x04 0x03 0x02` |
 | `POST /cmd?c=update` | Checks for a firmware update now |

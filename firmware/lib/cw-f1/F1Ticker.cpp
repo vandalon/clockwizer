@@ -14,6 +14,7 @@
 #include "JsonScan.h"
 
 static const unsigned long LIVE_REFRESH_MS = 15 * 1000UL;  // plus a request per driver for the times
+static const unsigned long LIVE_FEED_REFRESH_MS = 90 * 1000UL;  // the live feed is up to date: it has all the live view shows
 static const unsigned long WEEKEND_REFRESH_MS = 5 * 60 * 1000UL;  // between sessions
 static const unsigned long START_REFRESH_MS = 30 * 1000UL;        // a session is about to start
 static const unsigned long IDLE_REFRESH_MS = 30 * 60 * 1000UL;
@@ -30,6 +31,7 @@ static const time_t WEEKEND_TAIL_SECS = 3 * 60 * 60;  // the weekend lasts this 
 
 extern volatile bool firmwareUpdating;  // main.cpp
 extern volatile bool liveEventOn;       // main.cpp: no automatic update while true
+extern volatile bool faceBootDone;      // main.cpp: the first update check waits for the first refresh
 
 uint16_t F1Ticker::driverColor(const char *code) { return f1DriverColor(code); }
 
@@ -79,6 +81,20 @@ static int timedRows(const F1Ticker::Row *rows) {
   return n;
 }
 
+// A refresh that got no time for a driver (a request failed, or has not come back yet) keeps the time he had in the
+// same session
+static void keepTimes(F1Ticker::Session &now, const F1Ticker::Session &old) {
+  if (!now.valid || !old.valid || !now.id || now.id != old.id) return;
+  for (F1Ticker::Row &row : now.rows) {
+    if (!row.code[0] || row.time[0]) continue;
+    for (const F1Ticker::Row &before : old.rows)
+      if (before.time[0] && !strcmp(before.code, row.code)) {
+        strlcpy(row.time, before.time, sizeof(row.time));
+        break;
+      }
+  }
+}
+
 void F1Ticker::snapshot(Snapshot &out) {
   {
     std::lock_guard<std::mutex> guard(_lock);
@@ -109,6 +125,7 @@ void F1Ticker::snapshot(Snapshot &out) {
         _saved.flag = flag;
         memcpy(_saved.rows, out.live.rows, sizeof(_saved.rows));
         _savedDirty = true;
+        _savedFromFlash = false;
       }
     }
     for (int i = 0; i < ROWS; i++) {  // after the saving: these come and go within seconds
@@ -130,6 +147,8 @@ void F1Ticker::snapshot(Snapshot &out) {
           (!session->rows[0].time[0] || (session == &out.last && timedRows(_saved.rows) > timedRows(session->rows)))) {
         memcpy(session->rows, _saved.rows, sizeof(session->rows));
         session->count = _saved.count;
+        // From before the boot: shown dimmed until a download brings something new (the times, for a finished one)
+        session->stale = _savedFromFlash && (session == &out.live || !_renewed.times);
         if (session == &out.live) {
           session->flag = _saved.flag;
           if (_saved.name[0]) strlcpy(session->name, _saved.name, sizeof(session->name));
@@ -157,6 +176,11 @@ void F1Ticker::task(void *self) {
     }
     // in slices, so an update that starts meanwhile is seen within a second
     for (unsigned long left = ticker->refresh(); left > 0 && !firmwareUpdating && !f1Park;) {
+      if (ticker->_feedPaced && !ticker->_live.fresh()) {  // the live feed went quiet: back to ESPN every 15 s
+        ticker->_feedPaced = false;
+        ticker->_weekendAt = millis();
+        break;
+      }
       unsigned long slice = std::min(left, 1000UL);
       vTaskDelay(pdMS_TO_TICKS(slice));
       left -= slice;
@@ -171,7 +195,8 @@ static unsigned long until(unsigned long at) {
 }
 
 // The standings and the next race change slowly, so the last download is kept in flash: it shows right after
-// a boot and the HTTPS download only runs once it is older than its refresh time
+// a boot (the standings dimmed, as they are downloaded again at the first refresh) and the next race's HTTPS
+// download only runs once it is older than its refresh time
 void F1Ticker::loadCache() {
   _cacheLoaded = true;
   Preferences prefs;
@@ -182,16 +207,22 @@ void F1Ticker::loadCache() {
   time_t at = prefs.getUInt("standAt", 0);
   if (count > 0 && count <= STANDINGS && prefs.getBytesLength("stand") == sizeof(standings) && at && now >= at) {
     prefs.getBytes("stand", standings, sizeof(standings));
-    unsigned long age = now - at;  // seconds: in milliseconds it wraps after 49 days
     std::lock_guard<std::mutex> guard(_lock);
     for (int i = 0; i < count; i++) _snap.standings[i] = standings[i];
     _snap.standingsCount = count;
+    _snap.standingsStale = true;  // shown dimmed until the download at the first refresh
     _version++;
-    if (age < STANDINGS_REFRESH_MS / 1000) _standingsAt = millis() + (STANDINGS_REFRESH_MS / 1000 - age) * 1000UL;
   }
   if (prefs.getBytesLength("liveRows") == sizeof(_saved)) {
     std::lock_guard<std::mutex> guard(_lock);
     prefs.getBytes("liveRows", &_saved, sizeof(_saved));
+    _savedFromFlash = true;
+  }
+  if (prefs.getBytesLength("cars") == sizeof(_cars)) {
+    prefs.getBytes("cars", _cars, sizeof(_cars));
+    _carCount = prefs.getUChar("carN", 0);
+    _carEvent = prefs.getUInt("carEvent", 0);
+    if (_carCount > CARS) _carCount = 0;
   }
   Race race;
   at = prefs.getUInt("raceAt", 0);
@@ -229,6 +260,22 @@ void F1Ticker::persistLive() {
   f1log("[F1] saved the order of session %lu (%d places)\n", (unsigned long)copy.id, copy.count);
 }
 
+// "[F1] renewed: weekend 17:55:02, times 17:41:10 (OpenF1), standings 16:02:11, season 09:15:40, live feed on":
+// the local time each kind of data last came in whole, "-" when not since the boot
+void F1Ticker::logRenewed() {
+  char text[4][12];
+  const time_t at[4] = {_renewed.weekend, _renewed.times, _renewed.standings, _renewed.season};
+  for (int i = 0; i < 4; i++) {
+    if (!at[i] || !_dateTime) { strlcpy(text[i], "-", sizeof(text[i])); continue; }
+    time_t local = _dateTime->utcToLocal(at[i]);
+    struct tm t;
+    gmtime_r(&local, &t);
+    snprintf(text[i], sizeof(text[i]), "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
+  }
+  f1log("[F1] renewed: weekend %s, times %s%s%s%s, standings %s, season %s, live feed %s\n", text[0], text[1],
+        _renewed.times ? " (" : "", _renewed.timesFrom, _renewed.times ? ")" : "", text[2], text[3], _live.connected() ? "on" : "off");
+}
+
 // Does whatever download is due. Returns how long to wait before looking again.
 unsigned long F1Ticker::refresh() {
   if (WiFi.status() != WL_CONNECTED || ezt::timeStatus() != timeSet) return 10 * 1000UL;
@@ -248,6 +295,8 @@ unsigned long F1Ticker::refresh() {
   f1At("idle");
   f1log("[F1] refresh done (stack left %u, heap free %u, largest block %u)\n", (unsigned)uxTaskGetStackHighWaterMark(nullptr),
          (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  logRenewed();
+  faceBootDone = true;
   if (liveOpen && (until(_standingsAt) == 0 || until(_seasonAt) == 0)) return std::max(1000UL, std::min(until(_weekendAt), 30 * 1000UL));
   return std::max(1000UL, std::min(until(_weekendAt), std::min(until(_standingsAt), until(_seasonAt))));
 }
@@ -496,6 +545,8 @@ unsigned long F1Ticker::fetchWeekend() {
 
   {
     std::lock_guard<std::mutex> guard(_lock);
+    keepTimes(snap.live, _snap.live);
+    keepTimes(snap.last, _snap.last);
     _snap.weekend = snap.weekend;
     strlcpy(_snap.circuit, scan.circuit, sizeof(_snap.circuit));
     _snap.live = snap.live;
@@ -514,13 +565,17 @@ unsigned long F1Ticker::fetchWeekend() {
   bool timed = false;
   if (snap.live.valid && !_live.fresh() && !_live.connected()) {  // the live feed has them otherwise
     fetchTimes(snap.live, TIMED);
+    _liveFails = snap.live.timeFails ? (_liveFails < 255 ? _liveFails + 1 : 255) : 0;  // refreshes in a row without times
+    snap.live.timeFails = _liveFails;
     timed = true;
   }
   if (snap.last.valid) {
     if (_lastTimed.valid && _lastTimed.id == snap.last.id) {
       snap.last = _lastTimed;
     } else {
-      fetchTimes(snap.last, ROWS);  // everyone: the result lists show them all
+      // Everyone: the result lists show them all. Practice and qualifying come in a few requests from OpenF1, the rest
+      // (or when it has nothing yet) one request per driver from ESPN
+      if (!((snap.last.tag == 'P' || snap.last.tag == 'Q') && fetchOpenF1(snap.last))) fetchTimes(snap.last, ROWS);
       {
         // The live feed knew who had the fastest lap of a race; Jolpica only has it hours later
         std::lock_guard<std::mutex> guard(_lock);
@@ -530,8 +585,18 @@ unsigned long F1Ticker::fetchWeekend() {
               for (Row &row : snap.last.rows)
                 if (!strcmp(row.code, old.code)) row.fastest = true;
       }
+      {
+        std::lock_guard<std::mutex> guard(_lock);
+        keepTimes(snap.last, _snap.last);
+      }
       if (snap.last.rows[0].time[0]) {
-        _lastTimed = snap.last;
+        // Downloaded again, a few times at most, while a driver has no time: one failed request must not stay
+        bool complete = !snap.last.timeFails;
+        if (_timedId != snap.last.id) { _timedId = snap.last.id; _timedTries = 0; }
+        bool giveUp = !complete && ++_timedTries >= 3;
+        f1log("[F1] times %s: %s, try %d, fails %d\n", snap.last.name, complete ? "complete" : "a download failed", _timedTries, snap.last.timeFails);
+        snap.last.timeFails = complete ? 0 : giveUp ? 255 : _timedTries;  // 2 or more: the dot turns red
+        if (complete || giveUp) _lastTimed = snap.last;
         // Keep the final result for the next boot: the saved order is otherwise the live feed's older one
         std::lock_guard<std::mutex> guard(_lock);
         _saved.id = snap.last.id;
@@ -557,6 +622,8 @@ unsigned long F1Ticker::fetchWeekend() {
   // seconds the requests above take, on every refresh
   {
     std::lock_guard<std::mutex> guard(_lock);
+    keepTimes(snap.live, _snap.live);
+    keepTimes(snap.last, _snap.last);
     _snap.weekend = snap.weekend;
     _snap.live = snap.live;
     _snap.last = snap.last;
@@ -564,14 +631,22 @@ unsigned long F1Ticker::fetchWeekend() {
     _version++;
   }
 
+  _renewed.weekend = ezt::now();
+
   // Be there when the next session starts
   unsigned long wait = IDLE_REFRESH_MS;
+  // While the live feed is up to date ESPN is only needed for the session's end and what comes next; the task
+  // looks again at once when the feed goes quiet (see task())
+  _feedPaced = snap.live.valid && _live.connected() && _live.fresh();
+  if (_feedPaced) return LIVE_FEED_REFRESH_MS;
   if (snap.live.valid) return LIVE_REFRESH_MS;
   if (snap.weekend) wait = WEEKEND_REFRESH_MS;
   if (nextDate > nowUtc) {
     time_t left = nextDate - nowUtc;
     wait = left < 15 * 60 ? START_REFRESH_MS : std::min(wait, (unsigned long)(left - 14 * 60) * 1000UL);
   }
+  if (snap.last.valid && snap.last.timeFails && !(_lastTimed.valid && _lastTimed.id == snap.last.id)) wait = std::min(wait, 30000UL);  // a driver's time is missing: try again soon
+  f1log("[F1] next refresh in %lu s\n", wait / 1000);
   if (scan.anyDelayed) wait = std::min(wait, START_REFRESH_MS * 4);  // look for the new start time
   return wait;
 }
@@ -618,17 +693,19 @@ unsigned long F1Ticker::fetchStandings() {
   uint8_t count = scan.count;
   f1log("[F1] standings: %d drivers, leader %s\n", count, count ? standings[0].code : "-");
   if (count == 0) return RETRY_MS;
+  _renewed.standings = ezt::now();
 
   {
     std::lock_guard<std::mutex> guard(_lock);
     for (int i = 0; i < count; i++) _snap.standings[i] = standings[i];
     _snap.standingsCount = count;
+    _snap.standingsStale = false;
     _version++;
   }
   // Flash writes are slow: not while the display thread waits for the lock
   Preferences prefs;
   if (prefs.begin("f1cache", false)) {
-    prefs.putBytes("stand", standings, sizeof(standings));
+    prefs.putBytes("stand", standings, sizeof(scan.standings));  // the whole array: standings is a pointer
     prefs.putUChar("standN", count);
     prefs.putUInt("standAt", ezt::now());
     prefs.end();
@@ -704,6 +781,7 @@ void F1Ticker::fetchTimes(Session &session, int count) {
   f1At("fetch times");
   if (!session.id || !session.eventId) return;
   long ms[ROWS];
+  bool failed = false;  // a request did not get through: not the same as an answer without a time
   char leader[12] = "";  // the first place's own text, "1:35.130"
   for (int i = 0; i < ROWS; i++) ms[i] = -1;
   for (int i = 0; i < count && i < ROWS; i++) {
@@ -713,7 +791,7 @@ void F1Ticker::fetchTimes(Session &session, int count) {
              "http://sports.core.api.espn.com/v2/sports/racing/leagues/f1/events/%lu/competitions/%lu/competitors/%lu/statistics/0",
              (unsigned long)session.eventId, (unsigned long)session.id, (unsigned long)session.rows[i].athleteId);
     TimesScan scan;
-    if (!getScan(url, TimesScan::leaf, &scan)) continue;
+    if (!getScan(url, TimesScan::leaf, &scan)) { failed = true; continue; }
     scan.flush();
     if (!scan.have) continue;
     ms[i] = parseTimeMs(scan.total);
@@ -721,6 +799,8 @@ void F1Ticker::fetchTimes(Session &session, int count) {
   }
 
   bool race = session.tag == 'R' || session.tag == 'S';
+  session.timeFails = failed ? 1 : 0;
+  if (!failed && ms[0] >= 0) _renewed.times = ezt::now(), _renewed.timesFrom = "ESPN";
   if (ms[0] >= 0) {
     strlcpy(session.rows[0].time, race ? (session.live ? "LEAD" : "WINNER") : leader, sizeof(session.rows[0].time));
     for (int i = 1; i < count && i < ROWS; i++) {
@@ -730,6 +810,142 @@ void F1Ticker::fetchTimes(Session &session, int count) {
     }
   }
   f1log("[F1] times %s: leader %ld ms\n", session.name, ms[0]);
+}
+
+// OpenF1's session result: per driver the car number and the lap time(s): three entries (Q1, Q2, Q3) in qualifying,
+// one number otherwise. The best is the last that is not null.
+struct ResultScan {
+  static const int N = F1Ticker::ROWS;
+  int count = 0;
+  int number[N];
+  long best[N];
+  ResultScan() { for (int i = 0; i < N; i++) number[i] = 0, best[i] = -1; }
+
+  static void leaf(void *sink, const char (*p)[JsonScan::KEY], int n, const char *v, bool text) {
+    ResultScan &r = *(ResultScan *)sink;
+    if (n < 2 || n > 3) return;
+    int i = atoi(p[0]);
+    if (i < 0 || i >= N) return;
+    if (n == 2 && !strcmp(p[1], "driver_number")) {
+      r.number[i] = atoi(v);
+      if (i + 1 > r.count) r.count = i + 1;
+    } else if (!strcmp(p[1], "duration") && !text && strcmp(v, "null")) {
+      r.best[i] = lroundf(atof(v) * 1000);
+    }
+  }
+};
+
+struct NumbersScan {
+  static const int N = 32;
+  int count = 0;
+  int number[N];
+  char code[N][4];
+  NumbersScan() { for (int i = 0; i < N; i++) number[i] = 0, code[i][0] = 0; }
+
+  static void leaf(void *sink, const char (*p)[JsonScan::KEY], int n, const char *v, bool) {
+    NumbersScan &r = *(NumbersScan *)sink;
+    if (n != 2) return;
+    int i = atoi(p[0]);
+    if (i < 0 || i >= N) return;
+    if (!strcmp(p[1], "driver_number")) {
+      r.number[i] = atoi(v);
+      if (i + 1 > r.count) r.count = i + 1;
+    } else if (!strcmp(p[1], "name_acronym")) {
+      strlcpy(r.code[i], v, sizeof(r.code[i]));
+    }
+  }
+};
+
+struct OpenSessionScan {
+  uint32_t key = 0;
+  static void leaf(void *sink, const char (*p)[JsonScan::KEY], int n, const char *v, bool) {
+    OpenSessionScan &s = *(OpenSessionScan *)sink;
+    if (!s.key && n == 2 && !strcmp(p[0], "0") && !strcmp(p[1], "session_key")) s.key = strtoul(v, nullptr, 10);
+  }
+};
+
+// The car numbers come from OpenF1 and are kept in flash: asked for again each race weekend (a reserve driver can stand in)
+// and for a number that is not known yet
+const char *F1Ticker::carCode(int number) {
+  for (int i = 0; i < _carCount; i++)
+    if (_cars[i].number == number) return _cars[i].code;
+  return nullptr;
+}
+
+bool F1Ticker::fetchCarNumbers(uint32_t sessionKey) {
+  char url[96];
+  snprintf(url, sizeof(url), "https://api.openf1.org/v1/drivers?session_key=%lu", (unsigned long)sessionKey);
+  NumbersScan scan;
+  if (!getScan(url, NumbersScan::leaf, &scan) || !scan.count) return false;
+  for (int i = 0; i < scan.count; i++) {
+    if (!scan.number[i] || !scan.code[i][0]) continue;
+    CarNumber *car = nullptr;
+    for (int k = 0; k < _carCount && !car; k++)
+      if (_cars[k].number == scan.number[i]) car = &_cars[k];
+    if (!car && _carCount < CARS) car = &_cars[_carCount++];
+    if (!car) continue;
+    car->number = scan.number[i];
+    strlcpy(car->code, scan.code[i], sizeof(car->code));
+  }
+  Preferences prefs;
+  if (prefs.begin("f1cache", false)) {
+    prefs.putBytes("cars", _cars, sizeof(_cars));
+    prefs.putUChar("carN", _carCount);
+    prefs.putUInt("carEvent", _carEvent);
+    prefs.end();
+  }
+  f1log("[F1] %d car numbers from OpenF1\n", _carCount);
+  return true;
+}
+
+// The times of a finished practice or qualifying session from OpenF1: the session, its result and, once, the
+// drivers' car numbers. False when it has nothing for this session (yet) or a request fails: ESPN then goes driver by driver.
+bool F1Ticker::fetchOpenF1(Session &session) {
+  f1At("fetch OpenF1");
+  if (!session.id || !session.start) return false;
+  if (_openId != session.id) {
+    struct tm lo, hi;
+    time_t from = session.start - 40 * 60, to = session.start + 40 * 60;
+    gmtime_r(&from, &lo);
+    gmtime_r(&to, &hi);
+    char url[160];
+    snprintf(url, sizeof(url), "https://api.openf1.org/v1/sessions?date_start>=%04d-%02d-%02dT%02d:%02d:%02d&date_start<=%04d-%02d-%02dT%02d:%02d:%02d",
+             lo.tm_year + 1900, lo.tm_mon + 1, lo.tm_mday, lo.tm_hour, lo.tm_min, lo.tm_sec,
+             hi.tm_year + 1900, hi.tm_mon + 1, hi.tm_mday, hi.tm_hour, hi.tm_min, hi.tm_sec);
+    OpenSessionScan found;
+    if (!getScan(url, OpenSessionScan::leaf, &found)) return false;
+    if (!found.key) return false;
+    _openId = session.id;
+    _openKey = found.key;
+  }
+  char url[96];
+  snprintf(url, sizeof(url), "https://api.openf1.org/v1/session_result?session_key=%lu", (unsigned long)_openKey);
+  ResultScan result;
+  if (!getScan(url, ResultScan::leaf, &result) || !result.count) return false;
+  if (_carEvent != session.eventId) _carCount = 0;  // a new race weekend: this weekend's drivers, a reserve can stand in
+  bool known = true;
+  for (int i = 0; i < result.count && known; i++) known = !result.number[i] || carCode(result.number[i]);
+  if (!known) {
+    _carEvent = session.eventId;  // saved with the numbers
+    if (!fetchCarNumbers(_openKey)) return false;
+  }
+
+  long ms[ROWS];
+  for (int i = 0; i < ROWS; i++) ms[i] = -1;
+  for (int r = 0; r < result.count; r++) {
+    const char *code = carCode(result.number[r]);
+    if (!code || result.best[r] < 0) continue;
+    for (int i = 0; i < ROWS; i++)
+      if (!strcmp(session.rows[i].code, code)) ms[i] = result.best[r];
+  }
+  if (ms[0] < 0) return false;  // ESPN's order and OpenF1's do not agree on who is first: not usable
+  snprintf(session.rows[0].time, sizeof(session.rows[0].time), "%ld:%02ld.%03ld", ms[0] / 60000, ms[0] / 1000 % 60, ms[0] % 1000);
+  for (int i = 1; i < ROWS; i++)
+    if (ms[i] >= ms[0]) formatGap(session.rows[i].time, sizeof(session.rows[i].time), ms[i] - ms[0]);
+  session.timeFails = 0;
+  _renewed.times = ezt::now(), _renewed.timesFrom = "OpenF1";
+  f1log("[F1] times %s from OpenF1: leader %ld ms\n", session.name, ms[0]);
+  return true;
 }
 
 // The results of the last race (or sprint) from Jolpica: the driver whose fastest lap has rank 1
@@ -831,6 +1047,7 @@ unsigned long F1Ticker::fetchSeason() {
   upcoming.start = parseEspnDate(start);  // "2026-10-09T08:30:00Z" reads the same way
   f1log("[F1] next race: %s\n", upcoming.city);
   if (!upcoming.city[0] || !upcoming.start) return RETRY_MS;
+  _renewed.season = ezt::now();
 
   {
     std::lock_guard<std::mutex> guard(_lock);
@@ -861,6 +1078,19 @@ bool F1Ticker::getScan(const char *url, JsonScan::Leaf leaf, void *sink) {
   http.setTimeout(10000);
   if (!http.begin(client, url)) return false;
   int code = http.GET();
+  bool mdnsOff = false;  // started again when this returns, as the live feed does
+  struct MdnsBack { bool &off; ~MdnsBack() { if (off && f1PauseMdns) f1PauseMdns(false); } } mdnsBack{mdnsOff};
+  if (code < 0 && secure) {  // no connection, mostly a handshake that ran out of memory: once more, with mDNS stopped for its memory
+    f1log("[F1] %s: HTTP %d, trying again without mDNS (largest block %u)\n", url, code, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    http.end();
+    if (f1PauseMdns) {
+      f1PauseMdns(true);
+      mdnsOff = true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000));  // its task frees its stack, the failed handshake its memory
+    if (!http.begin(client, url)) return false;
+    code = http.GET();
+  }
   if (code != HTTP_CODE_OK) {
     f1log("[F1] %s: HTTP %d\n", url, code);
     http.end();

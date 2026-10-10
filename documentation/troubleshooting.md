@@ -45,6 +45,7 @@ The clock must know the number of rows of the panel (64 or 32). The Tetris face 
 - Check *Competitions to follow* and *Favourite teams* on the settings page; with nothing selected there is nothing to show.
 - Only matches ESPN lists for today are shown.
 - *Show a finished match for* may be set low; results disappear after that time.
+- These faces need a good amount of free memory on the ESP32 for the HTTPS downloads. If it runs low the data fail to load or the live feed drops. Send `U` over telnet to see the free memory, and look for `heap free` in the `[F1]` log lines.
 
 ## Updates
 

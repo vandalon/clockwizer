@@ -7,6 +7,7 @@
 #   ./update-fw.sh -H 192.168.1.50 05   ...the same for one clock by address (repeat -H for more; also
 #                               works when mDNS doesn't reach the clock)
 #   ./update-fw.sh -n -i 05     ...only list the clocks that would be told, don't touch them
+#                               (clocks already running the same build are skipped)
 #   ./update-fw.sh -g           build + publish all clockfaces to GitHub Pages instead
 #   ./update-fw.sh -g 0B        ...or only the Football one
 #   ./update-fw.sh -h           this help
@@ -191,11 +192,16 @@ if [ $INSTALL -eq 1 ]; then
 
 	for host in $(printf '%s\n' ${HOSTS[@]+"${HOSTS[@]}"} | sort -u); do
 		# A clock names its face in a response header of /get ("X-CW_FW_ID: 0x05")
-		id=$(curl -fsS -m 5 -D - -o /dev/null "http://$host/get" 2> /dev/null | tr -d '\r' | sed -n 's/^X-CW_FW_ID: 0x//p' || true)
+		headers=$(curl -fsS -m 5 -D - -o /dev/null "http://$host/get" 2> /dev/null | tr -d '\r' || true)
+		id=$(sed -n 's/^X-CW_FW_ID: 0x//p' <<< "$headers")
+		# ...and its running firmware's md5 ("X-CW_FW_MD5"; older firmware lacks it and is always updated)
+		running=$(sed -n 's/^X-CW_FW_MD5: //p' <<< "$headers")
 		if [ -z "$id" ]; then
 			echo "  $host did not answer"
 		elif [[ " ${FACES[*]} " != *" $id "* ]]; then
 			echo "  $host runs 0x$id, not built now: skipped"
+		elif [ -n "$running" ] && [ "$running" = "$(cat "$STAGE/cw-cf-0x$id.md5")" ]; then
+			echo "  $host runs 0x$id, already this build: skipped"
 		elif [ $DRY -eq 1 ]; then
 			echo "  $host runs 0x$id: would be told to install it"
 		else

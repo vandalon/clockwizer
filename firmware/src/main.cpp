@@ -51,12 +51,16 @@ bool forceRefresh;
 bool nightMode;
 bool updateInProgress = false;
 volatile bool liveEventOn = false;      // set by the football/F1 tickers while a match or session is live: no automatic update then
+volatile bool faceBootDone = false;     // set by a clockface once its downloads after the boot are done: the first update check waits for it
 volatile bool firmwareUpdating = false;  // from the start of a firmware update: the football downloads wait (FootballTicker)
 bool logLDR = false;
 int64_t lastNow;
 int64_t ldrCheckDue = 0;
 int64_t loopDue = 0;
-unsigned long updateCheckDue = 30000; // first check 30s after boot, then daily; compared wrap-safe
+unsigned long updateCheckDue = 30000; // first check 30s after boot and once the clockface's boot downloads are done, then daily; compared wrap-safe
+#define FACE_BOOT_WAIT_MS 300000  // a clockface that never says its boot downloads are done: the first check runs after this
+static String md5Failure;  // why the last md5 fetch failed, for the log (a 404 on the per-panel file is overwritten by the shared one)
+static String md5Result;  // written by the task before it sets MD5_DONE
 #define UPDATE_CHECK_MS 86400000
 #define UPDATE_MAX_TRIES 3        // failed downloads per build before giving up
 #define UPDATE_MAX_RESTARTS 2     // restarts in a row for the same update before giving up
@@ -253,6 +257,10 @@ void setup()
 {
   Serial.begin(115200);
   pinMode(ESP32_LED_BUILTIN, INPUT);
+  // Filled in by the update check's task while its stack holds the heap: reserved now, so they don't land
+  // in the middle of the free heap and split it once the task is gone (String keeps a big enough buffer)
+  md5Result.reserve(32);
+  md5Failure.reserve(384);
   crashGuard();
   f1PauseMdns = [](bool pause) { ClockwiseWebServer::getInstance()->pauseMdns(pause); };
 
@@ -486,7 +494,6 @@ void updateFirmware( String id ) {
   }
 }
 
-static String md5Failure;  // why the last md5 fetch failed, for the log (a 404 on the per-panel file is overwritten by the shared one)
 
 // Fetch the md5 that update-fw.sh publishes next to each firmware image.
 // reachable is false when the server could not be connected to at all.
@@ -552,7 +559,6 @@ static String fetchLatestMd5() {
 // its own task and the main loop, which animates the clockface, just polls for the result.
 enum Md5Fetch { MD5_IDLE, MD5_RUNNING, MD5_DONE };
 static volatile Md5Fetch md5Fetch = MD5_IDLE;
-static String md5Result;               // written by the task before it sets MD5_DONE
 static bool md5ForValidation = false;  // what the running fetch is for: proving a new build, or an update check
 static bool md5IgnoreSkips = false;
 static bool checkPending = false;      // an update check was asked for and waits for the fetch task
@@ -928,7 +934,8 @@ void loop() {
         ezt::events();
         // Daily update check, not in the quiet hours and not during a live match or session. The timer
         // only advances when it runs, so a check that comes due during them happens when they end.
-        if ((long)(millis() - updateCheckDue) >= 0 && fwValidated && updateInProgress == false && !liveEventOn && !inUpdateQuietHours()) {
+        // The first check waits until the clockface has its data: its TLS handshakes need the whole heap
+        if ((long)(millis() - updateCheckDue) >= 0 && (faceBootDone || millis() > FACE_BOOT_WAIT_MS) && fwValidated && updateInProgress == false && !liveEventOn && !inUpdateQuietHours()) {
           updateCheckDue = millis() + UPDATE_CHECK_MS;
           checkForUpdate();
         }

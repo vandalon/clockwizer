@@ -42,6 +42,8 @@ Switch a panel between 64 and 32 rows with the telnet command `P` or the `displa
 
 ## Football (`0x0B`)
 
+> **Warning: memory.** Football, Formula 1 and the Tetris ticker download data over HTTPS (and Formula 1 also keeps a live-timing connection open), which needs a good amount of free RAM on the ESP32. A bare ESP32 module with little free memory can run out and show only the clock, drop the live feed or restart. Send `U` over telnet to see the free memory, and see [troubleshooting](troubleshooting.md#football-or-formula-1-shows-no-matches).
+
 Football as two clocks, depending on what is on.
 
 **While something is on, the live view:**
@@ -59,6 +61,8 @@ Without a live match the same view shows results: a favourite's, otherwise the l
 Which competitions and teams are followed, and how long results stay, is set on the settings page. The defaults are the Dutch Eredivisie and KNVB Cup and the Netherlands national team; change them on the settings page. The catalogue of competitions and teams is generated from ESPN's data by `firmware/tools/football-catalog/generate.py`.
 
 ## Formula 1 (`0x0C`)
+
+> **Warning: memory.** Football, Formula 1 and the Tetris ticker download data over HTTPS (and Formula 1 also keeps a live-timing connection open), which needs a good amount of free RAM on the ESP32. A bare ESP32 module with little free memory can run out and show only the clock, drop the live feed or restart. Send `U` over telnet to see the free memory, and see [troubleshooting](troubleshooting.md#football-or-formula-1-shows-no-matches).
 
 Three screens:
 

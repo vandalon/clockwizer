@@ -34,25 +34,33 @@ static uint32_t resultWindowSecs() { return ClockwiseParams::getInstance()->resu
 static bool shortPanel() { return ClockwiseParams::getInstance()->displayHeight == 32; }
 
 static constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); }
+// The dimmest a colour channel can be and still light up. The display shows the top CW_PIXEL_DEPTH_BITS bits of the
+// gamma-corrected 16-bit value: from 40 with 6 bits (level 1 of 64), from 56 with 5 (level 1 of 32, twice as bright)
+#if defined(CW_PIXEL_DEPTH_BITS) && CW_PIXEL_DEPTH_BITS <= 5
+static const uint8_t MIN_LIT = 56;
+#else
+static const uint8_t MIN_LIT = 40;
+#endif
 
 static const uint16_t WHITE = rgb(255, 255, 255);
 static const uint16_t CLOCK = rgb(238, 246, 240);
 static const uint16_t MINUTES = rgb(190, 235, 150);
 static const uint16_t GREY = rgb(150, 150, 160);
+static const uint16_t TIME_GREY = rgb(178, 178, 188);  // the times of the places after the first, brighter than the rest of the grey
 static const uint16_t SESSION_NAME = rgb(78, 82, 92);
 static const uint16_t DIMMED = rgb(110, 116, 126);
 static const uint16_t DELAYED = rgb(255, 150, 0);   // a session that has not started on time
 static const uint16_t NEW_TIME = rgb(80, 205, 255);  // its new start time
 static const uint16_t GOLD = rgb(255, 214, 0);
 static const uint16_t F1_RED = rgb(225, 6, 0);
-static const uint16_t HEADER_NAVY = rgb(14, 22, 52);  // the header bar: dark, with a small coloured tab on its left edge
+static const uint16_t HEADER_NAVY = rgb(14, 22, MIN_LIT > 52 ? MIN_LIT : 52);  // the header bar: dark, with a small coloured tab on its left edge
 static const uint16_t TAB_QUIET = rgb(90, 110, 150);  // the tab when it is not a race or qualifying
 static const uint16_t RED_FLAG_BAR = rgb(150, 8, 6);
-static const uint16_t LINE = rgb(40, 44, 52);
+static const uint16_t LINE = rgb(MIN_LIT, MIN_LIT + 4, MIN_LIT + 12);
 static const uint16_t RULE = rgb(80, 85, 96);  // the two lines of the tall idle screen: lighter, to stand out from the squares
 static const uint16_t BLACK = 0;
-static const uint16_t FLAG_TILE = rgb(40, 40, 40);  // the squares of the chequered flag, dim. The display has 64 brightness levels per
-                                                      // colour and this is level 1 on all three; (38, 38, 40) was 0, 1, 1: cyan
+static const uint16_t FLAG_TILE = rgb(MIN_LIT, MIN_LIT, MIN_LIT);  // the squares of the chequered flag, dim: level 1 on all three
+                                                                  // colours (one of them a level lower turns the grey cyan)
 static const uint16_t TRACK_LINE = rgb(48, 78, 150);
 
 // 3x5 font, one row per byte, bit 2 = left pixel
@@ -253,11 +261,11 @@ static void drawTimeRight(MatrixPanel_I2S_DMA *d, const char *s, int right, int 
   }
 }
 
-// The colon of the current time breathes: a fade between a third and full brightness, in 32 steps (a frame is 50 ms)
+// The colon of the current time breathes: a fade between off and full brightness, in 32 steps (a frame is 50 ms)
 static const unsigned long PULSE_MS = 2000;
 static int pulseLevel() { return (int)roundf((0.5f - 0.5f * cosf((millis() % PULSE_MS) * 6.2831853f / PULSE_MS)) * 31); }
 static uint16_t pulsed(uint16_t color) {
-  int f = 85 + pulseLevel() * 170 / 31;  // out of 255
+  int f = pulseLevel() * 255 / 31;  // out of 255
   int r = (color >> 11 & 31) * f / 255, g = (color >> 5 & 63) * f / 255, b = (color & 31) * f / 255;
   return r << 11 | g << 5 | b;
 }
@@ -366,93 +374,137 @@ static int headerTextWidth(const char *s) {
   }
   return w ? w - 1 : 0;
 }
-static void drawHeaderMixed(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16_t color) {
+// pulseColon: the text is the time of day, whose colon breathes like the clock's
+static void drawHeaderMixed(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16_t color, bool pulseColon = false) {
   for (; *s; s++) {
     char one[2] = {*s, 0};
     if (*s >= '0' && *s <= '9') {
       drawStretchedDigits(d, one, x, y, color);
       x += 5;
     } else {
-      drawNarrowText(d, one, x, y, color);
+      drawNarrowText(d, one, x, y, pulseColon && *s == ':' ? pulsed(color) : color);
       x += headerTextWidth(one) + 1;
     }
   }
 }
-static void drawHeader(MatrixPanel_I2S_DMA *d, const char *left, const char *right, uint16_t fill, uint16_t ink, uint16_t tab = 0) {
+// While the times are still to come, a dot sits at the far right of the header and the text moves left to make room
+static int dotShift = 0;
+
+static void drawHeader(MatrixPanel_I2S_DMA *d, const char *left, const char *right, uint16_t fill, uint16_t ink, uint16_t tab = 0, uint16_t rightInk = 0, bool rightTime = false) {
+  if (!rightInk) rightInk = ink;
   int h = shortPanel() ? 8 : 9;
   d->fillRect(0, 0, W, h, fill);
   if (tab) d->fillRect(0, 0, 2, h, tab);
   int x = tab ? 4 : 2;
-  if (x + headerTextWidth(left) + 3 + headerTextWidth(right) + 2 <= W) {
+  if (x + headerTextWidth(left) + 3 + headerTextWidth(right) + 2 + dotShift <= W) {
     drawHeaderMixed(d, left, x, 1, ink);
-    drawHeaderMixed(d, right, W - 2 - headerTextWidth(right), 1, ink);
+    drawHeaderMixed(d, right, W - 2 - dotShift - headerTextWidth(right), 1, rightInk, rightTime);
   } else {
     drawHeaderText(d, left, x, 1, ink);
-    drawHeaderText(d, right, W - 2 - textWidth(right), 1, ink);
+    drawHeaderText(d, right, W - 2 - dotShift - textWidth(right), 1, rightInk);
   }
+}
+
+// A dot after the session's name while the times are still to come: pulsing slowly, red and still when several
+// downloads in a row got none
+// A live session: a small green dot after its name, breathing
+static void drawLiveDot(MatrixPanel_I2S_DMA *d, const char *name, bool tab) {
+  d->fillRect((tab ? 4 : 2) + headerTextWidth(name) + 3, 3, 2, 2, pulsed(rgb(60, 230, 90)));
+}
+
+// Downloads for the times failed more than once: a red stripe at the far right of the header, like the tab on the left
+static bool timesFailed(const F1Ticker::Session &s) { return s.valid && s.timeFails >= 2; }
+
+static void drawWaitDot(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s) {
+  if (timesFailed(s)) d->fillRect(W - 2, 0, 2, shortPanel() ? 8 : 9, F1_RED);
 }
 
 // ---- The clock on the tall panel: the lap-time digits blown up ----
 
 // Each pixel of a digit is 0..32: how much of it the letter covers. Less than SoftEdge.lo is nothing, more than
 // SoftEdge.hi all of the colour, in between a part of it: the soft edge of the curves.
-struct GlyphSet { int w, h; const uint8_t *pixels; };
-// The clock's digits are the 3x5 lap-time ones blown up to 10 x 18 pixels (about the same shape, strokes and bars 3 thick),
-// but for the 1: that is drawn by hand
-static uint8_t CLOCK_PIXELS[10 * 18 * 10];
-static const GlyphSet CLOCK_GLYPHS = {10, 18, CLOCK_PIXELS};
-// The same, 13 x 23, for the main screen outside a race weekend, which has room for it
-static uint8_t BIG_PIXELS[10 * 23 * 13];
-static const GlyphSet BIG_GLYPHS = {13, 23, BIG_PIXELS};
+// The clock's digits are the 3x5 lap-time ones built at 10 x 18 pixels (about the same shape, strokes and bars 3 thick:
+// each pixel of the 3x5 digit a bar or stem of that thickness, neighbouring ones joined), but for the 1: that is drawn by
+// hand. The same at 13 x 23 (strokes 4 thick) for the main screen outside a race weekend, which has room for it.
+// Kept as constants so they stay in flash, not in RAM.
+struct GlyphSet { int w, h; const char *const *rows; };
+static const char *const CLOCK_ROWS[10 * 18] = {
+  "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXX....XXX", "XXX....XXX", "XXX....XXX",
+  "XXX....XXX", "XXX....XXX", "XXX....XXX", "XXX....XXX", "XXX....XXX", "XXX....XXX",
+  "XXX....XXX", "XXX....XXX", "XXX....XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX",  // 0
+  "....XXX...", "...XXXX...", "..XXXXX...", ".XX.XXX...", ".X..XXX...", "....XXX...",
+  "....XXX...", "....XXX...", "....XXX...", "....XXX...", "....XXX...", "....XXX...",
+  "....XXX...", "....XXX...", "....XXX...", ".XXXXXXXXX", ".XXXXXXXXX", ".XXXXXXXXX",  // 1
+  "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", ".......XXX", ".......XXX", ".......XXX",
+  ".......XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXX.......", "XXX.......",
+  "XXX.......", "XXX.......", "XXX.......", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX",  // 2
+  "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", ".......XXX", ".......XXX", ".......XXX",
+  ".......XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", ".......XXX", ".......XXX",
+  ".......XXX", ".......XXX", ".......XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX",  // 3
+  "XXX....XXX", "XXX....XXX", "XXX....XXX", "XXX....XXX", "XXX....XXX", "XXX....XXX",
+  "XXX....XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", ".......XXX", ".......XXX",
+  ".......XXX", ".......XXX", ".......XXX", ".......XXX", ".......XXX", ".......XXX",  // 4
+  "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXX.......", "XXX.......", "XXX.......",
+  "XXX.......", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", ".......XXX", ".......XXX",
+  ".......XXX", ".......XXX", ".......XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX",  // 5
+  "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXX.......", "XXX.......", "XXX.......",
+  "XXX.......", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXX....XXX", "XXX....XXX",
+  "XXX....XXX", "XXX....XXX", "XXX....XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX",  // 6
+  "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", ".......XXX", ".......XXX", ".......XXX",
+  ".......XXX", ".......XXX", ".......XXX", ".......XXX", ".......XXX", ".......XXX",
+  ".......XXX", ".......XXX", ".......XXX", ".......XXX", ".......XXX", ".......XXX",  // 7
+  "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXX....XXX", "XXX....XXX", "XXX....XXX",
+  "XXX....XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXX....XXX", "XXX....XXX",
+  "XXX....XXX", "XXX....XXX", "XXX....XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX",  // 8
+  "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXX....XXX", "XXX....XXX", "XXX....XXX",
+  "XXX....XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX", ".......XXX", ".......XXX",
+  ".......XXX", ".......XXX", ".......XXX", "XXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX",  // 9
+};
+static const char *const BIG_ROWS[10 * 23] = {
+  "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXX.....XXXX", "XXXX.....XXXX",
+  "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX",
+  "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX",
+  "XXXX.....XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",  // 0
+  ".....XXXX....", "....XXXXX....", "...XXXXXX....", "..XXXXXXX....", ".XXX.XXXX....", ".XX..XXXX....",
+  ".X...XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....",
+  ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....",
+  ".....XXXX....", ".XXXXXXXXXXXX", ".XXXXXXXXXXXX", ".XXXXXXXXXXXX", ".XXXXXXXXXXXX",  // 1
+  "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", ".........XXXX", ".........XXXX",
+  ".........XXXX", ".........XXXX", ".........XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",
+  "XXXXXXXXXXXXX", "XXXX.........", "XXXX.........", "XXXX.........", "XXXX.........", "XXXX.........",
+  "XXXX.........", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",  // 2
+  "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", ".........XXXX", ".........XXXX",
+  ".........XXXX", ".........XXXX", ".........XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",
+  "XXXXXXXXXXXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX",
+  ".........XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",  // 3
+  "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX",
+  "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",
+  "XXXXXXXXXXXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX",
+  ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX",  // 4
+  "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXX.........", "XXXX.........",
+  "XXXX.........", "XXXX.........", "XXXX.........", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",
+  "XXXXXXXXXXXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX",
+  ".........XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",  // 5
+  "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXX.........", "XXXX.........",
+  "XXXX.........", "XXXX.........", "XXXX.........", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",
+  "XXXXXXXXXXXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX",
+  "XXXX.....XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",  // 6
+  "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", ".........XXXX", ".........XXXX",
+  ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX",
+  ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX",
+  ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX",  // 7
+  "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXX.....XXXX", "XXXX.....XXXX",
+  "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",
+  "XXXXXXXXXXXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX",
+  "XXXX.....XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",  // 8
+  "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXX.....XXXX", "XXXX.....XXXX",
+  "XXXX.....XXXX", "XXXX.....XXXX", "XXXX.....XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",
+  "XXXXXXXXXXXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX", ".........XXXX",
+  ".........XXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX",  // 9
+};
+static const GlyphSet CLOCK_GLYPHS = {10, 18, CLOCK_ROWS};
+static const GlyphSet BIG_GLYPHS = {13, 23, BIG_ROWS};
 static bool bigClock = false;  // which of the two sizes is drawn
-static const char *const CLOCK_ONE[18] = {
-  "....XXX...", "...XXXX...", "..XXXXX...", ".XX.XXX...", ".X..XXX...", "....XXX...", "....XXX...", "....XXX...", "....XXX...",
-  "....XXX...", "....XXX...", "....XXX...", "....XXX...", "....XXX...", "....XXX...", ".XXXXXXXXX", ".XXXXXXXXX", ".XXXXXXXXX"};
-// A digit of the lap-time font built, not scaled, at w x h pixels with strokes `t` thick: each pixel of the 3x5 digit
-// becomes a bar or stem of that thickness (the three columns at the left, middle and right, the three bars at the top,
-// middle and bottom) and neighbouring ones are joined
-static void buildDigit(uint8_t *out, int digit, int w, int h, int t) {
-  const uint8_t *rows = glyph3x5('0' + digit);
-  int cx[3] = {0, (w - t) / 2, w - t}, mid = (h - t) / 2;  // where the three columns start
-  int y0[5] = {0, t, mid, mid + t, h - t}, y1[5] = {t, mid, mid + t, h - t, h};  // bar, stem, bar, stem, bar
-  memset(out, 0, w * h);
-  for (int r = 0; r < 5; r++)
-    for (int c = 0; c < 3; c++) {
-      if (!(rows[r] >> (2 - c) & 1)) continue;
-      int x1 = c == 2 ? w : cx[c] + t;
-      if (c < 2 && rows[r] >> (1 - c) & 1) x1 = cx[c + 1];  // joined to the next one on the right
-      for (int y = y0[r]; y < y1[r]; y++)
-        for (int x = cx[c]; x < x1; x++) out[y * w + x] = 32;
-    }
-}
-static void initClockGlyphs() {
-  static bool done = false;
-  if (done) return;
-  done = true;
-  for (int digit = 0; digit < 10; digit++) {
-    if (digit == 1) {
-      for (int j = 0; j < 18; j++)
-        for (int i = 0; i < 10; i++) CLOCK_PIXELS[(digit * 18 + j) * 10 + i] = CLOCK_ONE[j][i] == 'X' ? 32 : 0;
-    } else {
-      buildDigit(&CLOCK_PIXELS[digit * 18 * 10], digit, 10, 18, 3);
-    }
-  }
-}
-static void initBigGlyphs() {
-  static const char *const ONE[23] = {
-    ".....XXXX....", "....XXXXX....", "...XXXXXX....", "..XXXXXXX....", ".XXX.XXXX....", ".XX..XXXX....", ".X...XXXX....",
-    ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....",
-    ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".XXXXXXXXXXXX", ".XXXXXXXXXXXX",
-    ".XXXXXXXXXXXX", ".XXXXXXXXXXXX"};
-  for (int digit = 0; digit < 10; digit++) {
-    if (digit == 1) {
-      for (int j = 0; j < 23; j++)
-        for (int i = 0; i < 13; i++) BIG_PIXELS[(digit * 23 + j) * 13 + i] = ONE[j][i] == 'X' ? 32 : 0;
-    } else {
-      buildDigit(&BIG_PIXELS[digit * 23 * 13], digit, 13, 23, 4);
-    }
-  }
-}
 struct SoftEdge { float lo, hi; };
 static const SoftEdge WHITE_SOFT = {0.2f, 0.8f};    // the hours
 static const SoftEdge GREEN_SOFT = {0.25f, 0.75f};  // the minutes: the brighter colour looks blurrier
@@ -496,7 +548,7 @@ static void drawGlyph(MatrixPanel_I2S_DMA *d, int digit, int x, int y, uint16_t 
     int py = gy + j;
     if (py < y || py >= y + tileH()) continue;
     for (int i = 0; i < set.w; i++) {
-      int a = (int)constrain((set.pixels[(digit * set.h + j) * set.w + i] - lo) * scale, 0.0f, 32.0f);
+      int a = (int)constrain(((set.rows[digit * set.h + j][i] == 'X' ? 32 : 0) - lo) * scale, 0.0f, 32.0f);
       if (!a) continue;
       float lv = level;
       if (dissolve != 0) {
@@ -551,8 +603,6 @@ static int clockLeft = (64 - CLOCK_WIDTH) / 2;  // where the clock starts: in th
 
 // The four digits for the time: starts a change on the ones that differ
 static void updateClockDigits(int hour, int minute) {
-  initClockGlyphs();
-  initBigGlyphs();
   int digits[4] = {hour / 10, hour % 10, minute / 10, minute % 10};
   timeStyle = ClockwiseParams::getInstance()->timeStyle;
   if (timeStyle < 1 || timeStyle > 5) timeStyle = STYLE_ROLL;  // there are no flip cards on this clock
@@ -620,6 +670,8 @@ static const uint16_t KNOCKED_OUT = rgb(255, 90, 80);  // red-orange: the driver
 static const uint16_t IN_PIT = rgb(80, 200, 255);  // cyan: the driver is in the pit lane
 static const uint16_t FAV_IN_PIT = rgb(70, 120, 255);  // a favourite in the pit lane: a deeper blue than the others
 static bool tintKnockedOut = false;
+static bool dimPlaces = false;  // the places shown are the ones kept in flash from before the boot: dimmed until new data is in
+static uint16_t placeInk(uint16_t c) { return dimPlaces ? scaleColor(c, 12) : c; }
 static bool showPit = true;  // off while the list of a finished part is drawn: everybody is in the pit lane  // set while the list after a qualifying part is drawn
 
 // One position: place, team colour bar, driver code and, when known, the time or gap on the right.
@@ -629,9 +681,9 @@ static void drawPlace(MatrixPanel_I2S_DMA *d, int place, const F1Ticker::Row &ro
   if (moved) d->fillRect(0, y - 1, W, 7, moved > 0 ? rgb(0, 80, 20) : rgb(50, 0, 4));  // gained or lost a place
   char number[3];
   snprintf(number, sizeof(number), "%d", place);
-  drawText(d, number, place < 10 ? 4 : 2, y, place == 1 ? GOLD : GREY);
-  d->fillRect(10, y, 2, 5, row.color);
-  drawText(d, row.code, 14, y, fav ? (row.pit && showPit ? FAV_IN_PIT : GOLD) : row.fastest ? FASTEST : row.pit && showPit ? IN_PIT : tintKnockedOut ? KNOCKED_OUT : WHITE);  // a favourite driver; the fastest lap in purple
+  drawText(d, number, place < 10 ? 4 : 2, y, placeInk(place == 1 ? GOLD : GREY));
+  d->fillRect(10, y, 2, 5, placeInk(row.color));
+  drawText(d, row.code, 14, y, placeInk(fav ? (row.pit && showPit ? FAV_IN_PIT : GOLD) : row.fastest ? FASTEST : row.pit && showPit ? IN_PIT : tintKnockedOut ? KNOCKED_OUT : WHITE));  // a favourite driver; the fastest lap in purple
   if (moved) {  // a little arrow between the code and the time
     uint16_t color = moved > 0 ? rgb(60, 230, 90) : rgb(255, 70, 60);
     int top = moved > 0 ? y : y + 4;
@@ -640,7 +692,7 @@ static void drawPlace(MatrixPanel_I2S_DMA *d, int place, const F1Ticker::Row &ro
     d->drawFastHLine(27, top + dy, 3, color);
     d->drawFastHLine(26, top + 2 * dy, 5, color);
   }
-  drawTimeRight(d, row.time, W - 2, y, row.improved ? rgb(60, 230, 90) : place > 1 || !strcmp(row.time, "NO TIME") ? GREY : race ? MINUTES : FASTEST);  // green: a better lap just now
+  drawTimeRight(d, row.time, W - 2, y, placeInk(row.improved ? rgb(60, 230, 90) : place > 1 || !strcmp(row.time, "NO TIME") ? TIME_GREY : race ? MINUTES : FASTEST));  // green: a better lap just now
 }
 
 // Who moved up or down at the last change of the order, and until when it is shown
@@ -714,6 +766,9 @@ static LocalTime localParts(CWDateTime *dateTime, time_t utc) {
 // for 5 minutes, the time of day instead.
 static const unsigned long OVER_MS = 5 * 60 * 1000UL;
 static unsigned long clockZeroAt = 0;  // since when the session clock reads 0:00
+// The header shows the time of day instead of the countdown
+static bool timeOfDay(const F1Ticker::Session &s) { return s.tag != 'R' && s.tag != 'S' && clockZeroAt && millis() - clockZeroAt > OVER_MS; }
+
 static void liveRight(const F1Ticker::Session &s, char *right, size_t size, int hour, int minute) {
   right[0] = 0;
   if (s.tag == 'R' || s.tag == 'S') {
@@ -748,9 +803,10 @@ static bool isFavourite(const char *code) {
 
 // ---- The dim background of the main screens: the flag of the host country of the Grand Prix, drawn from a few stripes
 // and shapes ----
-static const int BACKDROP_LEVEL = 6;  // out of 32
 static int bdTop = 0, bdBottom = 64;  // only these rows are drawn
-static uint16_t dimRgb(int r, int g, int b) { return rgb(r * BACKDROP_LEVEL / 32, g * BACKDROP_LEVEL / 32, b * BACKDROP_LEVEL / 32); }
+// The flag's colours at the lowest level the display shows: a channel is on (at level 1) or off, so the strong
+// channels of a colour keep its hue (brown and maroon turn red, which is all that level 1 allows)
+static uint16_t dimRgb(int r, int g, int b) { return rgb(r >= 128 ? MIN_LIT : 0, g >= 128 ? MIN_LIT : 0, b >= 128 ? MIN_LIT : 0); }
 static void bdPixel(MatrixPanel_I2S_DMA *d, int x, int y, uint16_t c) {
   if (y >= bdTop && y < bdBottom) d->drawPixel(x, y, c);
 }
@@ -931,12 +987,11 @@ static void drawBottomChequers(MatrixPanel_I2S_DMA *d) {
   chequer(d, 56, 64);
 }
 
-// The dim background of a live list, in the rows from top to bottom (under the header): the country's flag, with the
-// chequers of the main screens above and below it
+// The dim background of a live list, in the rows from top to bottom (under the header): the chequered flag, as behind
+// the results
 static void drawLiveBackdrop(MatrixPanel_I2S_DMA *d, int top, int bottom) {
   if (shortPanel()) return;
-  drawBackdrop(d, top, min(bottom, 56));
-  if (bottom > 56) chequer(d, max(top, 56), bottom);
+  chequer(d, top, bottom);
 }
 
 // Is the flag out? A race: as soon as the leader has finished; practice and qualifying: when the clock reads 0:00
@@ -1078,7 +1133,8 @@ static int pickPlaces(const F1Ticker::Session &s, int slots, int *out) {
 // A row of the live list as it is drawn: practice and qualifying say so when a driver has no time yet
 static F1Ticker::Row liveRow(const F1Ticker::Session &s, int i) {
   F1Ticker::Row row = s.rows[i];
-  if (s.fromFeed && (s.tag == 'P' || s.tag == 'Q') && row.code[0] && !row.time[0]) strlcpy(row.time, "NO TIME", sizeof(row.time));
+  bool answered = s.fromFeed || (!s.timeFails && s.rows[0].time[0]);  // the feed, or ESPN's download that went through
+  if (answered && (s.tag == 'P' || s.tag == 'Q') && row.code[0] && !row.time[0]) strlcpy(row.time, "NO TIME", sizeof(row.time));
   return row;
 }
 
@@ -1107,7 +1163,8 @@ static int q3Pos(int extra) {
   return t <= extra ? t : period - t;
 }
 
-static void drawLiveScroll(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, const char *right, uint16_t fill, uint16_t ink, uint16_t tab, int page) {
+static void drawLiveScroll(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, const char *right, uint16_t fill, uint16_t ink, uint16_t tab, int page, uint16_t rightInk = 0) {
+  dimPlaces = s.stale;
   const int SLOTS = 6, TOP = 10;
   int n = shownRows(s);
   bool step = q3Scroll(s) > 0;  // a row at a time, the page is the row
@@ -1117,6 +1174,7 @@ static void drawLiveScroll(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, c
   if (flag) flagFill(d, 0, 8, W, 56);
   else drawLiveBackdrop(d, 8, 64);
   bool sliding = slideActive(slideList);
+  if (sliding && first > slideList.prev && first - slideList.prev < SLOTS) step = true;  // the last page moves only as far as it is short
   int shift = slideShift(slideList, SLOTS * 6);
   // The last six are the ones who dropped out of the part (Q1: the 17th to 22nd, Q2: the 11th to 16th, the list then holds 16); nobody drops out of Q3
   int part = qPart(s);
@@ -1147,12 +1205,15 @@ static void drawLiveScroll(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, c
     if (flag) flagFill(d, 0, 8, W, TOP + 3 * 6 - 9);
     else drawLiveBackdrop(d, 8, TOP + 3 * 6 - 1);
   }
-  drawHeader(d, s.name, right, fill, ink, tab);
+  drawHeader(d, s.name, right, fill, ink, tab, rightInk, rightInk != 0);  // a right side in its own colour is the time of day
+  if (s.live) drawLiveDot(d, s.name, tab);
+  drawWaitDot(d, s);
   for (int k = 0; k < 3; k++) drawPlace(d, k + 1, liveRow(s, k), TOP + k * 6, false, 0, isFavourite(s.rows[k].code));
   showPit = true;
 }
 
 static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hour, int minute, int page) {
+  dimPlaces = s.stale;
   // Marked live, but nothing is happening yet (a delayed start): say so, with the time to look at meanwhile
   if (s.rows[0].code[0] == 0) {
     drawHeader(d, s.name, "WAITING", HEADER_NAVY, WHITE, TAB_QUIET);
@@ -1165,10 +1226,12 @@ static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hou
   uint16_t fill, ink, tab;
   liveColors(s, fill, ink, tab);
   if (scrollsAfterQ(s) || q3Scroll(s) > 0) {
-    drawLiveScroll(d, s, right, fill, ink, tab, page);
+    drawLiveScroll(d, s, right, fill, ink, tab, page, timeOfDay(s) ? MINUTES : 0);
     return;
   }
-  drawHeader(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, right, fill, ink, tab);
+  drawHeader(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, right, fill, ink, tab, 0, timeOfDay(s));
+  if (s.live) drawLiveDot(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, tab);
+  drawWaitDot(d, s);
   bool flag = flagOn(s);
   if (flag) flagFill(d, 0, shortPanel() ? 8 : 9, W, shortPanel() ? 56 : 55);  // below the header
   else drawLiveBackdrop(d, 8, 64);
@@ -1243,6 +1306,7 @@ static int standingsShown(int *out, int rows = 3) {
 // 32 rows: the line under the clock. Idle: the top three of the championship, then the next Grand Prix.
 // Between sessions: the top three of the one that just finished, then the next one.
 static void drawInfoRow(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, bool idle, int page, int y) {
+  dimPlaces = idle ? snap.standingsStale : snap.last.stale;
   int shown[4];
   int places = idle ? standingsShown(shown) : 3;
   bool next = idle ? snap.upcomingCount > 0 : snap.next.valid;
@@ -1258,7 +1322,7 @@ static void drawInfoRow(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, bool idle,
       drawPlace(d, k + 1, row, y, false, 0, isFavourite(row.code));
       char points[8];
       snprintf(points, sizeof(points), "%d", snap.standings[k].points);
-      drawTextRight(d, points, W - 2, y, k == 0 ? MINUTES : GREY);
+      drawTextRight(d, points, W - 2, y, placeInk(k == 0 ? MINUTES : GREY));
     } else {
       drawPlace(d, item + 1, snap.last.rows[item], y, snap.last.tag == 'R' || snap.last.tag == 'S');
     }
@@ -1349,23 +1413,35 @@ static int firstShown(int n, int page, int slots) {
 
 // After a session, for the time set in the settings: the whole classification in the live list's look, the winner
 // fixed and the other places scrolling a page at a time. The header has the session and the time.
+static bool qualiList(const F1Ticker::Session &s) { return !shortPanel() && s.tag == 'Q' && filledRows(s) > 9; }
+
 static void drawResultList(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hour, int minute, int page) {
+  dimPlaces = s.stale;
+  if (qualiList(s)) {  // qualifying: the look of its live list, the top three fixed and the other places scrolling
+    F1Ticker::Session shown = s;
+    shown.flag = 0;
+    shown.finished = false;
+    char right[8];
+    snprintf(right, sizeof(right), "%d:%02d", hour, minute);
+    drawLiveScroll(d, shown, right, HEADER_NAVY, WHITE, F1_RED, page, MINUTES);
+    return;
+  }
   bool race = s.tag == 'R' || s.tag == 'S';
   int n = filledRows(s);
-  bool favourites = n > 9 && anyFavourite(s);  // the favourites and their surroundings stay, nothing scrolls
   int first = firstShown(n, page, 8);
-  if (!favourites) slideSeen(slideList, first);
+  slideSeen(slideList, first);
   flagFill(d, 0, 8, W, 56);  // the results of a finished session: the chequered flag behind them
   // The scrolling places go first, so the header and the winner can be drawn over the part that slides out
-  if (!favourites) {
+  {
     bool sliding = slideActive(slideList);
-    int shift = slideShift(slideList, 48);
+    int span = first > slideList.prev && first - slideList.prev < 8 ? first - slideList.prev : 8;  // the last page moves only as far as it is short
+    int shift = slideShift(slideList, span * 6);
     for (int slot = 1; slot < 9; slot++) {
       int i = first + slot - 1, y = 10 + slot * 6;
       if (sliding) {
         int before = slideList.prev + slot - 1;
         if (before < n) drawPlace(d, before + 1, s.rows[before], y - shift, race, 0, isFavourite(s.rows[before].code));
-        if (i < n) drawPlace(d, i + 1, s.rows[i], y + 48 - shift, race, 0, isFavourite(s.rows[i].code));
+        if (i < n) drawPlace(d, i + 1, s.rows[i], y + span * 6 - shift, race, 0, isFavourite(s.rows[i].code));
       } else if (i < n) {
         drawPlace(d, i + 1, s.rows[i], y, race, 0, isFavourite(s.rows[i].code));
       }
@@ -1377,18 +1453,14 @@ static void drawResultList(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, i
   }
   const char *name = !strcmp(s.name, "QUALI") ? "Q" : !strcmp(s.name, "SPRINT") ? "SR" : !strcmp(s.name, "RACE") ? "R" : !strncmp(s.name, "FP", 2) ? s.name + 1 : s.name;  // FP1 is P1 here
   drawHeader(d, "", "", HEADER_NAVY, WHITE);
+  drawWaitDot(d, s);
   drawText(d, name, 0, 1, FASTEST, true);  // all the way to the left, in the best-time purple,
-  drawHeaderTime(d, hour, minute, W - 2, 1, MINUTES);  // and the time 2 pixels from the right edge and 1 from the top, in the clock's green
-  if (favourites) {
-    int places[F1Ticker::ROWS];
-    int count = pickPlaces(s, 9, places);
-    for (int k = 0; k < count; k++) drawPlace(d, places[k] + 1, s.rows[places[k]], 10 + k * 6, race, 0, isFavourite(s.rows[places[k]].code));
-    return;
-  }
+  drawHeaderTime(d, hour, minute, W - 2 - dotShift, 1, MINUTES);  // and the time 2 pixels from the right edge and 1 from the top, in the clock's green
   drawPlace(d, 1, s.rows[0], 10, race, 0, isFavourite(s.rows[0].code));
 }
 
 static void drawBetween(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int minute, int page) {
+  dimPlaces = snap.last.stale;
   if (shortPanel()) {
     drawClock(d, hour, minute, 1);
     d->drawFastHLine(2, 16, 60, LINE);
@@ -1401,7 +1473,7 @@ static void drawBetween(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, 
   int n = filledRows(snap.last);
   int first = firstShown(n, page, 4);
   slideSeen(slideBetween, first);
-  drawBackdrop(d, 0, 64);
+  chequer(d, 0, 64);
   bool sliding = slideActive(slideBetween);
   int shift = slideShift(slideBetween, 24);
   for (int slot = 0; slot < 4; slot++) {
@@ -1416,9 +1488,9 @@ static void drawBetween(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, 
   }
   if (sliding) {
     d->fillRect(0, 0, W, 29, 0);
-    drawBackdrop(d, 0, 29);
+    chequer(d, 0, 29);
     d->fillRect(0, 54, W, 10, 0);
-    drawBackdrop(d, 54, 64);
+    chequer(d, 54, 64);
   }
   d->drawFastHLine(0, 20, W, RULE);  // between the clock and the winner, and under the places
   d->drawFastHLine(0, 54, W, RULE);
@@ -1441,6 +1513,7 @@ static void whenText(CWDateTime *dateTime, time_t utc, char *out, size_t size) {
 
 // No header: the clock on top, then the championship, and the coming race along the bottom
 static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int minute, int page) {
+  dimPlaces = snap.standingsStale;
   if (shortPanel()) {
     drawClock(d, hour, minute, 1);
     d->drawFastHLine(2, 16, 60, LINE);
@@ -1464,7 +1537,7 @@ static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int
     drawPlace(d, k + 1, row, y, false, 0, isFavourite(row.code));
     char points[8];
     snprintf(points, sizeof(points), "%d", snap.standings[k].points);
-    drawTextRight(d, points, W - 2, y, k == 0 ? MINUTES : GREY);
+    drawTextRight(d, points, W - 2, y, placeInk(k == 0 ? MINUTES : GREY));
     if (i == 0 && k == 0) {  // the leading team's car, in the middle of the empty part of the row
       static const char *const CAR[5] = {"XX....XX.....", "XXXXXXXXXXX..", ".XXXXXXXXXXXX", ".WWW...WWW...", ".WWW...WWW..."};
       int left = (14 + 11 + 1 + W - 2 - (int)strlen(points) * 4) / 2 - 6;
@@ -1724,7 +1797,8 @@ void Clockface::update() {
     int others = filledRows(snap.last) - 1;
     page = others > 4 ? page % ((others + 3) / 4) : 0;  // four places at a time; the key only changes with the page
   }
-  if (view == LIST) {
+  if (view == LIST && qualiList(snap.last)) page = (millis() / pageMs()) % scrollPages(snap.last);
+  else if (view == LIST) {
     int n = filledRows(snap.last);
     page = n > 9 ? page % ((n + 6) / 8) : 0;  // eight places at a time under the winner
   }
@@ -1759,6 +1833,7 @@ void Clockface::update() {
   char key[96];
   int rowPage = view == BETWEEN ? comingIndex() : 0;  // which of the coming sessions the bottom row shows
   int pulse = view != LIVE ? pulseLevel() : 0;  // the colon of the time breathes: drawn again at each step
+  if (view == LIVE && (snap.live.live || timeOfDay(snap.live))) pulse = pulseLevel();  // the live dot and the time of day's colon breathe
   if (view == LIVE || view == LIST || view == BETWEEN) marqueeMax = 0;  // only the idle screen has a scrolling text
   if (marqueeMax) pulse = pulse * 1000 + marqueeOffset(marqueeMax);  // and a scrolling name moves a pixel at a time
   snprintf(key, sizeof(key), "%lu|%d|%d:%d|%d|%lx|%d|%d", (unsigned long)version, (int)view, tallClock ? 0 : hour, tallClock ? 0 : minute, page, (unsigned long)marks, rowPage, pulse);
@@ -1777,6 +1852,7 @@ void Clockface::update() {
   strcpy(lastRight, right);
 
   marqueeMax = 0;  // set again by a text that scrolls
+  dotShift = (view == LIVE && timesFailed(snap.live)) || (view == LIST && timesFailed(snap.last)) ? 3 : 0;
   _display->fillScreen(0);
   switch (view) {
     case LIVE: drawLive(_display, snap.live, hour, minute, page); break;
