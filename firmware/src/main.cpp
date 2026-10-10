@@ -498,8 +498,10 @@ void updateFirmware( String id ) {
 // Fetch the md5 that update-fw.sh publishes next to each firmware image.
 // reachable is false when the server could not be connected to at all.
 static String fetchServerMd5(const String &url, bool &reachable) {
-  HTTPClient http;
+  // The client first: http is destroyed before it, and its destructor still uses the client (stop()) when the server
+  // had already closed the connection
   std::unique_ptr<WiFiClient> client = makeClient(url);
+  HTTPClient http;
   String md5 = "";
   http.setConnectTimeout(5000);  // an HTTPS handshake is slow on the ESP32
   http.setTimeout(8000);

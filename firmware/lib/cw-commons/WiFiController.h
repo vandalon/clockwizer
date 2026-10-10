@@ -6,6 +6,7 @@
 #include "CWWebServer.h"
 #include "StatusController.h"
 #include <WiFiManager.h>
+#include <esp_ota_ops.h>
 
 // Makes the WiFiManager portal match the settings page (colours, cards, dark mode)
 static const char PORTAL_STYLE[] PROGMEM =
@@ -246,7 +247,7 @@ struct WiFiController
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     WiFi.setAutoReconnect(true);
-    esp_wifi_set_ps(WIFI_PS_NONE);
+    WiFi.setSleep(false);  // no modem sleep; through WiFi, so Arduino 3.x keeps it when the station starts (it re-applies its own)
 
     improvSerial.setDeviceInfo(ImprovTypes::ChipFamily::CF_ESP32, CW_FW_NAME, CW_FW_VERSION, "Clockwizer");
     improvSerial.onImprovError(onImprovWiFiErrorCb);
@@ -267,6 +268,14 @@ struct WiFiController
         ClockwiseWebServer::getInstance()->startWebServer();
         Serial.printf("[WiFi] Connected to %s, IP address %s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
         return true;
+      }
+      // A new firmware that has not proven itself yet: the restart into the setup mode below would roll it back, so a
+      // slow first connect after an update gets a minute of retries first
+      esp_ota_img_states_t state;
+      if (esp_ota_get_state_partition(esp_ota_get_running_partition(), &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY)
+      {
+        Serial.println("[WiFi] New firmware not confirmed yet: retrying the saved network before the setup");
+        if (retrySavedNetwork()) return true;
       }
     }
 

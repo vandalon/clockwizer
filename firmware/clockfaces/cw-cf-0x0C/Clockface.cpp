@@ -264,9 +264,11 @@ static void drawTimeRight(MatrixPanel_I2S_DMA *d, const char *s, int right, int 
 // The colon of the current time breathes: a fade between off and full brightness, in 32 steps (a frame is 50 ms)
 static const unsigned long PULSE_MS = 2000;
 static int pulseLevel() { return (int)roundf((0.5f - 0.5f * cosf((millis() % PULSE_MS) * 6.2831853f / PULSE_MS)) * 31); }
-static uint16_t pulsed(uint16_t color) {
+// The colour at the pulse's level, from bg (dark) to color (bright): on a header the dark end is its fill, not black
+static uint16_t pulsed(uint16_t color, uint16_t bg = 0) {
   int f = pulseLevel() * 255 / 31;  // out of 255
-  int r = (color >> 11 & 31) * f / 255, g = (color >> 5 & 63) * f / 255, b = (color & 31) * f / 255;
+  auto mix = [f](int c, int b) { return b + (c - b) * f / 255; };
+  int r = mix(color >> 11 & 31, bg >> 11 & 31), g = mix(color >> 5 & 63, bg >> 5 & 63), b = mix(color & 31, bg & 31);
   return r << 11 | g << 5 | b;
 }
 
@@ -284,15 +286,15 @@ static void drawStretchedDigits(MatrixPanel_I2S_DMA *d, const char *s, int x, in
         if (*s == '1' ? ONE[j][k] == '#' : rows[ROW_OF[j]] >> (2 - COL_OF[k]) & 1) d->drawPixel(x + k, y + j, color);
   }
 }
-static void drawHeaderTime(MatrixPanel_I2S_DMA *d, int hour, int minute, int right, int y, uint16_t color) {
+static void drawHeaderTime(MatrixPanel_I2S_DMA *d, int hour, int minute, int right, int y, uint16_t color, uint16_t bg) {
   char h[3], m[3];
   snprintf(h, sizeof(h), "%d", hour);
   snprintf(m, sizeof(m), "%02d", minute);
   int hw = (int)strlen(h) * 5 - 1;
   int x = right - (hw + 3 + 9);
   drawStretchedDigits(d, h, x, y, color);
-  d->drawPixel(x + hw + 1, y + 1, pulsed(color));
-  d->drawPixel(x + hw + 1, y + 5, pulsed(color));
+  d->drawPixel(x + hw + 1, y + 1, pulsed(color, bg));
+  d->drawPixel(x + hw + 1, y + 5, pulsed(color, bg));
   drawStretchedDigits(d, m, x + hw + 3, y, color);
 }
 
@@ -374,15 +376,15 @@ static int headerTextWidth(const char *s) {
   }
   return w ? w - 1 : 0;
 }
-// pulseColon: the text is the time of day, whose colon breathes like the clock's
-static void drawHeaderMixed(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16_t color, bool pulseColon = false) {
+// pulseColon: the text is the time of day, whose colon breathes like the clock's, down to bg (the header's fill)
+static void drawHeaderMixed(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16_t color, bool pulseColon = false, uint16_t bg = 0) {
   for (; *s; s++) {
     char one[2] = {*s, 0};
     if (*s >= '0' && *s <= '9') {
       drawStretchedDigits(d, one, x, y, color);
       x += 5;
     } else {
-      drawNarrowText(d, one, x, y, pulseColon && *s == ':' ? pulsed(color) : color);
+      drawNarrowText(d, one, x, y, pulseColon && *s == ':' ? pulsed(color, bg) : color);
       x += headerTextWidth(one) + 1;
     }
   }
@@ -398,7 +400,7 @@ static void drawHeader(MatrixPanel_I2S_DMA *d, const char *left, const char *rig
   int x = tab ? 4 : 2;
   if (x + headerTextWidth(left) + 3 + headerTextWidth(right) + 2 + dotShift <= W) {
     drawHeaderMixed(d, left, x, 1, ink);
-    drawHeaderMixed(d, right, W - 2 - dotShift - headerTextWidth(right), 1, rightInk, rightTime);
+    drawHeaderMixed(d, right, W - 2 - dotShift - headerTextWidth(right), 1, rightInk, rightTime, fill);
   } else {
     drawHeaderText(d, left, x, 1, ink);
     drawHeaderText(d, right, W - 2 - dotShift - textWidth(right), 1, rightInk);
@@ -408,8 +410,8 @@ static void drawHeader(MatrixPanel_I2S_DMA *d, const char *left, const char *rig
 // A dot after the session's name while the times are still to come: pulsing slowly, red and still when several
 // downloads in a row got none
 // A live session: a small green dot after its name, breathing
-static void drawLiveDot(MatrixPanel_I2S_DMA *d, const char *name, bool tab) {
-  d->fillRect((tab ? 4 : 2) + headerTextWidth(name) + 3, 3, 2, 2, pulsed(rgb(60, 230, 90)));
+static void drawLiveDot(MatrixPanel_I2S_DMA *d, const char *name, bool tab, uint16_t bg) {
+  d->fillRect((tab ? 4 : 2) + headerTextWidth(name) + 3, 3, 2, 2, pulsed(rgb(60, 230, 90), bg));
 }
 
 // Downloads for the times failed more than once: a red stripe at the far right of the header, like the tab on the left
@@ -636,6 +638,14 @@ static bool clockMoving() {
   return false;
 }
 
+// What the backdrop shows at a pixel (black where there is none), so a colon can fade into it; see drawBackdrop()
+static uint16_t backdropAt(int x, int y);
+// A block of a clock's colon at the pulse's level, each pixel fading into what is behind it
+static void colonBlock(MatrixPanel_I2S_DMA *d, int x, int y, int w, int h) {
+  for (int j = y; j < y + h; j++)
+    for (int i = x; i < x + w; i++) d->drawPixel(i, j, pulsed(WHITE, backdropAt(i, j)));
+}
+
 // The whole clock, or only the digits that move
 static void drawTallClock(MatrixPanel_I2S_DMA *d, int y, bool onlyMoving) {
   for (int k = 0; k < 4; k++) {
@@ -644,12 +654,12 @@ static void drawTallClock(MatrixPanel_I2S_DMA *d, int y, bool onlyMoving) {
     if (changeProgress(k) >= 1) tileSettled[k] = true;
   }
   if (bigClock) {
-    d->fillRect(clockLeft + 28, y + 6, 4, 4, pulsed(WHITE));
-    d->fillRect(clockLeft + 28, y + 13, 4, 4, pulsed(WHITE));
+    colonBlock(d, clockLeft + 28, y + 6, 4, 4);
+    colonBlock(d, clockLeft + 28, y + 13, 4, 4);
     return;
   }
-  d->fillRect(clockLeft + 23, y + 4, 3, 3, pulsed(WHITE));
-  d->fillRect(clockLeft + 23, y + 11, 3, 3, pulsed(WHITE));
+  colonBlock(d, clockLeft + 23, y + 4, 3, 3);
+  colonBlock(d, clockLeft + 23, y + 11, 3, 3);
 }
 
 // The clock: the small panel has the 5x7 digits two rows tall; the tall panel the soft ones above
@@ -660,8 +670,8 @@ static void drawClock(MatrixPanel_I2S_DMA *d, int hour, int minute, int y, bool 
   }
   drawBigNumber(d, hour, 17, y, CLOCK, 2);
   drawBigNumber(d, minute, 47, y, MINUTES, 2);
-  d->drawPixel(32, y + 4, pulsed(WHITE));
-  d->drawPixel(32, y + 9, pulsed(WHITE));
+  colonBlock(d, 32, y + 4, 1, 1);
+  colonBlock(d, 32, y + 9, 1, 1);
 }
 
 
@@ -804,14 +814,26 @@ static bool isFavourite(const char *code) {
 // ---- The dim background of the main screens: the flag of the host country of the Grand Prix, drawn from a few stripes
 // and shapes ----
 static int bdTop = 0, bdBottom = 64;  // only these rows are drawn
+static bool backdropShown = false;  // the frame being drawn has the backdrop (set by drawBackdrop, cleared for each new frame)
+// Probing: the flag is "drawn" without a display, only to learn the colour that would end up at one pixel
+static int bdProbeX = -1, bdProbeY = -1;
+static uint16_t bdProbeColor = 0;
 // The flag's colours at the lowest level the display shows: a channel is on (at level 1) or off, so the strong
 // channels of a colour keep its hue (brown and maroon turn red, which is all that level 1 allows)
 static uint16_t dimRgb(int r, int g, int b) { return rgb(r >= 128 ? MIN_LIT : 0, g >= 128 ? MIN_LIT : 0, b >= 128 ? MIN_LIT : 0); }
 static void bdPixel(MatrixPanel_I2S_DMA *d, int x, int y, uint16_t c) {
+  if (bdProbeX >= 0) {
+    if (x == bdProbeX && y == bdProbeY && y >= bdTop && y < bdBottom) bdProbeColor = c;
+    return;
+  }
   if (y >= bdTop && y < bdBottom) d->drawPixel(x, y, c);
 }
 static void bdRect(MatrixPanel_I2S_DMA *d, int x, int y, int w, int h, uint16_t c) {
   int y0 = max(y, bdTop), y1 = min(y + h, bdBottom);
+  if (bdProbeX >= 0) {
+    if (bdProbeX >= x && bdProbeX < x + w && bdProbeY >= y0 && bdProbeY < y1) bdProbeColor = c;
+    return;
+  }
   if (y1 > y0 && w > 0) d->fillRect(x, y0, w, y1 - y0, c);
 }
 static void bdDisc(MatrixPanel_I2S_DMA *d, int cx, int cy, int r, uint16_t c) {
@@ -970,6 +992,7 @@ static void chequer(MatrixPanel_I2S_DMA *d, int y0, int y1) {
 // The background, in the rows from top to bottom: the chequered flag behind the clock, then the country's flag (or more chequers)
 static void drawBackdrop(MatrixPanel_I2S_DMA *d, int top, int bottom) {
   if (shortPanel()) return;
+  backdropShown = true;
   bdTop = top;
   bdBottom = bottom;
   chequer(d, max(top, 0), min(bottom, FLAG_TOP));
@@ -979,6 +1002,17 @@ static void drawBackdrop(MatrixPanel_I2S_DMA *d, int top, int bottom) {
   } else {
     chequer(d, max(top, FLAG_TOP), min(bottom, 56));
   }
+}
+
+static uint16_t backdropAt(int x, int y) {
+  if (!backdropShown || shortPanel() || y < bdTop || y >= bdBottom) return 0;
+  Country country = backdropCountry();
+  if (y < FLAG_TOP || (country == C_NONE && y < 56)) return ((y / 8 + x / 8) & 1) ? 0 : FLAG_TILE;  // the squares, as chequer() draws them
+  if (country == C_NONE) return 0;
+  bdProbeX = x, bdProbeY = y, bdProbeColor = 0;
+  drawFlag(nullptr, country, FLAG_TOP);  // only the probe: nothing is drawn
+  bdProbeX = -1;
+  return bdProbeColor;
 }
 
 // The bottom bar: one row of the same squares, from the divider's row down
@@ -1206,7 +1240,7 @@ static void drawLiveScroll(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, c
     else drawLiveBackdrop(d, 8, TOP + 3 * 6 - 1);
   }
   drawHeader(d, s.name, right, fill, ink, tab, rightInk, rightInk != 0);  // a right side in its own colour is the time of day
-  if (s.live) drawLiveDot(d, s.name, tab);
+  if (s.live) drawLiveDot(d, s.name, tab, fill);
   drawWaitDot(d, s);
   for (int k = 0; k < 3; k++) drawPlace(d, k + 1, liveRow(s, k), TOP + k * 6, false, 0, isFavourite(s.rows[k].code));
   showPit = true;
@@ -1230,7 +1264,7 @@ static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hou
     return;
   }
   drawHeader(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, right, fill, ink, tab, 0, timeOfDay(s));
-  if (s.live) drawLiveDot(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, tab);
+  if (s.live) drawLiveDot(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, tab, fill);
   drawWaitDot(d, s);
   bool flag = flagOn(s);
   if (flag) flagFill(d, 0, shortPanel() ? 8 : 9, W, shortPanel() ? 56 : 55);  // below the header
@@ -1455,7 +1489,7 @@ static void drawResultList(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, i
   drawHeader(d, "", "", HEADER_NAVY, WHITE);
   drawWaitDot(d, s);
   drawText(d, name, 0, 1, FASTEST, true);  // all the way to the left, in the best-time purple,
-  drawHeaderTime(d, hour, minute, W - 2 - dotShift, 1, MINUTES);  // and the time 2 pixels from the right edge and 1 from the top, in the clock's green
+  drawHeaderTime(d, hour, minute, W - 2 - dotShift, 1, MINUTES, HEADER_NAVY);  // and the time 2 pixels from the right edge and 1 from the top, in the clock's green
   drawPlace(d, 1, s.rows[0], 10, race, 0, isFavourite(s.rows[0].code));
 }
 
@@ -1497,7 +1531,11 @@ static void drawBetween(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, 
   clockLeft = W - 1 - clockWidth();  // at the right, a pixel from the edge, the session name on the left
   drawClock(d, hour, minute, 1, true);
   // The session the results are of, left of the clock: a light grey, to read well on the squares
-  if (snap.last.name[0]) drawText(d, shortSession(snap.last.name), 1, 12, rgb(205, 210, 220), true);
+  // One letter (Q, R) sits right above the place number below it, flush with its right edge (columns 4 to 6); two (SR, P1) at the left
+  if (snap.last.name[0]) {
+    const char *label = shortSession(snap.last.name);
+    drawText(d, label, strlen(label) == 1 ? 7 - tallWidth(label) : 1, 12, rgb(205, 210, 220), true);
+  }
   drawPlace(d, 1, snap.last.rows[0], 23, race, 0, isFavourite(snap.last.rows[0].code));
   drawNextRow(d, dateTime);
 }
@@ -1854,6 +1892,7 @@ void Clockface::update() {
   marqueeMax = 0;  // set again by a text that scrolls
   dotShift = (view == LIVE && timesFailed(snap.live)) || (view == LIST && timesFailed(snap.last)) ? 3 : 0;
   _display->fillScreen(0);
+  backdropShown = false;  // until the view draws it
   switch (view) {
     case LIVE: drawLive(_display, snap.live, hour, minute, page); break;
     case LIST: drawResultList(_display, snap.last, hour, minute, page); break;
