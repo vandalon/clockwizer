@@ -4,6 +4,14 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef ARDUINO
+#include <Arduino.h>
+#else
+static unsigned long millis() { return 0; }  // the native tests: nothing is shown for a few seconds there
+#endif
+
+static long lapMs(const char *text);
+
 void F1LiveState::reset() {
   for (Driver &d : _drivers) d = Driver();
   _lap = _totalLaps = 0;
@@ -103,6 +111,7 @@ void F1LiveState::leaf(const char (*path)[JsonScan::KEY], int n, const char *val
     const char *field = r[2];
     if (rn == 3) {
       if (!strcmp(field, "Position")) d->position = atoi(value);
+      else if (!strcmp(field, "InPit")) d->inPit = !strcmp(value, "true");
       else if (!text) return;
       else if (!strcmp(field, "GapToLeader")) setText(d->gap, sizeof(d->gap), value);
       else if (!strcmp(field, "TimeDiffToFastest")) setText(d->diff, sizeof(d->diff), value);
@@ -111,7 +120,14 @@ void F1LiveState::leaf(const char (*path)[JsonScan::KEY], int n, const char *val
     } else if (rn == 5 && text) {
       int i = atoi(r[3]);
       if (i < 0 || i > 2) return;
-      if (!strcmp(field, "BestLapTimes") && !strcmp(r[4], "Value")) setText(d->bestQ[i], sizeof(d->bestQ[i]), value);
+      if (!strcmp(field, "BestLapTimes") && !strcmp(r[4], "Value")) {
+        // A lap faster than the earlier best of this part (the first lap of a part and the snapshot at connecting don't count)
+        if (d->bestQ[i][0] && lapMs(value) > 0 && lapMs(value) < lapMs(d->bestQ[i])) {
+          d->improvedAt = millis();
+          d->improvedPart = i;
+        }
+        setText(d->bestQ[i], sizeof(d->bestQ[i]), value);
+      }
       else if (!strcmp(field, "Stats") && !strcmp(r[4], "TimeDiffToFastest")) setText(d->diffQ[i], sizeof(d->diffQ[i]), value);
     }
   }
@@ -161,6 +177,7 @@ uint32_t F1LiveState::displayHash() const {
     if (!d.number) continue;
     h = hashText(h, d.code);
     h = (h ^ d.position) * 16777619u;
+    h = (h ^ (d.inPit ? 1u : 0u)) * 16777619u;
     h = hashText(hashText(hashText(h, d.gap), d.diff), d.best);
     for (int p = 0; p < 3; p++) h = hashText(hashText(h, d.bestQ[p]), d.diffQ[p]);
   }
@@ -180,9 +197,11 @@ static long lapMs(const char *text) {
   return (m * 60L + s) * 1000L + ms;
 }
 
+static const unsigned long IMPROVED_MS = 6000;  // a better lap is marked this long
+
 int F1LiveState::top(char tag, Row *rows) const {
   int count = 0;
-  for (int i = 0; i < ROWS; i++) rows[i] = Row{"", 0xFFFF, "", false};
+  for (int i = 0; i < ROWS; i++) rows[i] = Row{"", 0xFFFF, "", false, false, false};
   const Driver *fastest = nullptr;  // a race: whoever has the best lap of all
   long fastestMs = 0;
   if (tag == 'R' || tag == 'S')
@@ -206,11 +225,18 @@ int F1LiveState::top(char tag, Row *rows) const {
     } else if (tag == 'P') {
       text = leader ? d.best : d.diff;
     } else {  // qualifying: the latest part that has a time
+      // Only the times of the part that is on: a driver without a time in it yet shows none (not the one of an earlier part)
       int part = -1;
-      for (int p = 2; p >= 0 && part < 0; p--)
-        if (d.bestQ[p][0]) part = p;
-      if (part >= 0) text = leader ? d.bestQ[part] : d.diffQ[part];
+      if (_part >= 1 && _part <= 3) {
+        part = _part - 1;
+      } else {
+        for (int p = 2; p >= 0 && part < 0; p--)
+          if (d.bestQ[p][0]) part = p;
+      }
+      if (part >= 0 && d.bestQ[part][0]) text = leader ? d.bestQ[part] : d.diffQ[part];
     }
+    row.pit = d.inPit;
+    if (tag == 'Q' && d.improvedAt && (long)(millis() - d.improvedAt) < IMPROVED_MS && _part >= 1 && d.improvedPart == _part - 1) row.improved = true;
     strncpy(row.time, text, sizeof(row.time) - 1);
     row.time[sizeof(row.time) - 1] = 0;
     if (d.position > count) count = d.position;

@@ -13,6 +13,8 @@
 //  - the coming Grand Prix, from ESPN's season calendar
 //  - the top of the drivers' championship, from Jolpica (the Ergast successor)
 // ESPN gives the running order but no gaps or lap times.
+struct F1SeenStart { uint32_t id = 0, start = 0; };
+
 class F1Ticker {
   public:
     static const int ROWS = 22;     // positions kept per session: the whole grid
@@ -26,6 +28,8 @@ class F1Ticker {
       uint32_t athleteId = 0;   // ESPN's, for the times
       char time[9] = "";        // first place: the best lap or "LEAD"; others: the gap, "+.088" or "+12.3"
       bool fastest = false;     // a race: the fastest lap of all
+      bool pit = false;         // in the pit lane now
+      bool improved = false;    // qualifying: his best lap just got better, shown for a few seconds
     };
 
     struct Session {
@@ -34,6 +38,7 @@ class F1Ticker {
       char tag = 'R';         // 'P' practice, 'Q' qualifying, 'S' sprint race, 'R' race
       char name[8] = "";      // FP1, QUALI, SQ, SPRINT, RACE
       char flag = 0;          // while live: 'y' safety car or yellow flag, 'r' red flag
+      bool fromFeed = false;  // while live: the rows are from the live feed, so a row without a time has none yet
       bool finished = false;  // while live: the feed says the session is over (a race: the leader took the chequered flag)
       int period = 0;         // the lap, for races
       int totalLaps = 0;      // of the race, from the live feed
@@ -113,6 +118,8 @@ class F1Ticker {
     unsigned long _savedAt = 0;
     uint32_t _delayed[8] = {};  // sessions seen delayed, so a later start time is shown as a new one
     uint8_t _delayedCount = 0;
+    F1SeenStart _seen[8];  // the first start time seen of each session to come, to notice a start that moved
+    uint8_t _seenCount = 0;
     uint32_t _version = 0;
     bool _started = false;
     bool _cacheLoaded = false;

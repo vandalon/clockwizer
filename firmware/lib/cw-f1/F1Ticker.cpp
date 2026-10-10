@@ -24,6 +24,7 @@ static const unsigned long RETRY_MS = 60 * 1000UL;
 static const bool F1_LIVE_FEED_OFF = false;
 static const uint32_t TASK_STACK = 9216;  // it uses about 5.5 KB, and every KB counts while the live feed is connected
 static const time_t DELAY_GRACE_SECS = 3 * 60;     // a session this long past its start time and still not running is delayed
+static const time_t MOVED_MIN_SECS = 5 * 60;  // a start this much later than first seen is a new start time
 static const time_t DELAY_MAX_SECS = 6 * 60 * 60;  // and is forgotten this long after
 static const time_t WEEKEND_TAIL_SECS = 3 * 60 * 60;  // the weekend lasts this long after the race started
 
@@ -95,6 +96,7 @@ void F1Ticker::snapshot(Snapshot &out) {
       out.live.rows[i].fastest = rows[i].fastest;
     }
     out.live.count = count;
+    out.live.fromFeed = true;
     if (lap > 0) out.live.period = lap;
     out.live.totalLaps = totalLaps;
     out.live.flag = flag;
@@ -108,6 +110,10 @@ void F1Ticker::snapshot(Snapshot &out) {
         memcpy(_saved.rows, out.live.rows, sizeof(_saved.rows));
         _savedDirty = true;
       }
+    }
+    for (int i = 0; i < ROWS; i++) {  // after the saving: these come and go within seconds
+      out.live.rows[i].improved = rows[i].improved;
+      out.live.rows[i].pit = rows[i].pit;
     }
     int part = _live.part();
     if (out.live.tag == 'Q' && part >= 1 && part <= 3) snprintf(out.live.name, sizeof(out.live.name), "%s%d", out.live.name[0] == 'S' ? "SQ" : "Q", part);
@@ -277,6 +283,8 @@ struct WeekendScan {
   int period = 0;
   uint32_t delayed[8] = {};  // sessions seen delayed (in and out)
   uint8_t delayedCount = 0;
+  F1SeenStart seen[8];  // the first start time seen of each session still to come
+  uint8_t seenCount = 0;
   bool anyDelayed = false;   // a session is delayed now
   uint32_t driverId = 0;
   int order = 0;
@@ -328,6 +336,25 @@ struct WeekendScan {
       bool delayedNow = late || strstr(statusName, "DELAY") || strstr(statusName, "POSTPON");
       bool known = false;
       for (int i = 0; i < delayedCount; i++) known = known || delayed[i] == s.id;
+      // A new start time announced before the old one passed: the start moved later than first seen
+      int at = -1;
+      for (int i = 0; i < seenCount; i++) if (seen[i].id == s.id) at = i;
+      if (at < 0) {
+        if (seenCount == 8) {
+          memmove(seen, seen + 1, 7 * sizeof(seen[0]));
+          seenCount--;
+        }
+        seen[seenCount].id = s.id;
+        seen[seenCount].start = (uint32_t)when;
+        seenCount++;
+      } else if (!known && (long)when - (long)seen[at].start >= MOVED_MIN_SECS) {
+        known = true;
+        if (delayedCount == 8) {
+          memmove(delayed, delayed + 1, 7 * sizeof(delayed[0]));
+          delayedCount--;
+        }
+        delayed[delayedCount++] = s.id;
+      }
       if (delayedNow) {
         s.status = 'd';
         anyDelayed = true;
@@ -341,11 +368,13 @@ struct WeekendScan {
       } else if (known && when > nowUtc) {
         s.status = 'n';
       }
-      if ((delayedNow || when > nowUtc) && (nextDate == 0 || when < nextDate)) {
+      // ESPN calls a session that has just started 'pre' for a few minutes: it stays the next one, not shown as delayed yet
+      bool shown = delayedNow || when > nowUtc || when + DELAY_GRACE_SECS > nowUtc;
+      if (shown && (nextDate == 0 || when < nextDate)) {
         nextDate = when;
         snap.next = s;
       }
-      if ((delayedNow || when > nowUtc) && snap.comingCount < F1Ticker::Snapshot::COMING) {  // in order of start
+      if (shown && snap.comingCount < F1Ticker::Snapshot::COMING) {  // in order of start
         int at = snap.comingCount;
         while (at > 0 && snap.coming[at - 1].start > when) {
           snap.coming[at] = snap.coming[at - 1];
@@ -427,10 +456,14 @@ unsigned long F1Ticker::fetchWeekend() {
   scan.nowUtc = ezt::now();
   memcpy(scan.delayed, _delayed, sizeof(_delayed));
   scan.delayedCount = _delayedCount;
+  memcpy(scan.seen, _seen, sizeof(_seen));
+  scan.seenCount = _seenCount;
   if (!getScan("http://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard", WeekendScan::leaf, &scan)) return RETRY_MS;
   scan.finish();
   memcpy(_delayed, scan.delayed, sizeof(_delayed));
   _delayedCount = scan.delayedCount;
+  memcpy(_seen, scan.seen, sizeof(_seen));
+  _seenCount = scan.seenCount;
 
   time_t nowUtc = scan.nowUtc, nextDate = scan.nextDate;
   String eventId = scan.eventId, liveId = scan.liveId;

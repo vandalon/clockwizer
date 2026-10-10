@@ -18,6 +18,8 @@ class F1LiveState {
       uint16_t color;
       char time[9];  // first place: the best lap, or LEAD in a race; others: the gap
       bool fastest;  // a race: the driver with the fastest lap so far
+      bool improved;  // qualifying: his own best lap of the part just got better
+      bool pit;       // in the pit lane now
     };
 
     void reset();
@@ -57,6 +59,9 @@ class F1LiveState {
       char best[10] = "";  // best lap
       char bestQ[3][10] = {"", "", ""};  // qualifying: best lap and gap to the fastest per part
       char diffQ[3][10] = {"", "", ""};
+      unsigned long improvedAt = 0;  // millis() of the last better lap in qualifying, 0 = none
+      uint8_t improvedPart = 0;
+      bool inPit = false;
     };
 
     struct Feed;

@@ -616,6 +616,11 @@ static void drawClock(MatrixPanel_I2S_DMA *d, int hour, int minute, int y, bool 
 
 
 static const uint16_t FASTEST = rgb(190, 80, 255);  // purple, as on the timing screens
+static const uint16_t KNOCKED_OUT = rgb(255, 90, 80);  // red-orange: the drivers who dropped out of a qualifying part
+static const uint16_t IN_PIT = rgb(80, 200, 255);  // cyan: the driver is in the pit lane
+static const uint16_t FAV_IN_PIT = rgb(70, 120, 255);  // a favourite in the pit lane: a deeper blue than the others
+static bool tintKnockedOut = false;
+static bool showPit = true;  // off while the list of a finished part is drawn: everybody is in the pit lane  // set while the list after a qualifying part is drawn
 
 // One position: place, team colour bar, driver code and, when known, the time or gap on the right.
 // The first place's time is green for a race (LEAD) and purple for a best lap. Nothing for an empty place.
@@ -626,7 +631,7 @@ static void drawPlace(MatrixPanel_I2S_DMA *d, int place, const F1Ticker::Row &ro
   snprintf(number, sizeof(number), "%d", place);
   drawText(d, number, place < 10 ? 4 : 2, y, place == 1 ? GOLD : GREY);
   d->fillRect(10, y, 2, 5, row.color);
-  drawText(d, row.code, 14, y, fav ? GOLD : row.fastest ? FASTEST : WHITE);  // a favourite driver; the fastest lap in purple
+  drawText(d, row.code, 14, y, fav ? (row.pit && showPit ? FAV_IN_PIT : GOLD) : row.fastest ? FASTEST : row.pit && showPit ? IN_PIT : tintKnockedOut ? KNOCKED_OUT : WHITE);  // a favourite driver; the fastest lap in purple
   if (moved) {  // a little arrow between the code and the time
     uint16_t color = moved > 0 ? rgb(60, 230, 90) : rgb(255, 70, 60);
     int top = moved > 0 ? y : y + 4;
@@ -635,7 +640,7 @@ static void drawPlace(MatrixPanel_I2S_DMA *d, int place, const F1Ticker::Row &ro
     d->drawFastHLine(27, top + dy, 3, color);
     d->drawFastHLine(26, top + 2 * dy, 5, color);
   }
-  drawTimeRight(d, row.time, W - 2, y, place > 1 ? GREY : race ? MINUTES : FASTEST);
+  drawTimeRight(d, row.time, W - 2, y, row.improved ? rgb(60, 230, 90) : place > 1 || !strcmp(row.time, "NO TIME") ? GREY : race ? MINUTES : FASTEST);  // green: a better lap just now
 }
 
 // Who moved up or down at the last change of the order, and until when it is shown
@@ -655,6 +660,14 @@ static uint32_t moveMask(const F1Ticker::Session &s) {
   uint32_t mask = 0;
   for (int i = 0; i < F1Ticker::ROWS; i++)
     if (s.rows[i].code[0] && movedDir(s.rows[i].code)) mask |= 1UL << i;
+  return mask;
+}
+
+// Bit per row whose best lap just got better: when it changes, the list is drawn again
+static uint32_t improvedMask(const F1Ticker::Session &s) {
+  uint32_t mask = 0;
+  for (int i = 0; i < F1Ticker::ROWS; i++)
+    if (s.rows[i].code[0] && s.rows[i].improved) mask |= 1UL << i;
   return mask;
 }
 
@@ -918,6 +931,14 @@ static void drawBottomChequers(MatrixPanel_I2S_DMA *d) {
   chequer(d, 56, 64);
 }
 
+// The dim background of a live list, in the rows from top to bottom (under the header): the country's flag, with the
+// chequers of the main screens above and below it
+static void drawLiveBackdrop(MatrixPanel_I2S_DMA *d, int top, int bottom) {
+  if (shortPanel()) return;
+  drawBackdrop(d, top, min(bottom, 56));
+  if (bottom > 56) chequer(d, max(top, 56), bottom);
+}
+
 // Is the flag out? A race: as soon as the leader has finished; practice and qualifying: when the clock reads 0:00
 static bool flagOn(const F1Ticker::Session &s) {
   if (shortPanel()) return false;
@@ -1010,6 +1031,18 @@ static int filledRows(const F1Ticker::Session &s) {
   return n;
 }
 
+// Qualifying: which part it is (Q1 or SQ1 give 1), 0 for anything else
+static int qPart(const F1Ticker::Session &s) {
+  const char *digit = s.name[0] == 'Q' ? s.name + 1 : s.name[0] == 'S' && s.name[1] == 'Q' ? s.name + 2 : "";
+  return atoi(digit);
+}
+
+// The places of the list that is shown: in the second part of qualifying only the 16 who got through, in the third the 10
+static int shownRows(const F1Ticker::Session &s) {
+  int n = filledRows(s), part = s.tag == 'Q' ? qPart(s) : 0;
+  return part == 2 ? min(n, 16) : part == 3 ? min(n, 10) : n;
+}
+
 static bool anyFavourite(const F1Ticker::Session &s) {
   for (int i = 0; i < F1Ticker::ROWS; i++)
     if (isFavourite(s.rows[i].code)) return true;
@@ -1021,7 +1054,7 @@ static bool anyFavourite(const F1Ticker::Session &s) {
 // Returns how many, in order, in `out`.
 static int pickPlaces(const F1Ticker::Session &s, int slots, int *out) {
   bool chosen[F1Ticker::ROWS] = {false};
-  int n = filledRows(s), count = 0, best = -1;
+  int n = shownRows(s), count = 0, best = -1;
   auto take = [&](int i) { if (i >= 0 && i < n && !chosen[i] && count < slots) { chosen[i] = true; count++; } };
   for (int i = 0; i < 3; i++) take(i);
   for (int i = 0; i < n; i++)
@@ -1042,7 +1075,84 @@ static int pickPlaces(const F1Ticker::Session &s, int slots, int *out) {
   return m;
 }
 
-static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hour, int minute) {
+// A row of the live list as it is drawn: practice and qualifying say so when a driver has no time yet
+static F1Ticker::Row liveRow(const F1Ticker::Session &s, int i) {
+  F1Ticker::Row row = s.rows[i];
+  if (s.fromFeed && (s.tag == 'P' || s.tag == 'Q') && row.code[0] && !row.time[0]) strlcpy(row.time, "NO TIME", sizeof(row.time));
+  return row;
+}
+
+// A qualifying part that is over: the top three stay, the places after them scroll a page at a time
+// The timer at 0 is not the end: the drivers on a lap finish it. The list scrolls once every car is back in the pit lane
+// (or after three minutes, for a car that stopped on the track).
+static unsigned long qFinishedAt = 0;  // when the part was first seen over, 0 = not over
+static bool scrollsAfterQ(const F1Ticker::Session &s) {
+  if (shortPanel() || s.tag != 'Q' || !s.finished || !qFinishedAt || shownRows(s) <= 9) return false;
+  if (millis() - qFinishedAt > 180000) return true;
+  for (int i = 0; i < F1Ticker::ROWS; i++)
+    if (s.rows[i].code[0] && !s.rows[i].pit) return false;
+  return true;
+}
+static int scrollPages(const F1Ticker::Session &s) { return max(1, (shownRows(s) - 3 + 5) / 6); }
+
+// Q3 while it runs: ten places do not fit under the header, so the top three stay and places 4 to 10 scroll up and down
+// a row at a time. Returns how many rows the list can move.
+static int q3Scroll(const F1Ticker::Session &s) {
+  if (shortPanel() || s.tag != 'Q' || qPart(s) != 3 || s.finished) return 0;
+  return max(0, shownRows(s) - 9);
+}
+// Where the scrolling list is: 0 to q3Scroll, a row every page time, there and back
+static int q3Pos(int extra) {
+  int period = 2 * extra, t = (millis() / pageMs()) % period;
+  return t <= extra ? t : period - t;
+}
+
+static void drawLiveScroll(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, const char *right, uint16_t fill, uint16_t ink, uint16_t tab, int page) {
+  const int SLOTS = 6, TOP = 10;
+  int n = shownRows(s);
+  bool step = q3Scroll(s) > 0;  // a row at a time, the page is the row
+  int first = step ? 3 + page : min(3 + page * SLOTS, n - SLOTS);
+  slideSeen(slideList, first);
+  bool flag = flagOn(s);
+  if (flag) flagFill(d, 0, 8, W, 56);
+  else drawLiveBackdrop(d, 8, 64);
+  bool sliding = slideActive(slideList);
+  int shift = slideShift(slideList, SLOTS * 6);
+  // The last six are the ones who dropped out of the part (Q1: the 17th to 22nd, Q2: the 11th to 16th, the list then holds 16); nobody drops out of Q3
+  int part = qPart(s);
+  int outFrom = part == 1 || part == 2 ? n - 6 : n, outTo = n;
+  auto knocked = [&](int i) { return i >= outFrom && i < outTo; };
+  if (step) {  // rows i from the old first to the new one, each where it is on the way
+    int lo = sliding ? min(slideList.prev, first) : first, hi = sliding ? max(slideList.prev, first) : first;
+    int offset = sliding ? (int)roundf((first - slideList.prev) * 6 * (1 - glideEase(millis() - slideList.at))) : 0;
+    for (int i = lo; i < hi + SLOTS && i < n; i++) {
+      tintKnockedOut = knocked(i);
+      drawPlace(d, i + 1, liveRow(s, i), TOP + 3 * 6 + (i - first) * 6 + offset, false, 0, isFavourite(s.rows[i].code));
+    }
+  }
+  for (int slot = 0; !step && slot < SLOTS; slot++) {  // the scrolling places go first: the header and the top three are drawn over what slides out
+    int i = first + slot, y = TOP + (3 + slot) * 6;
+    if (sliding) {
+      int before = slideList.prev + slot;
+      if (before < n) { tintKnockedOut = knocked(before); drawPlace(d, before + 1, liveRow(s, before), y - shift, false, 0, isFavourite(s.rows[before].code)); }
+      if (i < n) { tintKnockedOut = knocked(i); drawPlace(d, i + 1, liveRow(s, i), y + SLOTS * 6 - shift, false, 0, isFavourite(s.rows[i].code)); }
+    } else if (i < n) {
+      tintKnockedOut = knocked(i);
+      drawPlace(d, i + 1, liveRow(s, i), y, false, 0, isFavourite(s.rows[i].code));
+    }
+  }
+  tintKnockedOut = false;
+  if (sliding) {
+    d->fillRect(0, 0, W, TOP + 3 * 6 - 1, 0);
+    if (flag) flagFill(d, 0, 8, W, TOP + 3 * 6 - 9);
+    else drawLiveBackdrop(d, 8, TOP + 3 * 6 - 1);
+  }
+  drawHeader(d, s.name, right, fill, ink, tab);
+  for (int k = 0; k < 3; k++) drawPlace(d, k + 1, liveRow(s, k), TOP + k * 6, false, 0, isFavourite(s.rows[k].code));
+  showPit = true;
+}
+
+static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hour, int minute, int page) {
   // Marked live, but nothing is happening yet (a delayed start): say so, with the time to look at meanwhile
   if (s.rows[0].code[0] == 0) {
     drawHeader(d, s.name, "WAITING", HEADER_NAVY, WHITE, TAB_QUIET);
@@ -1054,9 +1164,14 @@ static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hou
   liveRight(s, right, sizeof(right), hour, minute);
   uint16_t fill, ink, tab;
   liveColors(s, fill, ink, tab);
+  if (scrollsAfterQ(s) || q3Scroll(s) > 0) {
+    drawLiveScroll(d, s, right, fill, ink, tab, page);
+    return;
+  }
   drawHeader(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, right, fill, ink, tab);
   bool flag = flagOn(s);
   if (flag) flagFill(d, 0, shortPanel() ? 8 : 9, W, shortPanel() ? 56 : 55);  // below the header
+  else drawLiveBackdrop(d, 8, 64);
   bool race = s.tag == 'R' || s.tag == 'S';
   int shown = shortPanel() ? 4 : 9;  // 32 rows: from y 9, the last one ends on the bottom row
   int top = shortPanel() ? 9 : 10;
@@ -1100,9 +1215,10 @@ static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hou
         flagFill(d, 0, it.y - 1, W, 7);
       } else {
         d->fillRect(0, it.y - 1, W, 7, 0);
+        drawLiveBackdrop(d, max(it.y - 1, 8), min(it.y + 6, 64));
       }
     }
-    F1Ticker::Row shown = s.rows[it.row];
+    F1Ticker::Row shown = liveRow(s, it.row);
     if (race && s.finished && it.row == 0) strlcpy(shown.time, "FINISHED", sizeof(shown.time));  // the leader has taken the flag
     drawPlace(d, it.row + 1, shown, it.y, race, it.moved, isFavourite(shown.code));
   }
@@ -1372,8 +1488,8 @@ static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int
 
 // Made-up screens for the telnet simulator, so every look can be checked outside a race weekend
 static const char *const SIM_NAMES[] = {"off", "idle", "between sessions", "race", "safety car", "red flag", "qualifying",
-                                        "practice", "full results"};
-static const int SIM_COUNT = 9;
+                                        "practice", "full results", "qualifying Q2", "qualifying Q3"};
+static const int SIM_COUNT = 11;
 static const char *const SIM_GRID[] = {"ANT", "RUS", "HAM", "LEC", "NOR", "PIA", "VER", "ALO", "GAS", "HAD", "STR", "COL",
                                        "ALB", "SAI", "LAW", "LIN", "HUL", "BOR", "OCO", "BEA", "PER", "BOT"};
 
@@ -1394,6 +1510,7 @@ static void simFill(F1Ticker::Session &s, const char *name, char tag, bool live)
     strlcpy(s.rows[i].code, SIM_GRID[grid], sizeof(s.rows[i].code));
     s.rows[i].color = F1Ticker::driverColor(SIM_GRID[grid]);
     s.rows[i].fastest = (tag == 'R' || tag == 'S') && strcmp(SIM_GRID[grid], "VER") == 0;
+    s.rows[i].improved = live && tag == 'Q' && (millis() / 3000) % 2 == 0 && (i == 4 || i == 8);  // a better lap just now: the time lights up
     if (i == 0) strlcpy(s.rows[0].time, tag == 'R' || tag == 'S' ? "LEAD" : "1:29.412", sizeof(s.rows[0].time));
     else strlcpy(s.rows[i].time, GAPS[i - 1], sizeof(s.rows[i].time));
   }
@@ -1449,6 +1566,12 @@ static void simSnapshot(F1Ticker::Snapshot &s) {
       s.weekend = true;
       simFill(s.live, "QUALI", 'Q', true);
       strlcpy(s.live.clock, "4:12", sizeof(s.live.clock));
+      break;
+    case 9:  // the list holds all 22: only the 16 (Q2) or 10 (Q3) still in are shown
+    case 10:
+      s.weekend = true;
+      simFill(s.live, simScenario == 9 ? "Q2" : "Q3", 'Q', true);
+      strlcpy(s.live.clock, simScenario == 9 ? "8:20" : "6:45", sizeof(s.live.clock));
       break;
     case 7:
       s.weekend = true;
@@ -1542,6 +1665,37 @@ void Clockface::update() {
     snapSecond = millis() / 1000;
   }
 
+  // Practice and the last part of qualifying are over when the live feed says so, or 3 minutes after the clock hit 0:00,
+  // however long ESPN takes to say it: the live order becomes the result of the session
+  static uint32_t timeUpId = 0, closedId = 0;
+  static unsigned long timeUpAt = 0;
+  if (snap.live.valid && snap.live.id) {
+    bool last = snap.live.tag == 'P' || (snap.live.tag == 'Q' && qPart(snap.live) == 3);
+    bool timeUp = last && (snap.live.finished || !strcmp(snap.live.clock, "0:00"));
+    bool close = snap.live.id == closedId || (last && snap.live.fromFeed && snap.live.finished);  // the feed says it is over
+    if (!close && timeUp) {
+      if (timeUpId != snap.live.id || !timeUpAt) {
+        timeUpId = snap.live.id;
+        timeUpAt = millis();
+        Serial.printf("[face] %s: clock at 0:00, results in 3 minutes unless the feed says it is over\n", snap.live.name);
+      }
+      else if (millis() - timeUpAt > 3 * 60 * 1000UL) { closedId = snap.live.id; close = true; }
+    } else if (!timeUp) {
+      timeUpAt = 0;
+    }
+    if (close) {
+      static uint32_t loggedId = 0;
+      if (loggedId != snap.live.id) {
+        loggedId = snap.live.id;
+        Serial.printf("[face] %s is over (%s), showing the results\n", snap.live.name, snap.live.finished ? "the feed says so" : "3 minutes after 0:00");
+      }
+      closedId = snap.live.id;
+      snap.last = snap.live;
+      snap.last.live = false;
+      if (snap.last.tag == 'Q') strlcpy(snap.last.name, snap.last.name[0] == 'S' ? "SQ" : "QUALI", sizeof(snap.last.name));
+      snap.live = F1Ticker::Session();
+    }
+  }
   // How long ago the last session ended: seen going from live to finished, or else guessed from its start
   static bool wasLive = false;
   static uint32_t endId = 0;
@@ -1574,6 +1728,9 @@ void Clockface::update() {
     int n = filledRows(snap.last);
     page = n > 9 ? page % ((n + 6) / 8) : 0;  // eight places at a time under the winner
   }
+  if (view == LIVE && snap.live.finished) { if (!qFinishedAt) qFinishedAt = millis(); } else qFinishedAt = 0;
+  if (view == LIVE && scrollsAfterQ(snap.live)) page = (millis() / pageMs()) % scrollPages(snap.live);
+  else if (view == LIVE && q3Scroll(snap.live) > 0) page = q3Pos(q3Scroll(snap.live));
   if (view == LIVE && strcmp(snap.live.clock, "0:00") == 0) {
     if (!clockZeroAt) clockZeroAt = millis();  // a countdown stuck at 0:00 turns into the time of day after a while
   } else {
@@ -1591,11 +1748,11 @@ void Clockface::update() {
     slideList.cur = slideBetween.cur = slideNext.cur = -1;
     glideToN = glideFromN = 0;
   }
-  bool gliding = (view == LIVE && glideActive()) || (view == LIST && slideActive(slideList)) || (view == BETWEEN && (slideActive(slideBetween) || slideActive(slideNext)));
+  bool gliding = (view == LIVE && (glideActive() || ((scrollsAfterQ(snap.live) || q3Scroll(snap.live) > 0) && slideActive(slideList)))) || (view == LIST && slideActive(slideList)) || (view == BETWEEN && (slideActive(slideBetween) || slideActive(slideNext)));
   uint32_t marks = 0;
   if (view == LIVE) {
     trackMoves(snap.live);
-    marks = moveMask(snap.live);
+    marks = moveMask(snap.live) ^ (improvedMask(snap.live) * 2654435761UL);
   }
 
   // Only draw when something changed
@@ -1622,7 +1779,7 @@ void Clockface::update() {
   marqueeMax = 0;  // set again by a text that scrolls
   _display->fillScreen(0);
   switch (view) {
-    case LIVE: drawLive(_display, snap.live, hour, minute); break;
+    case LIVE: drawLive(_display, snap.live, hour, minute, page); break;
     case LIST: drawResultList(_display, snap.last, hour, minute, page); break;
     case BETWEEN: drawBetween(_display, _dateTime, hour, minute, page); break;
     case IDLE: drawIdle(_display, _dateTime, hour, minute, page); break;
