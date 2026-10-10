@@ -815,6 +815,7 @@ static bool isFavourite(const char *code) {
 // and shapes ----
 static int bdTop = 0, bdBottom = 64;  // only these rows are drawn
 static bool backdropShown = false;  // the frame being drawn has the backdrop (set by drawBackdrop, cleared for each new frame)
+static uint64_t tileRows = 0;  // the rows chequer() filled in this frame, one bit each
 // Probing: the flag is "drawn" without a display, only to learn the colour that would end up at one pixel
 static int bdProbeX = -1, bdProbeY = -1;
 static uint16_t bdProbeColor = 0;
@@ -981,6 +982,7 @@ static const int FLAG_TOP = 16;
 
 // The chequered flag of the results over the rows y0 to y1 (not included): squares of 8, the same everywhere
 static void chequer(MatrixPanel_I2S_DMA *d, int y0, int y1) {
+  for (int y = max(y0, 0); y < min(y1, 64); y++) tileRows |= 1ULL << y;  // so a colon over them fades into the squares
   for (int block = y0 / 8; block * 8 < y1; block++)
     for (int col = 0; col < W / 8; col++) {
       if ((block + col) & 1) continue;
@@ -1005,10 +1007,11 @@ static void drawBackdrop(MatrixPanel_I2S_DMA *d, int top, int bottom) {
 }
 
 static uint16_t backdropAt(int x, int y) {
+  if (y < 0 || y >= 64) return 0;
+  if (tileRows >> y & 1) return ((y / 8 + x / 8) & 1) ? 0 : FLAG_TILE;  // the squares, as chequer() draws them
   if (!backdropShown || shortPanel() || y < bdTop || y >= bdBottom) return 0;
   Country country = backdropCountry();
-  if (y < FLAG_TOP || (country == C_NONE && y < 56)) return ((y / 8 + x / 8) & 1) ? 0 : FLAG_TILE;  // the squares, as chequer() draws them
-  if (country == C_NONE) return 0;
+  if (country == C_NONE || y < FLAG_TOP) return 0;
   bdProbeX = x, bdProbeY = y, bdProbeColor = 0;
   drawFlag(nullptr, country, FLAG_TOP);  // only the probe: nothing is drawn
   bdProbeX = -1;
@@ -1893,6 +1896,7 @@ void Clockface::update() {
   dotShift = (view == LIVE && timesFailed(snap.live)) || (view == LIST && timesFailed(snap.last)) ? 3 : 0;
   _display->fillScreen(0);
   backdropShown = false;  // until the view draws it
+  tileRows = 0;
   switch (view) {
     case LIVE: drawLive(_display, snap.live, hour, minute, page); break;
     case LIST: drawResultList(_display, snap.last, hour, minute, page); break;
