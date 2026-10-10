@@ -249,6 +249,170 @@ static void sayPortuguese(int h, int m, WordPhrase &p) {
   }
 }
 
+// ---- Polish, Czech, Slovak and Hungarian, read from a digital clock: "siódma zero pięć",
+// "sedm hodin", "hét óra negyvenöt" ----
+
+// The hour, then "zero" and the minute below ten, then the tens and the ones
+struct DigitalWords {
+  const char *const *hours;    // 1 to 12
+  const char *const *numbers;  // 1 to 19
+  const char *const *tens;     // 20, 30, 40 and 50 at 2 to 5
+  const char *zero;            // before a minute below ten, or nullptr
+  const char *oclock[3];       // after the hour 1, 2 to 4 and 5 or more, or before it when oclockFirst
+  bool oclockFirst;
+  const char *midnight, *noon;
+};
+
+static void sayDigital(const DigitalWords &w, int h, int m, WordPhrase &p) {
+  if (m == 0 && h == 0) {
+    p.hour(w.midnight);
+    return;
+  }
+  if (m == 0 && h == 12) {
+    p.hour(w.noon);
+    return;
+  }
+  int h12 = hour12(h);
+  if (m == 0) {
+    const char *oclock = w.oclock[h12 == 1 ? 0 : h12 <= 4 ? 1 : 2];
+    if (w.oclockFirst) p.small(oclock);
+    p.hour(w.hours[h12]);
+    if (!w.oclockFirst) p.small(oclock);
+    return;
+  }
+  p.hour(w.hours[h12]);
+  if (m < 10 && w.zero) p.small(w.zero);
+  if (m < 20) {
+    p.small(w.numbers[m]);
+  } else {
+    p.small(w.tens[m / 10]);
+    if (m % 10) p.small(w.numbers[m % 10]);
+  }
+}
+
+static const char *const PL_HOURS[] = {"", "pierwsza", "druga", "trzecia", "czwarta", "piąta", "szósta", "siódma",
+                                       "ósma", "dzie|wiąta", "dzie|siąta", "jede|nasta", "dwu|nasta"};
+static const char *const PL[] = {"", "jeden", "dwa", "trzy", "cztery", "pięć", "sześć", "siedem", "osiem",
+                                 "dzie|więć", "dzie|sięć", "jede|naście", "dwa|naście", "trzy|naście", "czter|naście",
+                                 "pięt|naście", "szes|naście", "siedem|naście", "osiem|naście", "dziewięt|naście"};
+static const char *const PL_TENS[] = {"", "", "dwa|dzieścia", "trzy|dzieści", "czter|dzieści", "pięćdzie|siąt"};
+static const DigitalWords POLISH = {PL_HOURS, PL, PL_TENS, "zero", {"godzina", "godzina", "godzina"}, true,
+                                    "pół|noc", "połu|dnie"};
+static void sayPolish(int h, int m, WordPhrase &p) { sayDigital(POLISH, h, m, p); }
+
+static const char *const CS_HOURS[] = {"", "jedna", "dvě", "tři", "čtyři", "pět", "šest", "sedm", "osm", "devět",
+                                       "deset", "jede|náct", "dva|náct"};
+static const char *const CS[] = {"", "jedna", "dvě", "tři", "čtyři", "pět", "šest", "sedm", "osm", "devět", "deset",
+                                 "jede|náct", "dva|náct", "tři|náct", "čtr|náct", "pat|náct", "šest|náct", "sedm|náct",
+                                 "osm|náct", "devate|náct"};
+static const char *const CS_TENS[] = {"", "", "dvacet", "třicet", "čtyři|cet", "pade|sát"};
+static const DigitalWords CZECH = {CS_HOURS, CS, CS_TENS, "nula", {"hodina", "hodiny", "hodin"}, false,
+                                   "půlnoc", "poledne"};
+static void sayCzech(int h, int m, WordPhrase &p) { sayDigital(CZECH, h, m, p); }
+
+static const char *const SK_HOURS[] = {"", "jedna", "dve", "tri", "štyri", "päť", "šesť", "sedem", "osem", "deväť",
+                                       "desať", "jede|násť", "dva|násť"};
+static const char *const SK[] = {"", "jedna", "dve", "tri", "štyri", "päť", "šesť", "sedem", "osem", "deväť",
+                                 "desať", "jede|násť", "dva|násť", "tri|násť", "štr|násť", "pät|násť", "šest|násť",
+                                 "sedem|násť", "osem|násť", "devät|násť"};
+static const char *const SK_TENS[] = {"", "", "dvad|sať", "trid|sať", "štyrid|sať", "päť|desiat"};
+static const DigitalWords SLOVAK = {SK_HOURS, SK, SK_TENS, "nula", {"hodina", "hodiny", "hodín"}, false,
+                                    "polnoc", "poludnie"};
+static void saySlovak(int h, int m, WordPhrase &p) { sayDigital(SLOVAK, h, m, p); }
+
+// Hungarian writes the tens and the ones as one word: "negyvenöt"
+static const char *const HU_HOURS[] = {"", "egy", "kettő", "három", "négy", "öt", "hat", "hét", "nyolc", "kilenc",
+                                       "tíz", "tizen|egy", "tizen|kettő"};
+static const char *const HU[] = {
+    "", "egy", "kettő", "három", "négy", "öt", "hat", "hét", "nyolc", "kilenc", "tíz",
+    "tizen|egy", "tizen|kettő", "tizen|három", "tizen|négy", "tizen|öt", "tizen|hat", "tizen|hét", "tizen|nyolc",
+    "tizen|kilenc", "húsz", "huszon|egy", "huszon|kettő", "huszon|három", "huszon|négy", "huszon|öt", "huszon|hat",
+    "huszon|hét", "huszon|nyolc", "huszon|kilenc", "harminc", "harminc|egy", "harminc|kettő", "harminc|három",
+    "harminc|négy", "harminc|öt", "harminc|hat", "harminc|hét", "harminc|nyolc", "harminc|kilenc", "negyven",
+    "negyven|egy", "negyven|kettő", "negyven|három", "negyven|négy", "negyven|öt", "negyven|hat", "negyven|hét",
+    "negyven|nyolc", "negyven|kilenc", "ötven", "ötven|egy", "ötven|kettő", "ötven|három", "ötven|négy", "ötven|öt",
+    "ötven|hat", "ötven|hét", "ötven|nyolc", "ötven|kilenc"};
+
+static void sayHungarian(int h, int m, WordPhrase &p) {
+  if (m == 0 && h == 0) {
+    p.hour("éjfél");
+  } else if (m == 0 && h == 12) {
+    p.hour("dél");
+  } else {
+    p.hour(HU_HOURS[hour12(h)]);
+    p.small("óra");
+    if (m) p.small(HU[m]);
+  }
+}
+
+// ---- Romanian (from 40 minutes on) and Croatian count down to the next hour in the second half of it:
+// "opt fără zece", "deset do osam", and Croatian says the half hour as "pola osam" ----
+
+static const char *const RO_HOURS[] = {"", "unu", "două", "trei", "patru", "cinci", "șase", "șapte", "opt", "nouă",
+                                       "zece", "unspre|zece", "două|spre|zece"};
+static const char *const RO[] = {"", "un minut", "două", "trei", "patru", "cinci", "șase", "șapte", "opt", "nouă",
+                                 "zece", "un|spre|zece", "două|spre|zece", "trei|spre|zece", "pai|spre|zece",
+                                 "cinci|spre|zece", "șai|spre|zece", "șapte|spre|zece", "opt|spre|zece",
+                                 "nouă|spre|zece", "două|zeci", "două|zeci și unu", "două|zeci și două",
+                                 "două|zeci și trei", "două|zeci și patru", "două|zeci și cinci", "două|zeci și șase",
+                                 "două|zeci și șapte", "două|zeci și opt", "două|zeci și nouă", "trei|zeci",
+                                 "trei|zeci și unu", "trei|zeci și două", "trei|zeci și trei", "trei|zeci și patru",
+                                 "trei|zeci și cinci", "trei|zeci și șase", "trei|zeci și șapte",
+                                 "trei|zeci și opt", "trei|zeci și nouă", "patru|zeci", "patru|zeci și unu",
+                                 "patru|zeci și două", "patru|zeci și trei", "patru|zeci și patru"};
+
+static void sayRomanian(int h, int m, WordPhrase &p) {
+  if (m == 0 && h == 0) {
+    p.hour("miezul");
+    p.hour("nopții");
+  } else if (m == 0 && h == 12) {
+    p.hour("amiază");
+  } else if (m == 0) {
+    p.small("ora");
+    p.hour(RO_HOURS[hour12(h)]);
+  } else if (m < 40 || (m < 45 && hour12(h + 1) == 12)) {  // "douăsprezece fără șaptesprezece" is too long
+    p.hour(RO_HOURS[hour12(h)]);
+    p.small("și");
+    p.small(m == 15 ? "un sfert" : m == 30 ? "jumătate" : RO[m]);
+  } else {
+    p.hour(RO_HOURS[hour12(h + 1)]);
+    p.small("fără");
+    p.small(m == 45 ? "un sfert" : RO[60 - m]);
+  }
+}
+
+static const char *const HR_HOURS[] = {"", "jedan", "dva", "tri", "četiri", "pet", "šest", "sedam", "osam", "devet",
+                                       "deset", "jeda|naest", "dva|naest"};
+static const char *const HR[] = {"", "jedna", "dvije", "tri", "četiri", "pet", "šest", "sedam", "osam", "devet",
+                                 "deset", "jeda|naest", "dva|naest", "tri|naest", "četr|naest", "pet|naest",
+                                 "šes|naest", "sedam|naest", "osam|naest", "devet|naest", "dva|deset",
+                                 "dva|deset jedna", "dva|deset dvije", "dva|deset tri", "dva|deset četiri",
+                                 "dva|deset pet", "dva|deset šest", "dva|deset sedam", "dva|deset osam",
+                                 "dva|deset devet"};
+
+static void sayCroatian(int h, int m, WordPhrase &p) {
+  int h12 = hour12(h);
+  if (m == 0 && h == 0) {
+    p.hour("ponoć");
+  } else if (m == 0 && h == 12) {
+    p.hour("podne");
+  } else if (m == 0) {
+    p.hour(HR_HOURS[h12]);
+    p.small(h12 == 1 ? "sat" : h12 <= 4 ? "sata" : "sati");
+  } else if (m < 30) {
+    p.hour(HR_HOURS[h12]);
+    p.small("i");
+    p.small(m == 15 ? "četvrt" : HR[m]);
+  } else if (m == 30) {
+    p.small("pola");
+    p.hour(HR_HOURS[hour12(h + 1)]);
+  } else {
+    p.small(m == 45 ? "četvrt" : HR[60 - m]);
+    p.small("do");
+    p.hour(HR_HOURS[hour12(h + 1)]);
+  }
+}
+
 const WordLanguage WORD_LANGUAGES[] = {
     {"English", sayEnglish, {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"}, "%d/%d"},
     {"Nederlands", sayDutch, {"ZO", "MA", "DI", "WO", "DO", "VR", "ZA"}, "%d-%d"},
@@ -260,5 +424,11 @@ const WordLanguage WORD_LANGUAGES[] = {
     {"Dansk", sayDanish, {"SØN", "MAN", "TIR", "ONS", "TOR", "FRE", "LØR"}, "%d/%d"},
     {"Svenska", saySwedish, {"SÖN", "MÅN", "TIS", "ONS", "TOR", "FRE", "LÖR"}, "%d/%d"},
     {"Norsk", sayNorwegian, {"SØN", "MAN", "TIR", "ONS", "TOR", "FRE", "LØR"}, "%d.%d."},
+    {"Polski", sayPolish, {"NIE", "PON", "WTO", "ŚRO", "CZW", "PIĄ", "SOB"}, "%d.%d"},
+    {"Čeština", sayCzech, {"NE", "PO", "ÚT", "ST", "ČT", "PÁ", "SO"}, "%d.%d."},
+    {"Slovenčina", saySlovak, {"NE", "PO", "UT", "ST", "ŠT", "PI", "SO"}, "%d.%d."},
+    {"Magyar", sayHungarian, {"VAS", "HÉT", "KED", "SZE", "CSÜ", "PÉN", "SZO"}, "%d.%d.", true},
+    {"Română", sayRomanian, {"DUM", "LUN", "MAR", "MIE", "JOI", "VIN", "SÂM"}, "%d.%d"},
+    {"Hrvatski", sayCroatian, {"NED", "PON", "UTO", "SRI", "ČET", "PET", "SUB"}, "%d.%d."},
 };
 const uint8_t WORD_LANGUAGE_COUNT = sizeof(WORD_LANGUAGES) / sizeof(WORD_LANGUAGES[0]);

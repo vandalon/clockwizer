@@ -7,6 +7,7 @@
 // piece gets a line of its own. A word too long for a line is broken at a '|' (with a hyphen)
 // or after a '-'; a big word that is just too wide is drawn with its letters closer together.
 // The lines get the same space between them and are centred in the area they are given.
+// A phrase that doesn't fit like that gets its big pieces in the small font as well.
 class WordLayout {
  public:
   static const uint8_t MAX_LINES = 6;
@@ -40,6 +41,7 @@ class WordLayout {
   int16_t _width, _height;
   bool _open = false;  // the last line is a small one that can take more
 
+  void layOut(const WordPhrase &phrase);
   Line *newLine(const char *codes, bool big);
   void addSmall(const char *codes);
   void addBig(const char *codes);

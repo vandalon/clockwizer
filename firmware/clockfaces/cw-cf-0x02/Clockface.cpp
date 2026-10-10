@@ -78,7 +78,9 @@ void Clockface::updateDate()
 
   // Date
   char date[12];
-  snprintf(date, sizeof(date), language().dateFormat, _dateTime->getDay(), _dateTime->getMonth());
+  int day = _dateTime->getDay(), month = _dateTime->getMonth();
+  snprintf(date, sizeof(date), language().dateFormat, language().monthFirst ? month : day,
+           language().monthFirst ? day : month);
   Locator::getDisplay()->setFont(&minute7pt7b);
   Locator::getDisplay()->setCursor(0, 61);
   Locator::getDisplay()->setTextColor(0x02ed);

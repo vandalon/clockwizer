@@ -18,10 +18,16 @@ MARKS = {
     "ring": ([".#.", "#.#", ".#."], [".##.", "#..#", ".##."]),
     "tilde": ([".#.#", "#.#."], [".#.#", "#.#."]),
     "dot": (["#"], ["##", "##"]),
-    "cedilla": ([".#", "##"], [".##", "##."]),  # under the letter
+    "breve": (["#..#", ".##."], ["#...#", ".###."]),
+    "doubleacute": ([".#.#", "#.#."], ["..#..#", ".#..#.", "#..#.."]),
+    "cedilla": ([".#", "##"], [".##", "##."]),  # under the letter, like the two below
+    "comma": (["#", "#"], ["##", ".#"]),
+    "ogonek": (["#.", ".#"], ["##.", ".##"]),  # at the right foot of the letter
 }
+BELOW = ("cedilla", "comma", "ogonek")
 COMBINING = {"0301": "acute", "0300": "grave", "0302": "circumflex", "030C": "caron", "030A": "ring",
-             "0303": "tilde", "0307": "dot", "0308": "diaeresis", "0327": "cedilla"}
+             "0303": "tilde", "0307": "dot", "0308": "diaeresis", "0327": "cedilla",
+             "0306": "breve", "030B": "doubleacute", "0326": "comma", "0328": "ogonek"}
 
 
 def load(name):
@@ -45,6 +51,8 @@ def load(name):
 def compose(glyphs, ch, thick):
     if ch in "øØ":
         base, mark = ("o" if ch == "ø" else "O"), "slash"
+    elif ch in "łŁ":
+        base, mark = ("l" if ch == "ł" else "L"), "stroke"
     else:
         parts = unicodedata.decomposition(ch).split()
         if len(parts) != 2 or parts[1] not in COMBINING:
@@ -65,6 +73,13 @@ def compose(glyphs, ch, thick):
         h = bottom - top
         for i in range(h + 1):
             pixels.add((left + round((h - i) * (width - 1) / h), top + i))
+    elif mark == "stroke":  # a short slash through the stem, half way up
+        stem = min(x for x, y in pixels if y == top)
+        mid = (top + bottom + 1) // 2
+        reach = 2 if thick else 1
+        for i in range(-reach, reach + 1):
+            for t in range(2 if thick else 1):
+                pixels.add((stem + t + i, mid - i))
     else:
         if mark == "diaeresis":
             s = 2 if thick else 1
@@ -73,9 +88,9 @@ def compose(glyphs, ch, thick):
             x0 = left + gapx
         else:
             shape = MARKS[mark][1 if thick else 0]
-            x0 = left + (width - len(shape[0]) + 1) // 2
+            x0 = right - len(shape[0]) + 1 if mark == "ogonek" else left + (width - len(shape[0]) + 1) // 2
         # one blank row between letter and mark; the ring sits on the letter, or å gets too tall
-        y0 = bottom + 1 if mark == "cedilla" else top - len(shape) - (0 if mark == "ring" else 1)
+        y0 = bottom + 1 if mark in BELOW else top - len(shape) - (0 if mark == "ring" else 1)
         for dy, row in enumerate(shape):
             for dx, c in enumerate(row):
                 if c == "#":

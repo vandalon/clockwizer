@@ -28,6 +28,7 @@ struct WordLanguage {
   void (*say)(int hour24, int minute, WordPhrase &out);
   const char *weekdays[7];  // Sunday first, in capitals
   const char *dateFormat;   // printf format for the day and the month
+  bool monthFirst;          // the format gets the month and then the day
 };
 
 // In the order of the Language list on the settings page, which stores the position:

@@ -122,6 +122,14 @@ void WordLayout::addBroken(const char *codes, bool big) {
 }
 
 void WordLayout::build(const WordPhrase &phrase) {
+  layOut(phrase);
+  if (!fits && _bigFont != _smallFont) {  // a long phrase: the hour in the small font too
+    _bigFont = _smallFont;
+    layOut(phrase);
+  }
+}
+
+void WordLayout::layOut(const WordPhrase &phrase) {
   count = 0;
   fits = true;
   _open = false;
