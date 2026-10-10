@@ -245,7 +245,8 @@ static void bootUpdateCheck();
 static bool inBootCheck = false;  // the check right after a restart: a failure there doesn't restart again
 static void crashGuard();
 
-extern void (*f1PauseMdns)(bool pause);  // F1Live.cpp
+// F1Live.cpp holds the real definition; the weak one keeps the other clockfaces linking
+__attribute__((weak)) void (*f1PauseMdns)(bool pause) = nullptr;
 
 void setup()
 {
