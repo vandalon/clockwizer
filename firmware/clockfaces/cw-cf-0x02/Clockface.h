@@ -13,7 +13,7 @@
 #include "hour8pt7b.h"
 #include "minute7pt7b.h"
 #include "small4pt7b.h"
-#include "DateI18nEN.h"
+#include "WordClock.h"
 
 // Commons
 #include "IClockface.h"
@@ -26,6 +26,7 @@ class Clockface: public IClockface {
     CWDateTime* _dateTime;
     void updateTime();
     void updateDate();
+    const WordLanguage& language();
 
   public:
     Clockface(Adafruit_GFX* display);

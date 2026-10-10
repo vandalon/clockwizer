@@ -13,6 +13,7 @@ class CWDateTime {
   bool isAM() { return hour < 12; }
   int getYear() { return year; }
   int getHour() { return hour; }
+  int getHour24() { return hour; }
   int getMinute() { return minute; }
   int getSecond() { return second; }
   int getDay() { return day; }

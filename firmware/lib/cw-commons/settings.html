@@ -106,6 +106,19 @@
     </div>
   </section>
 
+  <section id="wordsBox" style="display:none">
+    <h2>Time in Words</h2>
+    <label for="wordLang">Language</label>
+    <select id="wordLang" onchange="scheduleSave()">
+      <!-- In the order of WORD_LANGUAGES in clockfaces/cw-cf-0x02/WordClock.cpp: the clock stores the position -->
+      <option value="0">English</option><option value="1">Nederlands</option><option value="2">Deutsch</option>
+      <option value="3">Français</option><option value="4">Español</option><option value="5">Italiano</option>
+      <option value="6">Português</option><option value="7">Dansk</option><option value="8">Svenska</option>
+      <option value="9">Norsk</option>
+    </select>
+    <p class="hint">The clock says the time, the day and the date in this language. It changes at once.</p>
+  </section>
+
   <section id="pacmanBox" style="display:none">
     <h2>Pacman Colours</h2>
     <label for="ghost1">First ghost</label>
@@ -430,6 +443,7 @@
     $('ghost1').value = g('ghost1Color') || '0';
     $('ghost2').value = g('ghost2Color') || '0';
     $('dots').value = g('dotColor') || '0';
+    $('wordLang').value = g('wordLang') || '0';
     $('access').value = g('webAccess') || '1';
     $('name').value = g('clockName');
     $('fwUrl').value = g('fwUrl');
@@ -453,6 +467,7 @@
       if (flip) flip.remove();
     }
     $('pacmanBox').style.display = faceId === '0x05' ? 'block' : 'none';
+    $('wordsBox').style.display = faceId === '0x02' ? 'block' : 'none';
     $('f1Box').style.display = faceId === '0x08' && g('displayHeight') === '32' ? 'block' : 'none';
     const rows32 = g('displayHeight') === '32';
     faces = await fetch('/faces', { cache: 'no-cache' }).then(r => r.ok ? r.json() : []).catch(() => []);
@@ -558,6 +573,7 @@
     ghost1: $('ghost1').value,
     ghost2: $('ghost2').value,
     dots: $('dots').value,
+    wordLang: $('wordLang').value,
     access: $('access').value,
     name: $('name').value.trim(),
     fwUrl: $('fwUrl').value.trim(),
@@ -718,6 +734,7 @@
     const styleChanged = now.timeStyle !== orig.timeStyle;
     const colorChanged = now.color !== orig.color;
     const pacmanChanged = now.ghost1 !== orig.ghost1 || now.ghost2 !== orig.ghost2 || now.dots !== orig.dots;
+    const langChanged = now.wordLang !== orig.wordLang;
     const accessChanged = now.access !== orig.access;
     const nameChanged = now.name !== orig.name;
     const fwUrlChanged = now.fwUrl !== orig.fwUrl;
@@ -727,7 +744,7 @@
     const leaguesChanged = now.fbLeagues !== orig.fbLeagues, teamsChanged = now.fbTeams !== orig.fbTeams;
     const driversChanged = now.f1Drivers !== orig.f1Drivers;
     const quietChanged = now.quiet !== orig.quiet || (now.quiet && (now.qFrom !== orig.qFrom || now.qTo !== orig.qTo));
-    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !f1Changed && !ballChanged && !flagsChanged && !styleChanged && !colorChanged && !pacmanChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged && !driversChanged && !birthdaysChanged) return;
+    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !f1Changed && !ballChanged && !flagsChanged && !styleChanged && !colorChanged && !pacmanChanged && !langChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged && !driversChanged && !birthdaysChanged) return;
     if (now.quiet && now.qFrom === now.qTo) { toast('Choose different start and end times', 3000); return; }
     // Checked before anything is sent: a refusal halfway would leave the settings after it unsaved
     if (fwUrlChanged && now.fwUrl && (!/^https?:\/\//i.test(now.fwUrl) || now.fwUrl.length > 120)) {
@@ -746,6 +763,7 @@
       if (now.ghost1 !== orig.ghost1) await set('ghost1Color', now.ghost1);
       if (now.ghost2 !== orig.ghost2) await set('ghost2Color', now.ghost2);
       if (now.dots !== orig.dots) await set('dotColor', now.dots);
+      if (langChanged) await set('wordLang', now.wordLang);
       if (now.telnet !== orig.telnet) await set('telnet', now.telnet);
       if (accessChanged) await set('webAccess', now.access);
       if (matchChanged) await set('matchSecs', now.matchSecs);

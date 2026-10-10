@@ -80,6 +80,8 @@ struct ClockwiseParams
     const char* const PREF_GHOST1_COLOR = "ghost1Color";
     const char* const PREF_GHOST2_COLOR = "ghost2Color";
     const char* const PREF_DOT_COLOR = "dotColor";
+    // Time in Words face: the language, a position in WORD_LANGUAGES (WordClock.cpp), 0 = English
+    const char* const PREF_WORD_LANG = "wordLang";
 
     // Start the telnet server (log and commands on port 23) at boot, off by default
     const char* const PREF_TELNET = "telnet";
@@ -150,6 +152,7 @@ struct ClockwiseParams
     uint8_t ghost1Color;
     uint8_t ghost2Color;
     uint8_t dotColor;
+    uint8_t wordLang;
     String birthdays;
     bool telnet;
 
@@ -232,6 +235,7 @@ struct ClockwiseParams
         preferences.putUInt(PREF_GHOST1_COLOR, ghost1Color);
         preferences.putUInt(PREF_GHOST2_COLOR, ghost2Color);
         preferences.putUInt(PREF_DOT_COLOR, dotColor);
+        preferences.putUInt(PREF_WORD_LANG, wordLang);
         preferences.putString(PREF_BIRTHDAYS, birthdays);
         preferences.putBool(PREF_TELNET, telnet);
     }
@@ -270,6 +274,7 @@ struct ClockwiseParams
         ghost1Color = preferences.getUInt(PREF_GHOST1_COLOR, 0);
         ghost2Color = preferences.getUInt(PREF_GHOST2_COLOR, 0);
         dotColor = preferences.getUInt(PREF_DOT_COLOR, 0);
+        wordLang = preferences.getUInt(PREF_WORD_LANG, 0);
         birthdays = preferences.getString(PREF_BIRTHDAYS, "");
         telnet = preferences.getBool(PREF_TELNET, false);
     }

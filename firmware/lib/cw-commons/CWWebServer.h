@@ -413,6 +413,8 @@ struct ClockwiseWebServer
         ClockwiseParams::getInstance()->ghost1Color = constrain(value.toInt(), 0, ClockwiseParams::PACMAN_COLOR_COUNT - 1);
       } else if (key == ClockwiseParams::getInstance()->PREF_GHOST2_COLOR) {
         ClockwiseParams::getInstance()->ghost2Color = constrain(value.toInt(), 0, ClockwiseParams::PACMAN_COLOR_COUNT - 1);
+      } else if (key == ClockwiseParams::getInstance()->PREF_WORD_LANG) {
+        ClockwiseParams::getInstance()->wordLang = constrain(value.toInt(), 0, 255);  // the face falls back to English for one it doesn't know
       } else if (key == ClockwiseParams::getInstance()->PREF_DOT_COLOR) {
         ClockwiseParams::getInstance()->dotColor = constrain(value.toInt(), 0, ClockwiseParams::PACMAN_COLOR_COUNT - 1);
       } else if (key == ClockwiseParams::getInstance()->PREF_BIRTHDAYS) {
@@ -467,6 +469,7 @@ struct ClockwiseWebServer
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_GHOST1_COLOR, ClockwiseParams::getInstance()->ghost1Color);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_GHOST2_COLOR, ClockwiseParams::getInstance()->ghost2Color);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_DOT_COLOR, ClockwiseParams::getInstance()->dotColor);
+    client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_WORD_LANG, ClockwiseParams::getInstance()->wordLang);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_SHOW_F1, ClockwiseParams::getInstance()->showF1);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_F1_FLAGS, ClockwiseParams::getInstance()->f1Flags);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_TELNET, ClockwiseParams::getInstance()->telnet);

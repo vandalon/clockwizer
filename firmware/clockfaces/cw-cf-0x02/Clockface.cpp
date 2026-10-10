@@ -1,18 +1,14 @@
 
 #include "Clockface.h"
 
-const char* FORMAT_TWO_DIGITS = "%02d";
+#include <CWPreferences.h>
+#include "WordLayout.h"
 
 EventBus eventBus;
 
 unsigned long lastMillis = 0;
 int lastMinute = -1;  // minute on screen; comparing it can't miss a change like testing for second 0 can
-
-char hInWords[20];
-char mInWords[20]; 
-char formattedDate[20];
-
-DateI18nEN i18n;
+uint8_t shownLanguage = 255;  // the language on screen, to redraw at once when the settings page changes it
 
 Clockface::Clockface(Adafruit_GFX* display)
 {
@@ -22,12 +18,18 @@ Clockface::Clockface(Adafruit_GFX* display)
   Locator::provide(&eventBus);
 }
 
+// The language chosen on the settings page, English when it is one this firmware doesn't know
+const WordLanguage& Clockface::language() {
+  uint8_t chosen = ClockwiseParams::getInstance()->wordLang;
+  return WORD_LANGUAGES[chosen < WORD_LANGUAGE_COUNT ? chosen : 0];
+}
+
 void Clockface::setup(CWDateTime *dateTime) {
   this->_dateTime = dateTime;
-  Locator::getDisplay()->setTextWrap(true);
   Locator::getDisplay()->fillRect(0, 0, 64, 64, 0x0000);  
 
   lastMinute = _dateTime->getMinute();
+  shownLanguage = ClockwiseParams::getInstance()->wordLang;
   updateTime();
   updateDate();
 }
@@ -38,13 +40,15 @@ void Clockface::update()
   if (millis() - lastMillis >= 1000) {
 
     int minute = _dateTime->getMinute();
-    if (minute != lastMinute) {
+    uint8_t chosen = ClockwiseParams::getInstance()->wordLang;
+    if (minute != lastMinute || chosen != shownLanguage) {
       lastMinute = minute;
       updateTime();
 
-      if (minute == 0) {
+      if (minute == 0 || chosen != shownLanguage) {
         updateDate();
       }
+      shownLanguage = chosen;
     }
 
     lastMillis = millis();
@@ -55,19 +59,13 @@ void Clockface::updateTime()
 {
   Locator::getDisplay()->fillRect(0, 0, 64, 48, 0x0000);  
 
-  i18n.timeInWords(_dateTime->getHour24(), _dateTime->getMinute(), hInWords, mInWords);  
-  
-  // Hour
-  Locator::getDisplay()->setFont(&hour8pt7b);  
-  Locator::getDisplay()->setCursor(1, 15);
-  Locator::getDisplay()->setTextColor(0x02ed);
-  Locator::getDisplay()->println(hInWords);
-  
-  // Minute
-  Locator::getDisplay()->setFont(&minute7pt7b);
-  Locator::getDisplay()->setCursor(0, 28);
-  Locator::getDisplay()->setTextColor(0xffff);
-  Locator::getDisplay()->println(mInWords);
+  WordPhrase phrase;
+  language().say(_dateTime->getHour24(), _dateTime->getMinute(), phrase);
+
+  // The hour in blue, the rest in white, centred above the line
+  WordLayout layout(Locator::getDisplay(), &hour8pt7b, &minute7pt7b, 64, 47);
+  layout.build(phrase);
+  layout.draw(0x02ed, 0xffff);
 
   // Separator line
   Locator::getDisplay()->drawFastHLine(1, 48, 62, 0xffff);
@@ -79,22 +77,22 @@ void Clockface::updateDate()
   Locator::getDisplay()->fillRect(0, 51, 64, 13, 0x0000);
 
   // Date
+  char date[12];
+  snprintf(date, sizeof(date), language().dateFormat, _dateTime->getDay(), _dateTime->getMonth());
   Locator::getDisplay()->setFont(&minute7pt7b);
   Locator::getDisplay()->setCursor(0, 61);
   Locator::getDisplay()->setTextColor(0x02ed);
-    
-  const char* fmt = i18n.formatDate(_dateTime->getDay(), _dateTime->getMonth());
-
-  Locator::getDisplay()->print(fmt);
+  Locator::getDisplay()->print(date);
 
   uint16_t dateWidth, h = 0;
   int16_t x1, y1 = 0;
-  Locator::getDisplay()->getTextBounds(fmt, 0, 0, &x1, &y1, &dateWidth, &h);
+  Locator::getDisplay()->getTextBounds(date, 0, 0, &x1, &y1, &dateWidth, &h);
 
   // Weekday
+  char weekday[8];
+  WordLayout::toFontCodes(language().weekdays[_dateTime->getWeekday() % 7], weekday, sizeof(weekday));
   Locator::getDisplay()->setFont(&small4pt7b);
-  //Locator::getDisplay()->setFont(&minute7pt7b);
   Locator::getDisplay()->setCursor(dateWidth + 4, 61);
   Locator::getDisplay()->setTextColor(0xffff);
-  Locator::getDisplay()->println(i18n.weekDayName(_dateTime->getWeekday()));  
+  Locator::getDisplay()->print(weekday);
 }
