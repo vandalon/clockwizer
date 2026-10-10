@@ -22,6 +22,8 @@ WiFiServer server(80);
 struct ClockwiseWebServer
 {
   String httpBuffer;
+  bool mdnsStarted = false;
+  bool mdnsPaused = false;
   bool force_restart;
   bool update_requested = false;  // picked up by the main loop
   // Outcome of the last update check, for the web UI: "checking", "uptodate", "installing",
@@ -45,16 +47,36 @@ struct ClockwiseWebServer
     server.begin();
 
     // Every path that brings the web UI up announces clockwizer.local as well
-    // A second clock on the network is renamed (clockwizer-2.local) by mDNS itself; the _clockwise
-    // service below is how clocks find each other whatever their host names became.
-    static bool mdnsStarted = false;
-    if (!mdnsStarted && MDNS.begin("clockwizer"))
+    startMdns();
+  }
+
+  // A second clock on the network is renamed (clockwizer-2.local) by mDNS itself; the _clockwise
+  // service below is how clocks find each other whatever their host names became.
+  void startMdns()
+  {
+    if (!mdnsStarted && !mdnsPaused && MDNS.begin("clockwizer"))
     {
       MDNS.addService("http", "tcp", 80);
       MDNS.addService("clockwise", "tcp", 80);
       MDNS.addServiceTxt("clockwise", "tcp", "face", CW_FW_NAME);
       announceName();
       mdnsStarted = true;
+    }
+  }
+
+  // The mDNS task and its records cost several KB: the live F1 feed stops them when its connection needs the memory
+  // (the clock then can't be found as clockwizer.local, the IP address keeps working) and starts them again afterwards
+  void pauseMdns(bool pause)
+  {
+    mdnsPaused = pause;
+    if (pause && mdnsStarted)
+    {
+      MDNS.end();
+      mdnsStarted = false;
+    }
+    else if (!pause)
+    {
+      startMdns();
     }
   }
 

@@ -1,6 +1,7 @@
 #include "F1Ticker.h"
 
 #include <algorithm>
+#include <memory>
 #include <HTTPClient.h>
 #include <TelnetStream.h>
 #include <Preferences.h>
@@ -19,6 +20,11 @@ static const unsigned long IDLE_REFRESH_MS = 30 * 60 * 1000UL;
 static const unsigned long STANDINGS_REFRESH_MS = 30 * 60 * 1000UL;
 static const unsigned long SEASON_REFRESH_MS = 60 * 60 * 1000UL;
 static const unsigned long RETRY_MS = 60 * 1000UL;
+// true = never start the F1 live-timing connection (the gaps and lap times), for finding memory problems
+static const bool F1_LIVE_FEED_OFF = false;
+static const uint32_t TASK_STACK = 9216;  // it uses about 5.5 KB, and every KB counts while the live feed is connected
+static const time_t DELAY_GRACE_SECS = 3 * 60;     // a session this long past its start time and still not running is delayed
+static const time_t DELAY_MAX_SECS = 6 * 60 * 60;  // and is forgotten this long after
 static const time_t WEEKEND_TAIL_SECS = 3 * 60 * 60;  // the weekend lasts this long after the race started
 
 extern volatile bool firmwareUpdating;  // main.cpp
@@ -48,13 +54,19 @@ void F1Ticker::begin(CWDateTime *dateTime) {
   _started = true;
   _dateTime = dateTime;
   // Core 0, so downloading never stalls the display loop on core 1
-  xTaskCreatePinnedToCore(task, "f1", 12288, this, 1, &_task, 0);
+  xTaskCreatePinnedToCore(task, "f1", TASK_STACK, this, 1, &_task, 0);
 }
 
 // After an update check the task is gone (see task()): start it again once the update is over
 void F1Ticker::resume() {
-  if (!_started || _task || firmwareUpdating) return;
-  xTaskCreatePinnedToCore(task, "f1", 12288, this, 1, &_task, 0);
+  if (!_started || _task || firmwareUpdating || f1Park) return;
+  if (xTaskCreatePinnedToCore(task, "f1", TASK_STACK, this, 1, &_task, 0) == pdPASS) return;
+  static unsigned long loggedAt = 0;
+  if (!loggedAt || millis() - loggedAt > 10000) {
+    loggedAt = millis();
+    f1log("[F1] task cannot restart (data RAM free %u, largest block %u)\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  }
 }
 
 // The running order from the live feed replaces ESPN's while it is up to date; ESPN still says which session it is
@@ -128,15 +140,17 @@ uint32_t F1Ticker::version() {
 
 void F1Ticker::task(void *self) {
   F1Ticker *ticker = static_cast<F1Ticker *>(self);
+  f1TaskUp = true;
   for (;;) {
-    if (firmwareUpdating) {  // the update has the network and the heap to itself
+    if (firmwareUpdating || f1Park) {  // the update, or the live feed's handshake, has the network and the heap to itself
       // The TLS handshake needs big free blocks: hand back the task stack.
       // The data stays in the ticker; resume() starts the task again after the update.
       ticker->_task = nullptr;
+      f1TaskUp = false;
       vTaskDelete(nullptr);
     }
     // in slices, so an update that starts meanwhile is seen within a second
-    for (unsigned long left = ticker->refresh(); left > 0 && !firmwareUpdating;) {
+    for (unsigned long left = ticker->refresh(); left > 0 && !firmwareUpdating && !f1Park;) {
       unsigned long slice = std::min(left, 1000UL);
       vTaskDelay(pdMS_TO_TICKS(slice));
       left -= slice;
@@ -212,6 +226,7 @@ void F1Ticker::persistLive() {
 // Does whatever download is due. Returns how long to wait before looking again.
 unsigned long F1Ticker::refresh() {
   if (WiFi.status() != WL_CONNECTED || ezt::timeStatus() != timeSet) return 10 * 1000UL;
+  std::lock_guard<std::mutex> net(f1NetLock);  // the live feed connects between two refreshes, see F1Live.h
   if (!_cacheLoaded) loadCache();
   persistLive();
   if (until(_weekendAt) == 0) _weekendAt = millis() + fetchWeekend();
@@ -225,7 +240,8 @@ unsigned long F1Ticker::refresh() {
     _seasonAt = millis() + fetchSeason();
   }
   f1At("idle");
-  f1log("[F1] refresh done (stack left %u)\n", (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+  f1log("[F1] refresh done (stack left %u, heap free %u, largest block %u)\n", (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+         (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   if (liveOpen && (until(_standingsAt) == 0 || until(_seasonAt) == 0)) return std::max(1000UL, std::min(until(_weekendAt), 30 * 1000UL));
   return std::max(1000UL, std::min(until(_weekendAt), std::min(until(_standingsAt), until(_seasonAt))));
 }
@@ -257,8 +273,11 @@ struct WeekendScan {
 
   int comp = -1, competitor = -1;  // which session and driver are being read
   F1Ticker::Session s;
-  char id[16] = "", date[24] = "", type[8] = "", state[8] = "", clock[8] = "";
+  char id[16] = "", date[24] = "", type[8] = "", state[8] = "", clock[8] = "", statusName[24] = "";
   int period = 0;
+  uint32_t delayed[8] = {};  // sessions seen delayed (in and out)
+  uint8_t delayedCount = 0;
+  bool anyDelayed = false;   // a session is delayed now
   uint32_t driverId = 0;
   int order = 0;
   char driverName[24] = "";
@@ -304,11 +323,29 @@ struct WeekendScan {
     if (!strcmp(state, "pre")) {
       for (F1Ticker::Row &row : s.rows) row = F1Ticker::Row();
       s.count = 0;
-      if (when > nowUtc && (nextDate == 0 || when < nextDate)) {
+      // ESPN does not flag a late start: the start time just stays in the past until a new one is set
+      bool late = when + DELAY_GRACE_SECS <= nowUtc && when + DELAY_MAX_SECS > nowUtc;
+      bool delayedNow = late || strstr(statusName, "DELAY") || strstr(statusName, "POSTPON");
+      bool known = false;
+      for (int i = 0; i < delayedCount; i++) known = known || delayed[i] == s.id;
+      if (delayedNow) {
+        s.status = 'd';
+        anyDelayed = true;
+        if (!known) {
+          if (delayedCount == 8) {
+            memmove(delayed, delayed + 1, 7 * sizeof(delayed[0]));
+            delayedCount--;
+          }
+          delayed[delayedCount++] = s.id;
+        }
+      } else if (known && when > nowUtc) {
+        s.status = 'n';
+      }
+      if ((delayedNow || when > nowUtc) && (nextDate == 0 || when < nextDate)) {
         nextDate = when;
         snap.next = s;
       }
-      if (when > nowUtc && snap.comingCount < F1Ticker::Snapshot::COMING) {  // in order of start
+      if ((delayedNow || when > nowUtc) && snap.comingCount < F1Ticker::Snapshot::COMING) {  // in order of start
         int at = snap.comingCount;
         while (at > 0 && snap.coming[at - 1].start > when) {
           snap.coming[at] = snap.coming[at - 1];
@@ -316,6 +353,7 @@ struct WeekendScan {
         }
         copyName(snap.coming[at].name, sizeof(snap.coming[at].name), s.name);
         snap.coming[at].start = when;
+        snap.coming[at].status = s.status;
         snap.comingCount++;
       }
     } else {
@@ -337,7 +375,7 @@ struct WeekendScan {
     finish();
     comp = index;
     s = F1Ticker::Session();
-    id[0] = date[0] = type[0] = state[0] = clock[0] = 0;
+    id[0] = date[0] = type[0] = state[0] = clock[0] = statusName[0] = 0;
     period = 0;
   }
 
@@ -365,7 +403,10 @@ struct WeekendScan {
     else if (jsonPathIs(p, n, "events.0.competitions.*.type.abbreviation")) strlcpy(w.type, v, sizeof(w.type));
     else if (jsonPathIs(p, n, "events.0.competitions.*.status.period")) w.period = atoi(v);
     else if (jsonPathIs(p, n, "events.0.competitions.*.status.displayClock")) strlcpy(w.clock, v, sizeof(w.clock));
-    else if (jsonPathIs(p, n, "events.0.competitions.*.status.type.state")) strlcpy(w.state, v, sizeof(w.state));
+    else if (jsonPathIs(p, n, "events.0.competitions.*.status.type.name")) {
+      strlcpy(w.statusName, v, sizeof(w.statusName));
+      for (char *c = w.statusName; *c; c++) *c = toupper((unsigned char)*c);
+    } else if (jsonPathIs(p, n, "events.0.competitions.*.status.type.state")) strlcpy(w.state, v, sizeof(w.state));
     else if (n >= 7 && !strcmp(p[4], "competitors")) {
       int k = atoi(p[5]);
       if (k != w.competitor) {
@@ -381,10 +422,15 @@ struct WeekendScan {
 
 unsigned long F1Ticker::fetchWeekend() {
   f1At("fetch weekend");
-  WeekendScan scan;
+  std::unique_ptr<WeekendScan> scanHeap(new WeekendScan);  // big: not on the task's stack
+  WeekendScan &scan = *scanHeap;
   scan.nowUtc = ezt::now();
+  memcpy(scan.delayed, _delayed, sizeof(_delayed));
+  scan.delayedCount = _delayedCount;
   if (!getScan("http://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard", WeekendScan::leaf, &scan)) return RETRY_MS;
   scan.finish();
+  memcpy(_delayed, scan.delayed, sizeof(_delayed));
+  _delayedCount = scan.delayedCount;
 
   time_t nowUtc = scan.nowUtc, nextDate = scan.nextDate;
   String eventId = scan.eventId, liveId = scan.liveId;
@@ -428,8 +474,8 @@ unsigned long F1Ticker::fetchWeekend() {
     _version++;
   }
 
-  // The live feed runs from shortly before a session until a few minutes after it
-  _live.setWanted(snap.live.valid || (snap.weekend && snap.next.valid && snap.next.start - nowUtc < 10 * 60));
+  // The live feed runs from shortly before a session until a few minutes after it; a delayed one has to wait for ESPN to say it is on
+  _live.setWanted(!F1_LIVE_FEED_OFF && (snap.live.valid || (snap.weekend && snap.next.valid && snap.next.status != 'd' && snap.next.start - nowUtc < 10 * 60)));
 
   // Times and gaps cost a request per driver: only for the drivers shown, the last session once
   bool timed = false;
@@ -476,6 +522,7 @@ unsigned long F1Ticker::fetchWeekend() {
     time_t left = nextDate - nowUtc;
     wait = left < 15 * 60 ? START_REFRESH_MS : std::min(wait, (unsigned long)(left - 14 * 60) * 1000UL);
   }
+  if (scan.anyDelayed) wait = std::min(wait, START_REFRESH_MS * 4);  // look for the new start time
   return wait;
 }
 
@@ -771,6 +818,6 @@ bool F1Ticker::getScan(const char *url, JsonScan::Leaf leaf, void *sink) {
   bool ok = JsonScan::read([](void *r) { return ((YieldingReader *)r)->read(); }, &reader, leaf, sink);
   http.end();
   if (!ok) f1log("[F1] %s: cut off or not JSON after %u bytes (heap free %u, largest block %u)\n", url, (unsigned)reader.count,
-                 ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   return ok;
 }

@@ -8,6 +8,16 @@
 
 // Only one TLS handshake fits in the heap at a time: the ticker's downloads and the live feed's connect take turns
 extern std::mutex f1TlsLock;
+// The ticker holds this for a whole refresh, and the live feed while it connects: the handshake needs about 90 KB of
+// free heap, which the ticker's own downloads take part of while they run
+extern std::mutex f1NetLock;
+// The handshake needs about 100 KB free and the ticker's idle task keeps 12 KB of stack: while the live feed connects
+// it asks the ticker to hand the stack back (as for a firmware update) and the ticker starts again afterwards
+extern std::atomic<bool> f1Park;
+extern std::atomic<bool> f1TaskUp;
+
+// Stops (true) or starts (false) mDNS, set by main.cpp: the live feed stops it when its connection doesn't fit otherwise
+extern void (*f1PauseMdns)(bool pause);
 
 // Where the F1 code was last, kept in RTC memory: it survives a panic restart and is logged at the next boot
 extern char f1Phase[16];

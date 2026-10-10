@@ -10,6 +10,10 @@
 extern volatile bool firmwareUpdating;  // main.cpp
 
 std::mutex f1TlsLock;
+std::mutex f1NetLock;
+std::atomic<bool> f1Park{false};
+std::atomic<bool> f1TaskUp{false};
+void (*f1PauseMdns)(bool pause) = nullptr;
 RTC_NOINIT_ATTR char f1Phase[16];
 
 static const char HOST[] = "livetiming.formula1.com";
@@ -18,6 +22,18 @@ static const unsigned long SILENCE_MS = 40 * 1000UL;       // nothing at all fro
 static const unsigned long FRESH_MS = 45 * 1000UL;         // data older than this isn't shown
 static const unsigned long UNWANTED_MS = 3 * 60 * 1000UL;  // how long after the session the connection stays
 static const unsigned long RETRY_MS = 15 * 1000UL;
+// Memory that malloc can hand out for data: ESP.getFreeHeap() and getMaxAllocHeap() include the 45 KB of unused
+// instruction RAM, which a TLS handshake or a socket buffer cannot use
+static size_t dataFree() { return heap_caps_get_free_size(MALLOC_CAP_8BIT); }
+static size_t dataBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
+
+// A TLS handshake needs about 55 KB of data RAM when it starts (measured: it works with 64 KB and fails with 49 KB) and
+// the connection keeps about 45 KB. Below that the feed stays off rather than starve the clock: a failed handshake
+// fragments the heap and the other downloads fail too.
+static const uint32_t TASK_STACK = 7168;     // it uses 4.6 KB
+static const size_t TLS_MIN_FREE = 56000;
+static const size_t TLS_MIN_BLOCK = 17500;   // one of the connection's two 16 KB buffers
+static const size_t LOW_HEAP = 5000;         // data RAM under which a running connection is dropped
 static const char RS = 0x1E;  // SignalR ends every message with this
 
 static void liveLog(const char *format, ...) {
@@ -35,8 +51,8 @@ void F1Live::setWanted(bool wanted) {
   _wanted = wanted;
   if (wanted && !_started) {
     _started = true;
-    // Core 0, like the other downloads. The TLS handshake needs a deep stack.
-    xTaskCreatePinnedToCore(task, "f1live", 16384, this, 1, nullptr, 0);
+    // Core 0, like the other downloads.
+    xTaskCreatePinnedToCore(task, "f1live", TASK_STACK, this, 1, nullptr, 0);
   }
 }
 
@@ -95,7 +111,7 @@ bool F1Live::negotiate(char *token, size_t size, char *cookie, size_t cookieSize
   int code = http.POST("");
   if (code != HTTP_CODE_OK) {
     liveLog("[F1 live] negotiate: HTTP %d (%s), heap free %u, largest block %u\n", code, HTTPClient::errorToString(code).c_str(),
-            ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+            (unsigned)dataFree(), (unsigned)dataBlock());
     http.end();
     return false;
   }
@@ -247,16 +263,37 @@ struct WsStream {
 void F1Live::run() {
   char token[96], cookie[200];
   WiFiClientSecure client;
+  bool mdnsOff = false;
+  struct MdnsBack { bool &off; ~MdnsBack() { if (off && f1PauseMdns) f1PauseMdns(false); } } mdnsBack{mdnsOff};
   {
-    std::lock_guard<std::mutex> tls(f1TlsLock);  // negotiate and connect each do a handshake, one after the other
-    f1At("live negotiate");
-    if (!negotiate(token, sizeof(token), cookie, sizeof(cookie))) return;
-    f1At("live connect");
-    client.setInsecure();
-    client.setTimeout(10);
-    if (!client.connect(HOST, 443)) {
-      liveLog("[F1 live] connect failed (heap free %u, largest block %u)\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-      return;
+    std::lock_guard<std::mutex> net(f1NetLock);  // the ticker is idle meanwhile: its downloads take heap the handshake needs
+    f1Park = true;  // the ticker hands its stack back, see F1Live.h
+    struct Unpark { ~Unpark() { f1Park = false; } } unpark;
+    for (int i = 0; i < 30 && f1TaskUp; i++) vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(300));  // the idle task frees a deleted task's memory
+    // A connection that fails for lack of memory is tried once more with mDNS stopped: its task and records cost several KB
+    for (int attempt = 0;; attempt++) {
+      bool ok = false;
+      if (dataFree() < TLS_MIN_FREE || dataBlock() < TLS_MIN_BLOCK) {
+        liveLog("[F1 live] not enough memory to connect (heap free %u, largest block %u)\n", (unsigned)dataFree(), (unsigned)dataBlock());
+      } else {
+        std::lock_guard<std::mutex> tls(f1TlsLock);  // negotiate and connect each do a handshake, one after the other
+        f1At("live negotiate");
+        if (negotiate(token, sizeof(token), cookie, sizeof(cookie))) {
+          f1At("live connect");
+          client.setInsecure();
+          client.setTimeout(10);
+          ok = client.connect(HOST, 443);
+          if (!ok) liveLog("[F1 live] connect failed (heap free %u, largest block %u)\n", (unsigned)dataFree(), (unsigned)dataBlock());
+        }
+      }
+      if (ok) break;
+      bool memory = dataFree() < TLS_MIN_FREE || dataBlock() < TLS_MIN_BLOCK;
+      if (attempt > 0 || !memory || !f1PauseMdns) return;
+      liveLog("[F1 live] short of memory: stopping mDNS and trying again\n");
+      f1PauseMdns(true);
+      mdnsOff = true;
+      vTaskDelay(pdMS_TO_TICKS(300));  // its task frees its stack
     }
   }
 
@@ -287,7 +324,8 @@ void F1Live::run() {
   stream.nextMessage();  // the empty answer, {}
   stream.sendText("{\"type\":1,\"target\":\"Subscribe\",\"invocationId\":\"1\",\"arguments\":[[\"DriverList\",\"TimingData\","
                   "\"LapCount\",\"TrackStatus\",\"SessionStatus\",\"ExtrapolatedClock\"]]}\x1e");
-  liveLog("[F1 live] subscribed (heap free %u, stack left %u)\n", ESP.getFreeHeap(), (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+  liveLog("[F1 live] subscribed (heap free %u, largest block %u, stack left %u)\n", (unsigned)dataFree(), (unsigned)dataBlock(),
+          (unsigned)uxTaskGetStackHighWaterMark(nullptr));
   {
     std::lock_guard<std::mutex> guard(_lock);
     _state.reset();
@@ -315,6 +353,10 @@ void F1Live::run() {
       }
     }
     if (firmwareUpdating) break;  // hand the connection's memory to the update
+    if (dataFree() < LOW_HEAP) {  // the clock itself is running out of memory
+      liveLog("[F1 live] dropped, heap free %u, largest block %u\n", (unsigned)dataFree(), (unsigned)dataBlock());
+      break;
+    }
     if (_wanted) {
       unwantedSince = 0;
     } else if (!unwantedSince) {

@@ -1,6 +1,5 @@
 #include "Clockface.h"
 #include "F1Ticker.h"
-#include "FlipDigits.h"
 #include <Locator.h>
 #include <ezTime.h>
 #include <stdio.h>
@@ -40,6 +39,8 @@ static const uint16_t MINUTES = rgb(190, 235, 150);
 static const uint16_t GREY = rgb(150, 150, 160);
 static const uint16_t SESSION_NAME = rgb(78, 82, 92);
 static const uint16_t DIMMED = rgb(110, 116, 126);
+static const uint16_t DELAYED = rgb(255, 150, 0);   // a session that has not started on time
+static const uint16_t NEW_TIME = rgb(80, 205, 255);  // its new start time
 static const uint16_t GOLD = rgb(255, 214, 0);
 static const uint16_t F1_RED = rgb(225, 6, 0);
 static const uint16_t HEADER_NAVY = rgb(14, 22, 52);  // the header bar: dark, with a small coloured tab on its left edge
@@ -48,7 +49,8 @@ static const uint16_t RED_FLAG_BAR = rgb(150, 8, 6);
 static const uint16_t LINE = rgb(40, 44, 52);
 static const uint16_t RULE = rgb(80, 85, 96);  // the two lines of the tall idle screen: lighter, to stand out from the squares
 static const uint16_t BLACK = 0;
-static const uint16_t FLAG_TILE = rgb(38, 38, 40);  // the squares of the chequered flag, dim
+static const uint16_t FLAG_TILE = rgb(40, 40, 40);  // the squares of the chequered flag, dim. The display has 64 brightness levels per
+                                                      // colour and this is level 1 on all three; (38, 38, 40) was 0, 1, 1: cyan
 static const uint16_t TRACK_LINE = rgb(48, 78, 150);
 
 // 3x5 font, one row per byte, bit 2 = left pixel
@@ -133,6 +135,54 @@ static const char *const *tallGlyph(char c) {
     if (g.c == c) return g.rows;
   return nullptr;
 }
+// The session names of the bottom bar in 4 pixels wide letters, so SPRINT fits beside the time; other characters
+// come from the 5 wide font
+static const struct { char c; const char *rows[7]; } NARROW_FONT[] = {
+  {'A', {".##.", "#..#", "#..#", "####", "#..#", "#..#", "#..#"}}, {'C', {".###", "#...", "#...", "#...", "#...", "#...", ".###"}},
+  {'E', {"####", "#...", "#...", "###.", "#...", "#...", "####"}}, {'F', {"####", "#...", "#...", "###.", "#...", "#...", "#..."}},
+  {'I', {"###", ".#.", ".#.", ".#.", ".#.", ".#.", "###"}}, {'L', {"#...", "#...", "#...", "#...", "#...", "#...", "####"}},
+  {'N', {"#..#", "##.#", "##.#", "#.##", "#.##", "#..#", "#..#"}}, {'P', {"###.", "#..#", "#..#", "###.", "#...", "#...", "#..."}},
+  {'Q', {".##.", "#..#", "#..#", "#..#", "#.##", ".##.", "..##"}}, {'R', {"###.", "#..#", "#..#", "###.", "#.#.", "#..#", "#..#"}},
+  {'S', {".###", "#...", "#...", ".##.", "...#", "...#", "###."}}, {'T', {"###", ".#.", ".#.", ".#.", ".#.", ".#.", ".#."}},
+  {'U', {"#..#", "#..#", "#..#", "#..#", "#..#", "#..#", ".##."}}, {'1', {".#.", "##.", ".#.", ".#.", ".#.", ".#.", "###"}},
+  {'2', {".##.", "#..#", "...#", "..#.", ".#..", "#...", "####"}}, {'3', {"###.", "...#", "...#", ".##.", "...#", "...#", "###."}},
+  {'B', {"###.", "#..#", "#..#", "###.", "#..#", "#..#", "###."}}, {'D', {"###.", "#..#", "#..#", "#..#", "#..#", "#..#", "###."}},
+  {'G', {".###", "#...", "#...", "#.##", "#..#", "#..#", ".###"}}, {'H', {"#..#", "#..#", "#..#", "####", "#..#", "#..#", "#..#"}},
+  {'J', {"..##", "...#", "...#", "...#", "...#", "#..#", ".##."}}, {'K', {"#..#", "#.#.", "##..", "##..", "#.#.", "#..#", "#..#"}},
+  {'M', {"#..#", "####", "####", "#..#", "#..#", "#..#", "#..#"}}, {'O', {".##.", "#..#", "#..#", "#..#", "#..#", "#..#", ".##."}},
+  {'V', {"#..#", "#..#", "#..#", "#..#", "#..#", ".##.", ".##."}}, {'W', {"#..#", "#..#", "#..#", "#..#", "####", "####", "#..#"}},
+  {'X', {"#..#", "#..#", ".##.", ".##.", ".##.", "#..#", "#..#"}}, {'Y', {"#..#", "#..#", ".##.", ".##.", "..#.", "..#.", "..#."}},
+  {'Z', {"####", "...#", "..#.", "..#.", ".#..", "#...", "####"}}, {'0', {".##.", "#..#", "#..#", "#..#", "#..#", "#..#", ".##."}},
+  {'4', {"..#.", ".##.", "#.#.", "#.#.", "####", "..#.", "..#."}}, {'5', {"####", "#...", "###.", "...#", "...#", "#..#", ".##."}},
+  {'6', {".##.", "#...", "#...", "###.", "#..#", "#..#", ".##."}}, {'7', {"####", "...#", "..#.", "..#.", ".#..", ".#..", ".#.."}},
+  {'8', {".##.", "#..#", "#..#", ".##.", "#..#", "#..#", ".##."}}, {'9', {".##.", "#..#", "#..#", ".###", "...#", "...#", ".##."}},
+  {'/', {"..#", "..#", ".#.", ".#.", ".#.", "#..", "#.."}},
+};
+static const char *const *narrowGlyph(char c) {
+  for (const auto &g : NARROW_FONT)
+    if (g.c == c) return g.rows;
+  return tallGlyph(c);
+}
+static int narrowWidth(const char *s) {
+  int w = 0;
+  for (; *s; s++) {
+    const char *const *rows = narrowGlyph(*s);
+    w += rows ? (int)strlen(rows[0]) + 1 : TALL_SPACE;
+  }
+  return w ? w - 1 : 0;
+}
+static void drawNarrowText(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16_t color) {
+  for (; *s; s++) {
+    const char *const *rows = narrowGlyph(*s);
+    if (!rows) { x += TALL_SPACE; continue; }
+    int width = (int)strlen(rows[0]);
+    for (int j = 0; j < 7; j++)
+      for (int k = 0; k < width; k++)
+        if (rows[j][k] == '#' && y + j >= clipTop && y + j < clipBottom) d->drawPixel(x + k, y + j, color);
+    x += width + 1;
+  }
+}
+
 static int tallWidth(const char *s) {
   int w = 0;
   for (; *s; s++) {
@@ -187,7 +237,7 @@ static void drawTextRight(MatrixPanel_I2S_DMA *d, const char *s, int right, int 
 
 // A time or gap ("1:29.412", "+0.123"): the font's dot and colon sit in the middle of a cell, which leaves two empty
 // columns either side; here they take one column and a gap of one, so one column less on each side
-static int timeAdvance(char c) { return c == '.' || c == ':' ? 2 : 4; }
+static int timeAdvance(char c) { return c == '.' || c == ':' || c == ' ' ? 2 : 4; }  // a space (the day and the time) is 2 too
 static int timeWidth(const char *s) {
   int w = 0;
   for (; *s; s++) w += timeAdvance(*s);
@@ -197,7 +247,7 @@ static void drawTimeRight(MatrixPanel_I2S_DMA *d, const char *s, int right, int 
   int x = right - timeWidth(s);
   for (; *s; x += timeAdvance(*s), s++) {
     char one[2] = {*s, 0};
-    drawText(d, one, timeAdvance(*s) == 2 ? x - 1 : x, y, color);  // the dot is in the middle column of its cell
+    drawText(d, one, *s == '.' || *s == ':' ? x - 1 : x, y, color);  // the dot is in the middle column of its cell
   }
 }
 
@@ -212,17 +262,28 @@ static uint16_t pulsed(uint16_t color) {
 
 // The time in the banner, 3x6 digits with the colon tucked in: one pixel either side, where the font's own colon
 // leaves two. Flush against the right edge.
-static int headerTimeWidth(int hour) { return (hour > 9 ? 7 : 3) + 3 + 7; }
+// The time in the results header: the list's 3x5 digits stretched to 4 x 7, a 1 wide colon between them with a pixel either side
+static void drawStretchedDigits(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16_t color) {
+  static const uint8_t ROW_OF[7] = {0, 1, 1, 2, 3, 3, 4}, COL_OF[4] = {0, 1, 1, 2};
+  static const char *const ONE[7] = {"..#.", ".##.", "..#.", "..#.", "..#.", "..#.", ".###"};  // the stretched 1 would have a double stem
+  for (; *s; s++, x += 5) {
+    const uint8_t *rows = glyph3x5(*s);
+    if (!rows) continue;
+    for (int j = 0; j < 7; j++)
+      for (int k = 0; k < 4; k++)
+        if (*s == '1' ? ONE[j][k] == '#' : rows[ROW_OF[j]] >> (2 - COL_OF[k]) & 1) d->drawPixel(x + k, y + j, color);
+  }
+}
 static void drawHeaderTime(MatrixPanel_I2S_DMA *d, int hour, int minute, int right, int y, uint16_t color) {
   char h[3], m[3];
   snprintf(h, sizeof(h), "%d", hour);
   snprintf(m, sizeof(m), "%02d", minute);
-  int x = right - headerTimeWidth(hour);
-  int hw = (int)strlen(h) * 4 - 1;
-  drawHeaderText(d, h, x, y, color);
+  int hw = (int)strlen(h) * 5 - 1;
+  int x = right - (hw + 3 + 9);
+  drawStretchedDigits(d, h, x, y, color);
   d->drawPixel(x + hw + 1, y + 1, pulsed(color));
-  d->drawPixel(x + hw + 1, y + 4, pulsed(color));
-  drawHeaderText(d, m, x + hw + 3, y, color);
+  d->drawPixel(x + hw + 1, y + 5, pulsed(color));
+  drawStretchedDigits(d, m, x + hw + 3, y, color);
 }
 
 // A text that is wider than its window waits, scrolls a pixel at a time until its end is in view, waits again and
@@ -293,17 +354,36 @@ static bool hasDigit(const char *s) {
 
 // The letters of the banner are in the text font when they fit; a countdown or lap count stays in the small digits.
 // The countdown is redrawn alone from x 33, so a text in the text font stays left of that when there is one.
+// The banner's text: the 4 wide letters, with the digits of the time in the stretched 4 x 7 ones
+static int headerTextWidth(const char *s) {
+  int w = 0;
+  for (; *s; s++) {
+    if (*s >= '0' && *s <= '9') { w += 5; continue; }
+    const char *const *rows = narrowGlyph(*s);
+    w += rows ? (int)strlen(rows[0]) + 1 : TALL_SPACE;
+  }
+  return w ? w - 1 : 0;
+}
+static void drawHeaderMixed(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16_t color) {
+  for (; *s; s++) {
+    char one[2] = {*s, 0};
+    if (*s >= '0' && *s <= '9') {
+      drawStretchedDigits(d, one, x, y, color);
+      x += 5;
+    } else {
+      drawNarrowText(d, one, x, y, color);
+      x += headerTextWidth(one) + 1;
+    }
+  }
+}
 static void drawHeader(MatrixPanel_I2S_DMA *d, const char *left, const char *right, uint16_t fill, uint16_t ink, uint16_t tab = 0) {
-  d->fillRect(0, 0, W, 8, fill);
-  if (tab) d->fillRect(0, 0, 2, 8, tab);
+  int h = shortPanel() ? 8 : 9;
+  d->fillRect(0, 0, W, h, fill);
+  if (tab) d->fillRect(0, 0, 2, h, tab);
   int x = tab ? 4 : 2;
-  bool digits = hasDigit(right);
-  int rightWidth = digits ? textWidth(right) : tallWidth(right);
-  bool tall = x + tallWidth(left) + 3 + rightWidth + 2 <= W && (!digits || x + tallWidth(left) <= 33);
-  if (tall) {
-    drawText(d, left, x, 1, ink, true);
-    if (digits) drawHeaderText(d, right, W - 2 - rightWidth, 1, ink);
-    else drawText(d, right, W - 2 - rightWidth, 1, ink, true);
+  if (x + headerTextWidth(left) + 3 + headerTextWidth(right) + 2 <= W) {
+    drawHeaderMixed(d, left, x, 1, ink);
+    drawHeaderMixed(d, right, W - 2 - headerTextWidth(right), 1, ink);
   } else {
     drawHeaderText(d, left, x, 1, ink);
     drawHeaderText(d, right, W - 2 - textWidth(right), 1, ink);
@@ -315,41 +395,60 @@ static void drawHeader(MatrixPanel_I2S_DMA *d, const char *left, const char *rig
 // Each pixel of a digit is 0..32: how much of it the letter covers. Less than SoftEdge.lo is nothing, more than
 // SoftEdge.hi all of the colour, in between a part of it: the soft edge of the curves.
 struct GlyphSet { int w, h; const uint8_t *pixels; };
-// The clock's digits are the 3x5 lap-time ones blown up to 10 x 17 pixels (about the same shape, strokes and bars 3 thick),
+// The clock's digits are the 3x5 lap-time ones blown up to 10 x 18 pixels (about the same shape, strokes and bars 3 thick),
 // but for the 1: that is drawn by hand
-static uint8_t CLOCK_PIXELS[10 * 17 * 10];
-static const GlyphSet CLOCK_GLYPHS = {10, 17, CLOCK_PIXELS};
+static uint8_t CLOCK_PIXELS[10 * 18 * 10];
+static const GlyphSet CLOCK_GLYPHS = {10, 18, CLOCK_PIXELS};
 // The same, 13 x 23, for the main screen outside a race weekend, which has room for it
 static uint8_t BIG_PIXELS[10 * 23 * 13];
 static const GlyphSet BIG_GLYPHS = {13, 23, BIG_PIXELS};
 static bool bigClock = false;  // which of the two sizes is drawn
-static const char *const CLOCK_ONE[17] = {
-  "....XXX...", "...XXXX...", "..XXXXX...", ".XX.XXX...", ".XX.XXX...", "....XXX...", "....XXX...", "....XXX...", "....XXX...",
-  "....XXX...", "....XXX...", "....XXX...", "....XXX...", "....XXX...", ".XXXXXXXXX", ".XXXXXXXXX", ".XXXXXXXXX"};
+static const char *const CLOCK_ONE[18] = {
+  "....XXX...", "...XXXX...", "..XXXXX...", ".XX.XXX...", ".X..XXX...", "....XXX...", "....XXX...", "....XXX...", "....XXX...",
+  "....XXX...", "....XXX...", "....XXX...", "....XXX...", "....XXX...", "....XXX...", ".XXXXXXXXX", ".XXXXXXXXX", ".XXXXXXXXX"};
+// A digit of the lap-time font built, not scaled, at w x h pixels with strokes `t` thick: each pixel of the 3x5 digit
+// becomes a bar or stem of that thickness (the three columns at the left, middle and right, the three bars at the top,
+// middle and bottom) and neighbouring ones are joined
+static void buildDigit(uint8_t *out, int digit, int w, int h, int t) {
+  const uint8_t *rows = glyph3x5('0' + digit);
+  int cx[3] = {0, (w - t) / 2, w - t}, mid = (h - t) / 2;  // where the three columns start
+  int y0[5] = {0, t, mid, mid + t, h - t}, y1[5] = {t, mid, mid + t, h - t, h};  // bar, stem, bar, stem, bar
+  memset(out, 0, w * h);
+  for (int r = 0; r < 5; r++)
+    for (int c = 0; c < 3; c++) {
+      if (!(rows[r] >> (2 - c) & 1)) continue;
+      int x1 = c == 2 ? w : cx[c] + t;
+      if (c < 2 && rows[r] >> (1 - c) & 1) x1 = cx[c + 1];  // joined to the next one on the right
+      for (int y = y0[r]; y < y1[r]; y++)
+        for (int x = cx[c]; x < x1; x++) out[y * w + x] = 32;
+    }
+}
 static void initClockGlyphs() {
   static bool done = false;
   if (done) return;
   done = true;
-  static const uint8_t ROW_OF[17] = {0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4};  // the 5 rows of a lap-time digit spread over 17
-  static const uint8_t COL_OF[10] = {0, 0, 0, 1, 1, 1, 1, 2, 2, 2};
   for (int digit = 0; digit < 10; digit++) {
-    const uint8_t *rows = glyph3x5('0' + digit);
-    for (int j = 0; j < 17; j++)
-      for (int i = 0; i < 10; i++)
-        CLOCK_PIXELS[(digit * 17 + j) * 10 + i] = (digit == 1 ? CLOCK_ONE[j][i] == 'X' : rows[ROW_OF[j]] >> (2 - COL_OF[i]) & 1) ? 32 : 0;
+    if (digit == 1) {
+      for (int j = 0; j < 18; j++)
+        for (int i = 0; i < 10; i++) CLOCK_PIXELS[(digit * 18 + j) * 10 + i] = CLOCK_ONE[j][i] == 'X' ? 32 : 0;
+    } else {
+      buildDigit(&CLOCK_PIXELS[digit * 18 * 10], digit, 10, 18, 3);
+    }
   }
 }
 static void initBigGlyphs() {
   static const char *const ONE[23] = {
-    ".....XXXX....", "....XXXXX....", "...XXXXXX....", "..XXXXXXX....", ".XXX.XXXX....", ".XXX.XXXX....", ".XXX.XXXX....",
+    ".....XXXX....", "....XXXXX....", "...XXXXXX....", "..XXXXXXX....", ".XXX.XXXX....", ".XX..XXXX....", ".X...XXXX....",
     ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....",
     ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".....XXXX....", ".XXXXXXXXXXXX", ".XXXXXXXXXXXX",
     ".XXXXXXXXXXXX", ".XXXXXXXXXXXX"};
   for (int digit = 0; digit < 10; digit++) {
-    const uint8_t *rows = glyph3x5('0' + digit);
-    for (int j = 0; j < 23; j++)
-      for (int i = 0; i < 13; i++)
-        BIG_PIXELS[(digit * 23 + j) * 13 + i] = (digit == 1 ? ONE[j][i] == 'X' : rows[j * 5 / 23] >> (2 - i * 3 / 13) & 1) ? 32 : 0;
+    if (digit == 1) {
+      for (int j = 0; j < 23; j++)
+        for (int i = 0; i < 13; i++) BIG_PIXELS[(digit * 23 + j) * 13 + i] = ONE[j][i] == 'X' ? 32 : 0;
+    } else {
+      buildDigit(&BIG_PIXELS[digit * 23 * 13], digit, 13, 23, 4);
+    }
   }
 }
 struct SoftEdge { float lo, hi; };
@@ -361,7 +460,7 @@ static const SoftEdge GREEN_SOFT = {0.25f, 0.75f};  // the minutes: the brighter
 static int timeStyle = 2;
 static const int STYLE_FADE = 1, STYLE_ROLL = 2, STYLE_DISSOLVE = 3, STYLE_DRIFT = 4, STYLE_SHIMMER = 5;
 static const unsigned long CHANGE_MS = 640, CHANGE_STAGGER = 140;  // a digit takes this long; the digits go one after the other
-static const int TILE_W = 10, TILE_H = 17;
+static const int TILE_W = 10, TILE_H = 18;
 static int tileW() { return bigClock ? 13 : TILE_W; }
 static int tileH() { return bigClock ? 23 : TILE_H; }
 
@@ -411,6 +510,10 @@ static void drawGlyph(MatrixPanel_I2S_DMA *d, int digit, int x, int y, uint16_t 
   }
 }
 
+// A changed timeStyle setting changes the last minute digit to itself once, so the new style is seen straight away
+static bool sampling = false;
+static int shownStyle = -1;
+
 // How far the digit k has got in changing: 0..1, 1 when it is over, -1 while it waits for the digits after it
 static float changeProgress(int k) {
   long t = (long)(millis() - changeAt[k]);
@@ -422,7 +525,7 @@ static void drawTile(MatrixPanel_I2S_DMA *d, int k, int x, int y, uint16_t color
   float p = changeProgress(k);  // (the screen is cleared and the background drawn before: nothing to clear here)
   if (p < 0) {
     drawGlyph(d, oldDigits[k], x, y, color, soft, 32, 0, 0);
-  } else if (p >= 1 || oldDigits[k] == clockDigits[k]) {
+  } else if (p >= 1 || (oldDigits[k] == clockDigits[k] && !(sampling && k == 3))) {
     drawGlyph(d, clockDigits[k], x, y, color, soft, 32, 0, 0);
   } else if (timeStyle == STYLE_ROLL) {
     int run = tileH() + 2, off = (int)roundf(p * p * (3 - 2 * p) * run);
@@ -439,12 +542,9 @@ static void drawTile(MatrixPanel_I2S_DMA *d, int k, int x, int y, uint16_t color
 }
 
 static const int TILE_OFFSET[4] = {0, 11, 28, 39};  // the hours and the minutes: 2 pixels either side of the colon
-static const int BIG_OFFSET[4] = {0, 14, 35, 49};
-static const int CLOCK_WIDTH = 49, BIG_WIDTH = 62;
-// timeStyle 0, the flip cards (as on the football clock): 14 x 23 cards on the main screen, 12 x 17 next to the session name
-static const int FLIP_BIG_OFFSET[4] = {0, 15, 33, 48}, FLIP_SMALL_OFFSET[4] = {0, 13, 28, 41};
-static const int FLIP_BIG_WIDTH = 62, FLIP_SMALL_WIDTH = 53;
-static int clockWidth() { return timeStyle == 0 ? (bigClock ? FLIP_BIG_WIDTH : FLIP_SMALL_WIDTH) : bigClock ? BIG_WIDTH : CLOCK_WIDTH; }
+static const int BIG_OFFSET[4] = {0, 14, 33, 47};
+static const int CLOCK_WIDTH = 49, BIG_WIDTH = 60;
+static int clockWidth() { return bigClock ? BIG_WIDTH : CLOCK_WIDTH; }
 static int clockLeft = (64 - CLOCK_WIDTH) / 2;  // where the clock starts: in the middle, or at the right on the results screen
 
 // The four digits for the time: starts a change on the ones that differ
@@ -453,7 +553,14 @@ static void updateClockDigits(int hour, int minute) {
   initBigGlyphs();
   int digits[4] = {hour / 10, hour % 10, minute / 10, minute % 10};
   timeStyle = ClockwiseParams::getInstance()->timeStyle;
-  if (timeStyle > 5) timeStyle = STYLE_ROLL;
+  if (timeStyle < 1 || timeStyle > 5) timeStyle = STYLE_ROLL;  // there are no flip cards on this clock
+  if (sampling && changeProgress(3) >= 1) sampling = false;
+  if (shownStyle >= 0 && timeStyle != shownStyle && clockStateKnown) {
+    sampling = true;
+    changeAt[3] = millis();
+    tileSettled[3] = false;
+  }
+  shownStyle = timeStyle;
   if (!clockStateKnown) {
     for (int i = 0; i < 4; i++) clockDigits[i] = oldDigits[i] = digits[i];
     clockStateKnown = true;
@@ -477,77 +584,20 @@ static bool clockMoving() {
   return false;
 }
 
-// One row of a flip card, drawn at screen row y: the card with its rounded corners, the digit's pixels on it and the
-// split as a black row. level dims it for the folding halves.
-static const uint16_t CARD = rgb(52, 56, 66);
-static uint16_t mixColor(uint16_t c0, uint16_t c1, int k) {
-  int r0 = c0 >> 11 << 3, g0 = c0 >> 5 & 63, b0 = c0 & 31, r1 = c1 >> 11 << 3, g1 = c1 >> 5 & 63, b1 = c1 & 31;
-  return rgb(r0 + (r1 - r0) * k / 32, (g0 + (g1 - g0) * k / 32) << 2, (b0 + (b1 - b0) * k / 32) << 3);
-}
-static void drawCardRow(MatrixPanel_I2S_DMA *d, const GlyphSet &set, int digit, int x, int y, int w, int h, int row,
-                        uint16_t color, const SoftEdge &soft, int level) {
-  if (row == h / 2) {
-    d->fillRect(x, y, w, 1, 0);
-    return;
-  }
-  bool edge = row == 0 || row == h - 1;
-  d->fillRect(edge ? x + 1 : x, y, edge ? w - 2 : w, 1, scaleColor(CARD, level));
-  int gy = row - (h - set.h) / 2, gx = x + (w - set.w) / 2;
-  if (gy < 0 || gy >= set.h) return;
-  const uint8_t *px = set.pixels + (digit * set.h + gy) * set.w;
-  float lo = soft.lo * 32, scale = 32 / ((soft.hi - soft.lo) * 32);
-  for (int i = 0; i < set.w; i++) {
-    int a = (int)constrain((px[i] - lo) * scale, 0.0f, 32.0f);
-    if (a) d->drawPixel(gx + i, y, scaleColor(mixColor(CARD, color, a), level));
-  }
-}
-
-// One flip card: the old top half folds down onto the split, then the new bottom half folds out below it
-static void drawFlipCard(MatrixPanel_I2S_DMA *d, int k, int x, int y, int w, int h, uint16_t color, const SoftEdge &soft) {
-  static const GlyphSet WIDE = {12, 22, &FLIP_WIDE[0][0]}, LIVE = {10, 12, &FLIP_LIVE[0][0]};
-  const GlyphSet &set = bigClock ? WIDE : LIVE;
-  float p = changeProgress(k);
-  int digit = p < 0 ? oldDigits[k] : clockDigits[k], old = oldDigits[k];
-  int split = h / 2, below = h - 1 - split;
-  bool flipping = p >= 0 && p < 1 && old != digit;
-  for (int row = 0; row < h; row++)  // the new top half over the old bottom half
-    drawCardRow(d, set, flipping && row > split ? old : digit, x, y + row, w, h, row, color, soft, 32);
-  if (!flipping) return;
-  if (p < 0.5f) {
-    int n = (int)roundf(split * (1 - 2 * p));
-    for (int r = 0; r < n; r++) drawCardRow(d, set, old, x, y + split - n + r, w, h, r * split / n, color, soft, 18 + 14 * n / split);
-  } else {
-    int n = (int)roundf(below * (2 * p - 1));
-    for (int r = 0; r < n; r++) drawCardRow(d, set, digit, x, y + split + 1 + r, w, h, split + 1 + r * below / n, color, soft, 18 + 14 * n / below);
-  }
-}
-
 // The whole clock, or only the digits that move
 static void drawTallClock(MatrixPanel_I2S_DMA *d, int y, bool onlyMoving) {
-  if (timeStyle == 0) {
-    int w = bigClock ? 14 : 12, h = bigClock ? 23 : 17;
-    const int *offset = bigClock ? FLIP_BIG_OFFSET : FLIP_SMALL_OFFSET;
-    for (int k = 0; k < 4; k++) {
-      drawFlipCard(d, k, clockLeft + offset[k], y, w, h, k < 2 ? CLOCK : MINUTES, k < 2 ? WHITE_SOFT : GREEN_SOFT);
-      if (changeProgress(k) >= 1) tileSettled[k] = true;
-    }
-    int cx = clockLeft + 2 * w + 1 + (bigClock ? 1 : 0);
-    d->fillRect(cx, y + h / 2 - 3, 2, 2, pulsed(WHITE));
-    d->fillRect(cx, y + h / 2 + 2, 2, 2, pulsed(WHITE));
-    return;
-  }
   for (int k = 0; k < 4; k++) {
     if (onlyMoving && timeStyle != STYLE_SHIMMER && tileSettled[k]) continue;
     drawTile(d, k, clockLeft + (bigClock ? BIG_OFFSET : TILE_OFFSET)[k], y, k < 2 ? CLOCK : MINUTES, k < 2 ? WHITE_SOFT : GREEN_SOFT);
     if (changeProgress(k) >= 1) tileSettled[k] = true;
   }
   if (bigClock) {
-    d->fillRect(clockLeft + 29, y + 6, 4, 4, pulsed(WHITE));
-    d->fillRect(clockLeft + 29, y + 13, 4, 4, pulsed(WHITE));
+    d->fillRect(clockLeft + 28, y + 6, 4, 4, pulsed(WHITE));
+    d->fillRect(clockLeft + 28, y + 13, 4, 4, pulsed(WHITE));
     return;
   }
   d->fillRect(clockLeft + 23, y + 4, 3, 3, pulsed(WHITE));
-  d->fillRect(clockLeft + 23, y + 10, 3, 3, pulsed(WHITE));
+  d->fillRect(clockLeft + 23, y + 11, 3, 3, pulsed(WHITE));
 }
 
 // The clock: the small panel has the 5x7 digits two rows tall; the tall panel the soft ones above
@@ -572,18 +622,18 @@ static void drawPlace(MatrixPanel_I2S_DMA *d, int place, const F1Ticker::Row &ro
   if (moved) d->fillRect(0, y - 1, W, 7, moved > 0 ? rgb(0, 80, 20) : rgb(50, 0, 4));  // gained or lost a place
   char number[3];
   snprintf(number, sizeof(number), "%d", place);
-  drawText(d, number, place < 10 ? 4 : 0, y, place == 1 ? GOLD : GREY);
-  d->fillRect(8, y, 2, 5, row.color);
-  drawText(d, row.code, 12, y, fav ? GOLD : row.fastest ? FASTEST : WHITE);  // a favourite driver; the fastest lap in purple
+  drawText(d, number, place < 10 ? 4 : 2, y, place == 1 ? GOLD : GREY);
+  d->fillRect(10, y, 2, 5, row.color);
+  drawText(d, row.code, 14, y, fav ? GOLD : row.fastest ? FASTEST : WHITE);  // a favourite driver; the fastest lap in purple
   if (moved) {  // a little arrow between the code and the time
     uint16_t color = moved > 0 ? rgb(60, 230, 90) : rgb(255, 70, 60);
     int top = moved > 0 ? y : y + 4;
     int dy = moved > 0 ? 1 : -1;
-    d->drawPixel(26, top, color);
-    d->drawFastHLine(25, top + dy, 3, color);
-    d->drawFastHLine(24, top + 2 * dy, 5, color);
+    d->drawPixel(28, top, color);
+    d->drawFastHLine(27, top + dy, 3, color);
+    d->drawFastHLine(26, top + 2 * dy, 5, color);
   }
-  drawTimeRight(d, row.time, W, y, place > 1 ? GREY : race ? MINUTES : FASTEST);
+  drawTimeRight(d, row.time, W - 2, y, place > 1 ? GREY : race ? MINUTES : FASTEST);
 }
 
 // Who moved up or down at the last change of the order, and until when it is shown
@@ -675,9 +725,9 @@ static void flagFill(MatrixPanel_I2S_DMA *d, int x, int y, int w, int h) {
 
 static int simScenario = 0;  // the telnet simulator's screen, 0 when off
 
-// The favourite drivers of the settings (the simulator pretends VER is one when none are set)
+// The favourite drivers of the settings, in the simulator too
 static bool isFavourite(const char *code) {
-  const String &favs = simScenario && ClockwiseParams::getInstance()->f1Drivers.isEmpty() ? String("VER") : ClockwiseParams::getInstance()->f1Drivers;
+  const String &favs = ClockwiseParams::getInstance()->f1Drivers;
   return code[0] && favs.indexOf(code) >= 0;
 }
 
@@ -929,10 +979,14 @@ static int slideShift(const PageSlide &s, int total) { return slideActive(s) ? (
 
 static bool glideActive() { return glideToN && millis() - glideAt < GLIDE_MS + 60; }
 
+// The flag shown: a yellow one that is still out when the session is over (the leader has finished) is not shown
+static char shownFlag(const F1Ticker::Session &s) { return s.flag == 'y' && s.finished ? 0 : s.flag; }
+
 static void liveColors(const F1Ticker::Session &s, uint16_t &fill, uint16_t &ink, uint16_t &tab) {
   tab = 0;
-  if (s.flag == 'y') { fill = GOLD; ink = BLACK; }
-  else if (s.flag == 'r') { fill = RED_FLAG_BAR; ink = WHITE; }
+  char flag = shownFlag(s);
+  if (flag == 'y') { fill = GOLD; ink = BLACK; }
+  else if (flag == 'r') { fill = RED_FLAG_BAR; ink = WHITE; }
   else { fill = HEADER_NAVY; ink = WHITE; tab = s.tag == 'P' ? TAB_QUIET : F1_RED; }
 }
 
@@ -998,9 +1052,9 @@ static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hou
   liveRight(s, right, sizeof(right), hour, minute);
   uint16_t fill, ink, tab;
   liveColors(s, fill, ink, tab);
-  drawHeader(d, s.flag == 'r' ? "RED FLAG" : s.name, right, fill, ink, tab);
+  drawHeader(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, right, fill, ink, tab);
   bool flag = flagOn(s);
-  if (flag) flagFill(d, 0, 8, W, 56);
+  if (flag) flagFill(d, 0, shortPanel() ? 8 : 9, W, shortPanel() ? 56 : 55);  // below the header
   bool race = s.tag == 'R' || s.tag == 'S';
   int shown = shortPanel() ? 4 : 9;  // 32 rows: from y 9, the last one ends on the bottom row
   int top = shortPanel() ? 9 : 10;
@@ -1046,7 +1100,9 @@ static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hou
         d->fillRect(0, it.y - 1, W, 7, 0);
       }
     }
-    drawPlace(d, it.row + 1, s.rows[it.row], it.y, race, it.moved, isFavourite(s.rows[it.row].code));
+    F1Ticker::Row shown = s.rows[it.row];
+    if (race && s.finished && it.row == 0) strlcpy(shown.time, "FINISHED", sizeof(shown.time));  // the leader has taken the flag
+    drawPlace(d, it.row + 1, shown, it.y, race, it.moved, isFavourite(shown.code));
   }
 }
 
@@ -1101,9 +1157,10 @@ static void drawInfoRow(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, bool idle,
   } else {
     LocalTime t = localParts(dateTime, snap.next.start);
     char when[12];
-    snprintf(when, sizeof(when), "%s %02d:%02d", DAYS[t.weekday], t.hour, t.minute);
+    if (snap.next.status == 'd') strcpy(when, "DELAYED");
+    else snprintf(when, sizeof(when), "%s %02d:%02d", DAYS[t.weekday], t.hour, t.minute);
     drawText(d, snap.next.name, 2, y, WHITE);
-    drawTimeRight(d, when, W - 2, y, MINUTES);
+    drawTimeRight(d, when, W - 2, y, snap.next.status == 'd' ? DELAYED : snap.next.status == 'n' ? NEW_TIME : MINUTES);
   }
 }
 
@@ -1111,8 +1168,18 @@ static void drawInfoRow(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, bool idle,
 // All the sessions still to come this weekend, one after the other, sliding up like the pages of the lists
 static PageSlide slideNext;
 
-static int comingCount() { return snap.comingCount ? snap.comingCount : snap.next.valid ? 1 : 0; }
-static int comingIndex() { int n = comingCount(); return n ? (int)(millis() / pageMs() % n) : 0; }
+// A delayed session is shown alone: no scrolling through the others
+static int delayedIndex() {
+  for (int i = 0; i < snap.comingCount; i++) if (snap.coming[i].status == 'd') return i;
+  return -1;
+}
+static int comingCount() { return delayedIndex() >= 0 ? 1 : snap.comingCount ? snap.comingCount : snap.next.valid ? 1 : 0; }
+static int comingIndex() {
+  int delayed = delayedIndex();
+  if (delayed >= 0) return delayed;
+  int n = comingCount();
+  return n ? (int)(millis() / pageMs() % n) : 0;
+}
 
 // A session as the bottom row shows it: P1, SQ, SR, Q, R
 static const char *shortSession(const char *name) {
@@ -1128,13 +1195,15 @@ static const char *shortSession(const char *name) {
 static void drawComing(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int index, int y) {
   const char *name = snap.comingCount ? snap.coming[index].name : snap.next.name;
   time_t start = snap.comingCount ? snap.coming[index].start : snap.next.start;
+  char status = snap.comingCount ? snap.coming[index].status : snap.next.status;
   LocalTime t = localParts(dateTime, start);
   char when[12];
   bool today = dateTime->utcToLocal(start) / SECS_PER_DAY == dateTime->localNow() / SECS_PER_DAY;
-  if (today) snprintf(when, sizeof(when), "%02d:%02d", t.hour, t.minute);
+  if (status == 'd') strcpy(when, "DELAYED");
+  else if (today) snprintf(when, sizeof(when), "%02d:%02d", t.hour, t.minute);
   else snprintf(when, sizeof(when), "%s %02d:%02d", DAYS[t.weekday], t.hour, t.minute);
-  drawText(d, name, 0, y, WHITE);
-  drawTextRight(d, when, W, y, MINUTES);
+  drawNarrowText(d, name, 1, y, WHITE);
+  drawTimeRight(d, when, W - 1, y + 1, status == 'd' ? DELAYED : status == 'n' ? NEW_TIME : MINUTES);  // 5 rows in the middle of the name's 7
 }
 
 static void drawNextRow(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime) {
@@ -1235,10 +1304,10 @@ static void drawBetween(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, 
   }
   d->drawFastHLine(0, 20, W, RULE);  // between the clock and the winner, and under the places
   d->drawFastHLine(0, 54, W, RULE);
-  clockLeft = W - clockWidth();  // at the right, the session name on the left
+  clockLeft = W - 1 - clockWidth();  // at the right, a pixel from the edge, the session name on the left
   drawClock(d, hour, minute, 1, true);
   // The session the results are of, left of the clock: a light grey, to read well on the squares
-  if (snap.last.name[0]) drawText(d, shortSession(snap.last.name), 0, 11, rgb(205, 210, 220), true);
+  if (snap.last.name[0]) drawText(d, shortSession(snap.last.name), 1, 12, rgb(205, 210, 220), true);
   drawPlace(d, 1, snap.last.rows[0], 23, race, 0, isFavourite(snap.last.rows[0].code));
   drawNextRow(d, dateTime);
 }
@@ -1263,7 +1332,7 @@ static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int
   drawBackdrop(d, 0, 64);
   bigClock = true;
   clockLeft = (W - clockWidth()) / 2;
-  drawClock(d, hour, minute, 1, true);
+  drawClock(d, hour, minute, 2, true);
   bigClock = false;
   int shown[4];
   int places = standingsShown(shown, 4);
@@ -1280,7 +1349,7 @@ static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int
     drawTextRight(d, points, W - 2, y, k == 0 ? MINUTES : GREY);
     if (i == 0 && k == 0) {  // the leading team's car, in the middle of the empty part of the row
       static const char *const CAR[5] = {"XX....XX.....", "XXXXXXXXXXX..", ".XXXXXXXXXXXX", ".WWW...WWW...", ".WWW...WWW..."};
-      int left = (12 + 11 + 1 + W - 2 - (int)strlen(points) * 4) / 2 - 6;
+      int left = (14 + 11 + 1 + W - 2 - (int)strlen(points) * 4) / 2 - 6;
       for (int j = 0; j < 5; j++)
         for (int c = 0; c < 13; c++)
           if (CAR[j][c] != '.') d->drawPixel(left + c, y + j, CAR[j][c] == 'X' ? row.color : GREY);
@@ -1293,8 +1362,8 @@ static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int
     if (snap.upcoming[i].start <= nowUtc) continue;
     char when[8];
     whenText(dateTime, snap.upcoming[i].start, when, sizeof(when));
-    drawMarquee(d, snap.upcoming[i].city, 0, 56, W - textWidth(when) - 2, WHITE);  // a gap before the date
-    drawTextRight(d, when, W, 56, MINUTES);
+    drawMarquee(d, snap.upcoming[i].city, 1, 57, W - 1 - textWidth(when) - 2, WHITE);  // a gap before the date
+    drawTextRight(d, when, W - 1, 57, MINUTES);
     break;
   }
 }

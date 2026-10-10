@@ -39,6 +39,7 @@ class F1Ticker {
       int totalLaps = 0;      // of the race, from the live feed
       char clock[8] = "";     // time left, for practice and qualifying
       time_t start = 0;       // UTC
+      char status = 0;        // a session still to come: 'd' delayed (its start has passed), 'n' it has a new start time
       uint32_t eventId = 0, id = 0;  // ESPN's, for the times
       Row rows[ROWS];
       uint8_t count = 0;
@@ -61,7 +62,7 @@ class F1Ticker {
       char circuit[48] = "";  // ESPN's name of the circuit and its city, to find its outline
       Session live, last, next;
       // The sessions still to come this weekend, soonest first (the first is `next`)
-      struct Coming { char name[8] = ""; time_t start = 0; };
+      struct Coming { char name[8] = ""; time_t start = 0; char status = 0; };
       static const int COMING = 6;
       Coming coming[COMING];
       uint8_t comingCount = 0;
@@ -110,6 +111,8 @@ class F1Ticker {
     SavedRows _saved;
     bool _savedDirty = false;
     unsigned long _savedAt = 0;
+    uint32_t _delayed[8] = {};  // sessions seen delayed, so a later start time is shown as a new one
+    uint8_t _delayedCount = 0;
     uint32_t _version = 0;
     bool _started = false;
     bool _cacheLoaded = false;

@@ -118,6 +118,9 @@ void displaySetup(bool swapBlueGreen, uint8_t displayBright, uint8_t displayRota
   #ifdef DOUBLE_BUFFER_ON
     mxconfig.double_buff = true;
   #endif
+  #ifdef CW_PIXEL_DEPTH_BITS
+    mxconfig.setPixelColorDepthBits(CW_PIXEL_DEPTH_BITS);  // fewer colour bits make the display buffers smaller
+  #endif
 
   // Display Setup
   dma_display = new MatrixPanel_I2S_DMA(mxconfig);
@@ -242,11 +245,14 @@ static void bootUpdateCheck();
 static bool inBootCheck = false;  // the check right after a restart: a failure there doesn't restart again
 static void crashGuard();
 
+extern void (*f1PauseMdns)(bool pause);  // F1Live.cpp
+
 void setup()
 {
   Serial.begin(115200);
   pinMode(ESP32_LED_BUILTIN, INPUT);
   crashGuard();
+  f1PauseMdns = [](bool pause) { ClockwiseWebServer::getInstance()->pauseMdns(pause); };
 
   ClockwiseParams::getInstance()->load();
 
