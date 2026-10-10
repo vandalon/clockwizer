@@ -54,6 +54,7 @@ Values for `/set`. Text values with special characters must be URL-encoded. Sett
 | `webAccess` * | `0` anyone, `1` own network (default), `2` any private network |
 | `color`, `ghost1Color`, `ghost2Color`, `dotColor` * | index into the colour lists (see the page) |
 | `showF1` *, `ballRoll` *, `timeStyle` * (0-5) | Football and Tetris options |
+| `telnet` * | `1` starts the telnet server (port 23) at boot, default `0`. Restart needed |
 | `matchSecs` * (3-60), `resultMins` * (0-1440, 0 = until midnight) | Football options |
 | `birthdays` * | up to 10 entries `MMDD:NAME:YYYY` separated by commas, year optional, `_` for a space, e.g. `0511:ELIOT:2012,1216:AARON` (URL-encoded). Names are uppercased and cleaned up by the clock |
 | `fbLeagues` *, `fbTeams` * | comma separated codes, e.g. `ned.1,eng.1` and `449:NED:n` |

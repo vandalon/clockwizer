@@ -342,7 +342,7 @@ void setup()
   snprintf(second, sizeof(second), "%02d", cwDateTime.getSecond());
   currentTimeWithSeconds = String(hour) + ":" + String(minute) + ":" + String(second);
 
-  TelnetStream.begin();
+  if (ClockwiseParams::getInstance()->telnet) TelnetStream.begin();
   bootUpdateCheck();  // before the clockface starts its downloads: the heap is still whole
 
   Serial.println("Ready");

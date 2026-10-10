@@ -400,6 +400,8 @@ struct ClockwiseWebServer
         ClockwiseParams::getInstance()->showF1 = (value == "1");
       } else if (key == ClockwiseParams::getInstance()->PREF_F1_FLAGS) {
         ClockwiseParams::getInstance()->f1Flags = (value == "1");
+      } else if (key == ClockwiseParams::getInstance()->PREF_TELNET) {
+        ClockwiseParams::getInstance()->telnet = (value == "1");
       } else if (key == ClockwiseParams::getInstance()->PREF_BALL_ROLL) {
         ClockwiseParams::getInstance()->ballRoll = (value == "1");
       } else if (key == ClockwiseParams::getInstance()->PREF_TIME_STYLE) {
@@ -467,6 +469,7 @@ struct ClockwiseWebServer
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_DOT_COLOR, ClockwiseParams::getInstance()->dotColor);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_SHOW_F1, ClockwiseParams::getInstance()->showF1);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_F1_FLAGS, ClockwiseParams::getInstance()->f1Flags);
+    client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_TELNET, ClockwiseParams::getInstance()->telnet);
     client.printf(HEADER_TEMPLATE_S, ClockwiseParams::getInstance()->PREF_CLOCK_NAME, ClockwiseParams::getInstance()->clockName.c_str());
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_UPD_QUIET_FROM, ClockwiseParams::getInstance()->updQuietFrom);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_UPD_QUIET_UNTIL, ClockwiseParams::getInstance()->updQuietUntil);

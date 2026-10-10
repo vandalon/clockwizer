@@ -263,6 +263,10 @@
       <option value="2">Any private network (10.x, 172.16-31.x, 192.168.x)</option>
       <option value="0">Anyone who can reach the clock</option>
     </select>
+    <div class="row" style="margin-top:12px">
+      <div><strong>Telnet server</strong><p class="hint">Live log and commands on port 23, for troubleshooting. Anyone on the network can connect, so leave it off unless needed. Needs a restart.</p></div>
+      <input type="checkbox" class="switch" id="telnet" onchange="scheduleSave()">
+    </div>
     <button onclick="checkUpdate()">Check for update</button>
     <button onclick="if(confirm('Restart the clock and open WiFi setup? Your current network stays saved until you pick a new one.'))cmd('wifi','Restarting into WiFi setup. Scan the QR code on the clock.',true)">Change WiFi</button>
     <button onclick="cmd('reboot','Rebooting...',true)">Reboot</button>
@@ -416,6 +420,7 @@
     $('auto').checked = Number(g('autoBrightMax')) > 0;
     $('f1').checked = g('showF1') !== '0';
     $('flags').checked = g('f1Flags') === '1';
+    $('telnet').checked = g('telnet') === '1';
     $('ball').checked = g('ballRoll') !== '0';
     $('timeStyle').value = g('timeStyle') || '2';
     $('color').value = g('color') || '0';
@@ -547,6 +552,7 @@
     f1: $('f1').checked ? 1 : 0,
     ball: $('ball').checked ? 1 : 0,
     flags: $('flags').checked ? 1 : 0,
+    telnet: $('telnet').checked ? 1 : 0,
     timeStyle: $('timeStyle').value,
     color: $('color').value,
     ghost1: $('ghost1').value,
@@ -705,7 +711,7 @@
     const autoChanged = now.auto !== orig.auto || (now.auto && (now.dark !== orig.dark || now.light !== orig.light));
     const brightChanged = now.bright !== orig.bright;
     const brMinChanged = now.brMin !== orig.brMin;
-    const restart = now.h24 !== orig.h24 || now.tz !== orig.tz;
+    const restart = now.h24 !== orig.h24 || now.tz !== orig.tz || now.telnet !== orig.telnet;
     const f1Changed = now.f1 !== orig.f1;
     const ballChanged = now.ball !== orig.ball;
     const flagsChanged = now.flags !== orig.flags;
@@ -740,6 +746,7 @@
       if (now.ghost2 !== orig.ghost2) await set('ghost2Color', now.ghost2);
       if (now.dots !== orig.dots) await set('dotColor', now.dots);
       if (accessChanged) await set('webAccess', now.access);
+      if (now.telnet !== orig.telnet) await set('telnet', now.telnet);
       if (matchChanged) await set('matchSecs', now.matchSecs);
       if (resultChanged) await set('resultMins', now.resultMins);
       if (leaguesChanged) await set('fbLeagues', now.fbLeagues);

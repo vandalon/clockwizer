@@ -81,6 +81,9 @@ struct ClockwiseParams
     const char* const PREF_GHOST2_COLOR = "ghost2Color";
     const char* const PREF_DOT_COLOR = "dotColor";
 
+    // Start the telnet server (log and commands on port 23) at boot, off by default
+    const char* const PREF_TELNET = "telnet";
+
     // Birthdays the clock celebrates with an animated screen: "MMDD:NAME:YYYY" entries, comma separated
     const char* const PREF_BIRTHDAYS = "birthdays";
 
@@ -148,6 +151,7 @@ struct ClockwiseParams
     uint8_t ghost2Color;
     uint8_t dotColor;
     String birthdays;
+    bool telnet;
 
     uint16_t wallColor() { return COLORS[color < COLOR_COUNT ? color : 0][0]; }
     // 0 when the default is wanted
@@ -229,6 +233,7 @@ struct ClockwiseParams
         preferences.putUInt(PREF_GHOST2_COLOR, ghost2Color);
         preferences.putUInt(PREF_DOT_COLOR, dotColor);
         preferences.putString(PREF_BIRTHDAYS, birthdays);
+        preferences.putBool(PREF_TELNET, telnet);
     }
 
     void load()
@@ -266,6 +271,7 @@ struct ClockwiseParams
         ghost2Color = preferences.getUInt(PREF_GHOST2_COLOR, 0);
         dotColor = preferences.getUInt(PREF_DOT_COLOR, 0);
         birthdays = preferences.getString(PREF_BIRTHDAYS, "");
+        telnet = preferences.getBool(PREF_TELNET, false);
     }
 
 };
