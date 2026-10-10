@@ -30,7 +30,7 @@ SERVER_DIR=/var/www/html/ledMatrix
 
 # Use the PlatformIO install from the VS Code extension: Homebrew's pio lacks
 # the Python modules the ESP32 platform needs.
-PIO=~/.platformio/penv/bin/pio
+PIO=${PIO:-~/.platformio/penv/bin/pio}
 [ -x "$PIO" ] || PIO=pio
 
 # GitHub publishing: the files go to the gh-pages branch, which Pages serves, so
@@ -102,7 +102,7 @@ if [ $GITHUB -eq 1 ]; then
 	cp -R ../docs/. "$PAGES/"
 	mkdir -p "$PAGES/flash"
 	cp ".pio/build/cw-cf-0x${FACES[0]}/bootloader.bin" ".pio/build/cw-cf-0x${FACES[0]}/partitions.bin" "$PAGES/flash/"
-	cp ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin "$PAGES/flash/"
+	cp "${PLATFORMIO_CORE_DIR:-$HOME/.platformio}"/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin "$PAGES/flash/"
 	VERSION=$(sed -n 's/.*CW_FW_VERSION="\\"\([^\\]*\)\\"".*/\1/p' platformio.ini | head -1)
 	python3 - "$PAGES" "$VERSION" <<'PYEOF'
 import json, os, sys
