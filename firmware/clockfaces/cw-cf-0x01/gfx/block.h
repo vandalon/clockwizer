@@ -30,6 +30,7 @@ class Block: public Sprite, public EventTask {
     uint8_t _lastY;
     uint8_t _firstY;
 
+    const unsigned short* _bitmap;
     bool _mushroom = false;  // pop out a 1-UP instead of a coin
     bool _coinActive = false;
     uint8_t _coinStep = 0;
@@ -46,6 +47,7 @@ class Block: public Sprite, public EventTask {
     Block(int x, int y);
     void setText(String text);
     void setMushroom(bool mushroom);
+    void shorten(int y);  // the version for 32 rows, with its top edge at y
     void init();
     void update();    
     const char* name();

@@ -53,6 +53,7 @@ class Mario: public Sprite, public EventTask {
     void move(Direction dir, int times);
     void jump();
     void walkTo(int x);
+    void standOnGround();
     bool isIdle();
     bool isJumping();
     void setBackground(void (*restoreBg)(int x, int y, int w, int h));

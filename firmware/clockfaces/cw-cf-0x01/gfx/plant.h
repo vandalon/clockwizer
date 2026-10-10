@@ -15,6 +15,7 @@ class Plant {
   private:
     int _x;       // left edge of the pipe
     int _pipeY;   // top edge of the pipe
+    int _pipeHeight = PIPE_HEIGHT;
 
     uint8_t _seconds = 0;
     int8_t _rise = 0;       // rows still hidden while popping back up
@@ -26,6 +27,7 @@ class Plant {
 
   public:
     Plant(int x, int pipeY);
+    void shorten(int pipeY, int pipeHeight);  // the pipe for 32 rows
     void init();
     void setSecond(int second);
     void update();

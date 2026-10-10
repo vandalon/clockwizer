@@ -18,6 +18,8 @@
 //sprites
 #include "pacman.h"
 #include "ghost.h"
+#include "strip.h"
+#include "small4pt7b.h"
 
 
 class Clockface: public IClockface {
@@ -117,6 +119,12 @@ class Clockface: public IClockface {
     void resetMap();
     void directionDecision();
     void updateClock(bool clear = true);
+    void blinkSeconds();
+    void drawShortClock();
+    bool _colonOn = true;
+    GFXcanvas16* _clockCanvas = nullptr;
+    void updateShort();
+    PacmanStrip* _strip = nullptr;  // the 64x32 panel runs this instead of the maze
     void drawFoodBlock(int row, int col);
     void drawWalls(uint16_t color);
     void loadLevel(const char* const* rows, int clockRow);

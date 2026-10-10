@@ -1,13 +1,17 @@
 
 #include "Clockface.h"
+#include <CWPreferences.h>
 
 const char* FORMAT_TWO_DIGITS = "%02d";
 
-const short BRAZIL_TZ = 32;  // map column of the UTC-3 meridian
-const short TZ_SIZE = 5;     // map pixels per hour
-const short MAP_WIDTH = 120;
-const short MAP_HEIGHT = 56;
-const long SECS_PER_PIXEL = 3600 / TZ_SIZE;  // the map moves 1 px every 12 minutes
+// The map of a 64x64 panel is 120x56 (5 px per hour: it moves 1 px every 12 minutes),
+// the one of a 64x32 panel is 72x32 (3 px per hour: 1 px every 20 minutes)
+short BRAZIL_TZ = 32;  // map column of the UTC-3 meridian
+short MAP_WIDTH = 120;
+short MAP_HEIGHT = 56;
+long SECS_PER_PIXEL = 12 * 60;
+const unsigned short* worldMap = _WORLD_MAP;
+short panelHeight = 64;
 const long NOON_AT_BRAZIL_UTC = 15 * 3600;   // 12:00 in UTC-3
 
 int lastNoonCol = -1;  // map column under the red line when the map was drawn
@@ -24,6 +28,14 @@ Clockface::Clockface(Adafruit_GFX* display) {
 
 void Clockface::setup(CWDateTime *dateTime) {
   this->_dateTime = dateTime;
+  panelHeight = ClockwiseParams::getInstance()->displayHeight;
+  if (panelHeight == 32) {
+    BRAZIL_TZ = 19;
+    MAP_WIDTH = WORLD_MAP_SMALL_WIDTH;
+    MAP_HEIGHT = WORLD_MAP_SMALL_HEIGHT;
+    SECS_PER_PIXEL = 20 * 60;
+    worldMap = _WORLD_MAP_SMALL;
+  }
   Locator::getDisplay()->setTextWrap(true);
   Locator::getDisplay()->fillRect(0, 0, 64, 64, 0x0000);  
   lastMinute = -1;  // the screen was cleared: draw the time again
@@ -40,10 +52,11 @@ void Clockface::update()
     if (minute == lastMinute) return;  // only hours and minutes show: no need to wipe and redraw each second
     lastMinute = minute;
 
-    Locator::getDisplay()->fillRect(0, 55, 31, 9, 0x0000);  
+    int top = panelHeight - 9;  // the time sits on the bottom row of the map
+    Locator::getDisplay()->fillRect(0, top, 31, 9, 0x0000);  
     Locator::getDisplay()->setFont(&small4pt7b);  
     Locator::getDisplay()->setTextColor(0xffff);    
-    Locator::getDisplay()->setCursor(1, 62);    
+    Locator::getDisplay()->setCursor(1, top + 7);    
     Locator::getDisplay()->print(String(_dateTime->getHour()));
     Locator::getDisplay()->print(":");
     Locator::getDisplay()->print(_dateTime->getMinute(FORMAT_TWO_DIGITS));
@@ -71,7 +84,7 @@ void Clockface::updateMap()
     }
   }
 
-  Locator::getDisplay()->drawFastVLine(32, 0, 64, 0xf000);
+  Locator::getDisplay()->drawFastVLine(32, 0, panelHeight, 0xf000);
 
   lastNoonCol = noonCol;
 }

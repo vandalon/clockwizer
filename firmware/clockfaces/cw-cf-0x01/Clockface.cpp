@@ -1,12 +1,14 @@
 
 #include "Clockface.h"
+#include <CWPreferences.h>
 
 EventBus eventBus;
 
 const char* FORMAT_TWO_DIGITS = "%02d";
 
 // Graphical elements
-Tile ground(GROUND, 8, 8); 
+Tile ground(GROUND, 8, 8);
+Tile groundShort(GROUND, 8, 3);  // the top 3 rows of it
 
 Object cloud1(CLOUD1, 13, 12);
 Object cloud2(CLOUD2, 13, 12);
@@ -19,7 +21,8 @@ Object hill(hillMirrored, 20, 22);
 const int HOUR_X = 14;
 const int MINUTE_X = 33;
 const int HILL_X = 44;
-const int HILL_Y = 34;
+int hillY = 34;
+int hillHeight = 22;
 
 Mario mario(MINUTE_X, 56 - MARIO_IDLE_SIZE[1]);  // standing on the ground
 Block hourBlock(13, 8);
@@ -42,8 +45,8 @@ bool jumpRequested = false;
 
 // Mario erases a rectangle around himself; put back the hill if he stood in front of it
 void restoreBackground(int x, int y, int w, int h) {
-  if (x + w > HILL_X && y + h > HILL_Y) {
-    hill.draw(HILL_X, HILL_Y);
+  if (x + w > HILL_X && y + h > hillY) {
+    hill.draw(HILL_X, hillY);
   }
 }
 
@@ -57,20 +60,38 @@ Clockface::Clockface(Adafruit_GFX* display) {
 void Clockface::setup(CWDateTime *dateTime) {
   _dateTime = dateTime;
 
-  for (int row = 0; row < 22; row++) {
+  shortPanel = ClockwiseParams::getInstance()->displayHeight == 32;
+  if (shortPanel) {
+    // 32 rows: blocks right at the top, a 3 row ground, a lower hill, one cloud, a short pipe for the plant
+    groundY = 29;
+    hillHeight = 14;
+    hillY = groundY - hillHeight;
+    hill._height = hillHeight;
+    hourBlock.shorten(0);
+    minuteBlock.shorten(0);
+    mario.standOnGround();
+    plant.shorten(21, 8);
+  }
+
+  // squeezed to fit when the hill is lower
+  for (int row = 0; row < hillHeight; row++) {
     for (int col = 0; col < 20; col++) {
-      hillMirrored[row * 20 + col] = HILL[row * 20 + (19 - col)];
+      hillMirrored[row * 20 + col] = HILL[(row * 22 / hillHeight) * 20 + (19 - col)];
     }
   }
 
   Locator::getDisplay()->setFont(&Super_Mario_Bros__24pt7b);
-  Locator::getDisplay()->fillRect(0, 0, 64, 64, SKY_COLOR);
+  Locator::getDisplay()->fillRect(0, 0, 64, shortPanel ? 32 : 64, SKY_COLOR);
 
-  ground.fillRow(DISPLAY_HEIGHT - ground._height);
+  if (shortPanel) {
+    groundShort.fillRow(groundY);
+  } else {
+    ground.fillRow(DISPLAY_HEIGHT - ground._height);
+  }
 
-  hill.draw(HILL_X, HILL_Y);
-  cloud1.draw(0, 9);
-  cloud2.draw(51, 7);
+  hill.draw(HILL_X, hillY);
+  if (!shortPanel) cloud1.draw(0, 9);
+  cloud2.draw(51, shortPanel ? 1 : 7);
 
   updateTime();
 

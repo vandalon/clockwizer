@@ -1089,6 +1089,82 @@ static void drawBigClock(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int secon
   else drawBall(d, roll - 7, BALL_Y - ballLift, roll / 3.5f, 32, W, 12);
 }
 
+// ---- 32 rows ----
+// There is no room for the lists, the stadium or the score tiles: a match gets the whole panel (the green bar,
+// both shirts either side of the score and the timeline), and with no match the clock sits on top of the next two
+// kick-offs.
+
+static const int SHORT_STRIP_H = 7, SHORT_SHIRT_Y = 7, SHORT_NAME_Y = 19, SHORT_TIMELINE_Y = 27;
+
+static void drawStrip32(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, int hour, int minute) {
+  d->fillRect(0, 0, W, SHORT_STRIP_H, STRIP);
+  String status = m.competition + " " + (!m.live ? String("FT") : halfTime(m) ? String("HT") : gameTime(m));
+  if (textWidth(status) > 36) status = !m.live ? String("FT") : halfTime(m) ? String("HT") : gameTime(m);
+  drawText(d, status, 2, 1, INK);
+  d->fillRect(39, 0, 1, SHORT_STRIP_H, STRIP_LINE);
+  drawText(d, twoDigits(hour) + ":" + twoDigits(minute), 43, 1, INK);
+}
+
+// The playing time as a 2 high bar, goals (a 3x3 ball) and cards (a 3 high stripe) of the home team above it and of
+// the away team below it
+static void drawTimeline32(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m) {
+  const int y = SHORT_TIMELINE_Y;
+  int played = (int)roundf((W - 4) * constrain(m.progress, 0.0f, 1.0f));
+  fill(d, 2, y, W - 4, 2, TRACK);
+  fill(d, 2, y, played, 2, PLAYED);
+  for (const auto &e : m.events) {
+    int x = constrain(2 + (W - 4) * min((int)e.minute, 90) / 90, 2, W - 3);
+    int ey = e.home ? y - 3 : y + 2;
+    if (e.kind == 'g') {
+      fill(d, x, ey, 1, 1, INK);
+      fill(d, x - 1, ey + 1, 3, 1, INK);
+      fill(d, x, ey + 2, 1, 1, INK);
+    } else {
+      fill(d, x, ey, 1, 3, e.kind == 'r' ? RED_CARD : YELLOW_CARD);
+    }
+  }
+  fill(d, min(W - 2, 2 + played), y, 2, 2, halfTime(m) ? HALF_TIME : INK);
+}
+
+static void drawLive32(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, int hour, int minute) {
+  drawStrip32(d, m, hour, minute);
+  uint16_t homeColor, awayColor;
+  kitColors(m.homeKit, m.awayKit, homeColor, awayColor);
+  drawShirt(d, 1, SHORT_SHIRT_Y, homeColor, trimColor(m.homeKit, homeColor));
+  drawShirt(d, 49, SHORT_SHIRT_Y, awayColor, trimColor(m.awayKit, awayColor));
+  String home = m.home.substring(0, 3), away = m.away.substring(0, 3);
+  drawText(d, home, 8 - textWidth(home) / 2, SHORT_NAME_Y, rgb(238, 246, 240));
+  drawText(d, away, 55 - textWidth(away) / 2, SHORT_NAME_Y, rgb(238, 246, 240));
+  drawScore(d, m.score, SHORT_SHIRT_Y - 9);
+  drawTimeline32(d, m);
+}
+
+// A coming match: kit bars and names around the kick-off time; a match on another day shows its day now and then
+static void drawComing32(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, const FootballTicker::Upcoming &u, int y, bool showDay) {
+  uint16_t homeColor, awayColor;
+  kitColors(u.homeKit, u.awayKit, homeColor, awayColor);
+  time_t local = dateTime->utcToLocal(u.kickoff);
+  uint32_t day = local / 86400;
+  String when = showDay && day != dateTime->localNow() / 86400 ? String(DAYS[(day + 4) % 7])
+                                                              : twoDigits(local % 86400 / 3600) + ":" + twoDigits(local % 3600 / 60);
+  fill(d, 0, y, 1, 7, homeColor);
+  drawText5(d, u.home.substring(0, 3), 3, y, INK);
+  drawText(d, when, 22 + (19 - textWidth(when)) / 2, y + 1, DATE);
+  drawText5(d, u.away.substring(0, 3), 43, y, INK);
+  fill(d, 62, y, 1, 7, awayColor);
+}
+
+static void drawMain32(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int second, int pulse, unsigned long turn) {
+  drawTileClock(d, LIVE_GLYPHS, 5, 0, 12, 16, 4, pulse);
+  const FootballTicker::Upcoming *slots[2];
+  int n = mainSlots(dateTime, turn, slots);
+  for (int i = 0; i < n; i++) drawComing32(d, dateTime, *slots[i], 17 + i * 8, second / 3 % 2 == 1);
+  if (n == 0) {
+    String date = String(dateTime->getDay()) + " " + MONTHS[(dateTime->getMonth() - 1 + 12) % 12];
+    drawCentered(d, date, 21, DATE);
+  }
+}
+
 // ---- Cards and substitutions: a few seconds full screen, like a goal ----
 
 static const uint16_t PITCH_LIGHT = rgb(14, 34, 18), PITCH_DARK = rgb(10, 18, 12);
@@ -1265,6 +1341,8 @@ void Clockface::update() {
 
   // Which view, which live match is on top, and where the sliding lists are
   enum { LIVE, MAIN, BIG } view = !overview.live.empty() ? LIVE : !overview.upcoming.empty() ? MAIN : BIG;
+  bool shortPanel = ClockwiseParams::getInstance()->displayHeight == 32;
+  if (shortPanel && view == BIG) view = MAIN;
   unsigned long matchMs = max(3, (int)ClockwiseParams::getInstance()->matchSecs) * 1000UL;
   // Live favourites come first in the list and are pinned to the top: with just one of them the top never
   // changes, with several they take turns
@@ -1279,7 +1357,7 @@ void Clockface::update() {
   bool singleLive = view == LIVE && overview.live.size() == 1 && rows == 0;
   FootballTicker::Status status = footballTicker.status();
   bool loading = status == FootballTicker::LOADING;
-  bool rolling = (view == MAIN || view == BIG) && ClockwiseParams::getInstance()->ballRoll;
+  bool rolling = !shortPanel && (view == MAIN || view == BIG) && ClockwiseParams::getInstance()->ballRoll;
   // The flip clock tiles flip when a digit changes
   static bool digitsKnown = false;
   static unsigned long flipStart = 0, tileStart[4] = {0, 0, 0, 0};
@@ -1316,7 +1394,7 @@ void Clockface::update() {
 
   int roll = view != MAIN && view != BIG ? 0 : !rolling ? -1  // -1 = the ball rests instead
              : ballPass(now, view == BIG);
-  int pulse = singleLive || loading ? colonPulse(now) : 0;  // only redraw for it when shown
+  int pulse = singleLive || loading || (shortPanel && view == MAIN) ? colonPulse(now) : 0;  // only redraw for it when shown
   // The live list below moves up a row as the next match takes the top
   unsigned long sinceTurn = now % matchMs;
   bool listTurns = !pinned || overview.live.size() - pinned > 1;  // pinned: only more than one other takes turns
@@ -1453,7 +1531,10 @@ void Clockface::update() {
   strcpy(lastKey, key);
 
   _display->fillScreen(0);
-  switch (view) {
+  if (shortPanel) {
+    if (view == LIVE) drawLive32(_display, overview.live[index], hour, minute);
+    else drawMain32(_display, _dateTime, second, pulse, turn);
+  } else switch (view) {
     case LIVE: drawLive(_display, _dateTime, index, pinned, shift, hour, minute, second, pulse, slide, push, swapActive ? &liveOld : nullptr, swapT); break;
     case MAIN: drawMain(_display, _dateTime, hour, minute, second, pulse, roll, turn); break;
     case BIG:

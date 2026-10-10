@@ -1,5 +1,8 @@
 #include "mario.h"
 
+bool shortPanel = false;
+int groundY = 56;
+
 Mario::Mario(int x, int y) {
   _x = x;
   _y = y;
@@ -13,6 +16,10 @@ void Mario::move(Direction dir, int times) {
     _x -= MARIO_PACE;
   }  
 
+}
+
+void Mario::standOnGround() {
+  _y = groundY - MARIO_IDLE_SIZE[1];
 }
 
 void Mario::setBackground(void (*restoreBg)(int x, int y, int w, int h)) {
@@ -137,7 +144,7 @@ void Mario::update() {
         direction = DOWN;
       }
 
-      if (_y+_height >= 56) {
+      if (_y+_height >= groundY) {
         idle();
       }
 

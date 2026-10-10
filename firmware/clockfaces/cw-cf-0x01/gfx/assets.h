@@ -30,6 +30,10 @@ const unsigned short BLOCK[361]  = {
 
 const byte BLOCK_SIZE[2]  = {19, 19};
 
+// On a panel of 32 rows everything sits closer together: set once in Clockface::setup
+extern bool shortPanel;
+extern int groundY;  // top of the ground
+
 
 const unsigned short BUSH[189] ={
 0x000E, 0x000E, 0x000E, 0x000E, 0x000E, 0x000E, 0x000E, 0x000E, 0x0000, 0x0000, 0x000E, 0x000E, 0x000E, 0x000E, 0x000E, 0x000E,   // 0x0010 (16) pixels

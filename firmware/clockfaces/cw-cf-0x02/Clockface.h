@@ -25,6 +25,7 @@ class Clockface: public IClockface {
     Adafruit_GFX* _display;
     CWDateTime* _dateTime;
     void updateTime();
+    void updateTimeShort();
     void updateDate();
 
   public:

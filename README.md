@@ -10,18 +10,18 @@ A fork of [Clockwise](https://github.com/jnthas/clockwise) by Jonathas Barbosa (
 </p>
 
 **What's different from upstream**
-- New clockfaces: **Football** (live scores, results, goal celebrations), and **Formula 1** (live sessions, standings, next race); **Tetris** also runs on 64x32 panels, with a ticker row that shows football scores and, if you switch it on, the F1 race
+- New clockfaces: **Football** (live scores, results, goal celebrations), and **Formula 1** (live sessions, standings, next race); every clockface except Castlevania also runs on 64x32 panels (Tetris with a ticker row that shows football scores and, if you switch it on, the F1 race)
 - **Birthdays**: add up to 10 names and dates on the settings page and every clockface plays an animated birthday party (cake, balloons, fireworks) all day, on both panel sizes
 - A redesigned web settings page: pick the clockface, colours, brightness, update behaviour and more from your phone
 - Automatic firmware updates: the clock checks for a new build once a day and rolls back by itself if the new one can't reach the update server
 - The firmware location is a setting, so you can host your own builds
 - Several clocks on one network list each other on the settings page
 
-All the clockfaces from upstream are still here (Mario, Time in Words, World Map, Castlevania, Pacman, Pokemon and Tetris). **Luigi** is new: Mario in other colours. **Mario** has been extended (a coin pops out of the block and there is a plant); **Pacman** and **Pokemon** have been updated; and Tetris now also runs on 64x32 panels. Thanks to everyone who made them; credits are in the clockface folders and the [LICENSE](LICENSE) (MIT).
+All the clockfaces from upstream are still here (Mario, Time in Words, World Map, Castlevania, Pacman, Pokemon and Tetris). **Luigi** is new: Mario in other colours. **Mario** has been extended (a coin pops out of the block and there is a plant); **Pacman** and **Pokemon** have been updated; and every face except Castlevania now also runs on 64x32 panels. Thanks to everyone who made them; credits are in the clockface folders and the [LICENSE](LICENSE) (MIT).
 
 ## What you need
 
-- A HUB75/HUB75E compatible LED matrix, 64x64 (64x32 works with the Tetris face)
+- A HUB75/HUB75E compatible LED matrix, 64x64 (64x32 works with every face except Castlevania)
 - An ESP32
 - A power supply of 3A or more
 
@@ -51,16 +51,16 @@ pio run -e cw-cf-0x05 -t upload     # Pacman
 
 | Id | Clockface | Panel |
 |----|-----------|-------|
-| `cw-cf-0x0B` | Football | 64x64 |
-| `cw-cf-0x0C` | Formula 1 | 64x64 |
+| `cw-cf-0x0B` | Football | 64x64 and 64x32 |
+| `cw-cf-0x0C` | Formula 1 | 64x64 and 64x32 |
 | `cw-cf-0x08` | Tetris (on 64x32 with a football and F1 ticker) | 64x64 and 64x32 |
-| `cw-cf-0x01` | Mario | 64x64 |
-| `cw-cf-0x09` | Luigi (Mario in other colours) | 64x64 |
-| `cw-cf-0x05` | Pacman | 64x64 |
-| `cw-cf-0x06` | Pokemon | 64x64 |
+| `cw-cf-0x01` | Mario | 64x64 and 64x32 |
+| `cw-cf-0x09` | Luigi (Mario in other colours) | 64x64 and 64x32 |
+| `cw-cf-0x05` | Pacman | 64x64 and 64x32 |
+| `cw-cf-0x06` | Pokemon | 64x64 and 64x32 |
 | `cw-cf-0x04` | Castlevania | 64x64 |
-| `cw-cf-0x03` | World Map | 64x64 |
-| `cw-cf-0x02` | Time in Words | 64x64 |
+| `cw-cf-0x03` | World Map | 64x64 and 64x32 |
+| `cw-cf-0x02` | Time in Words | 64x64 and 64x32 |
 
 The clockface folders are in `firmware/clockfaces/`, shared code in `firmware/lib/`, and the entry point is `firmware/src/main.cpp`. Panels with a different wiring or orientation need a few settings that have no button on the web page, see [Advanced settings](#advanced-settings).
 

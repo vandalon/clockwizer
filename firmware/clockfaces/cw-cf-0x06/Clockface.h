@@ -30,6 +30,7 @@ class Clockface: public IClockface {
     Clockface(Adafruit_GFX* display);
     void setup(CWDateTime *dateTime);
     void update();
+    void drawShortBackground();
     void refreshDate(uint8_t weekday, uint16_t color);
     void refreshTime();
     void updatePokemon(bool reveal);

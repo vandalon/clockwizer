@@ -66,18 +66,27 @@ Clockface::Clockface(Adafruit_GFX* display) {
   Locator::provide(display);
 }
 
+static bool isShort() { return ClockwiseParams::getInstance()->displayHeight == 32; }
+
 void Clockface::setup(CWDateTime *dateTime) {
   this->_dateTime = dateTime;
   Locator::getDisplay()->setFont(&hourFont);
   randomSeed(esp_random());
+  if (isShort()) {
+    _colorKey = 0xFFFFFFFF;
+    Locator::getDisplay()->fillRect(0, 0, 64, 32, 0x0000);
+    if (!_strip) _strip = new PacmanStrip();
+    _strip->begin();
+    updateClock();
+    return;
+  }
   if (!generateLevel()) loadLevel(FALLBACK_MAP, 2);
   drawMap();
   updateClock();
 }
 
-void Clockface::update()
-{
-
+// The colon of the clock: two dots that blink every second
+void Clockface::blinkSeconds() {
   // Seconds blink  
   if ((millis() - lastMillisSec) >= 1000) {
     
@@ -93,6 +102,36 @@ void Clockface::update()
     show_seconds = !show_seconds;
     lastMillisSec = millis();
   }
+}
+
+// 64x32: the clock in its box, and the corridors around it scroll past
+void Clockface::updateShort() {
+  if (millis() - lastMillisSec >= 1000) {
+    lastMillisSec = millis();
+    _colonOn = !_colonOn;
+    drawShortClock();
+  }
+
+  ClockwiseParams* params = ClockwiseParams::getInstance();
+  uint32_t key = params->ghost1Color | (params->ghost2Color << 8) | (params->dotColor << 16) | ((uint32_t)params->color << 24);
+  if (key != _colorKey) {  // the colours can be changed on the settings page while the face runs
+    _colorKey = key;
+    applyGhostColors();
+    _strip->setColors(params->wallColor(), _ghosts[0].color(), _ghosts[1].color(), dotColor());
+  }
+
+  if (_dateTime->getMinute() != shownMinute) updateClock();
+  _strip->update();
+}
+
+void Clockface::update()
+{
+  if (isShort()) {
+    updateShort();
+    return;
+  }
+
+  blinkSeconds();
   refreshColors();
 
   // ease the clock towards dim (ghost on the clock) or bright
@@ -166,7 +205,48 @@ void Clockface::update()
 }
 
 
+static int textWidth(const GFXfont* font, const char* text) {
+  int width = 0;
+  for (; *text; text++) width += font->glyph[*text - font->first].xAdvance;
+  return width;
+}
+
+// 64x32: a small clock in the box in the middle, the colon blinks
+void Clockface::drawShortClock() {
+  // the time is drawn here, with 2 px of margin, and the strip makes the box as wide as that and lays the picture
+  // over Pacman and the ghosts that pass behind it
+  if (!_clockCanvas) _clockCanvas = new GFXcanvas16(40, 9);
+  GFXcanvas16* d = _clockCanvas;
+  char hours[3], minutes[3];
+  snprintf(hours, sizeof(hours), "%02d", _dateTime->getHour());
+  snprintf(minutes, sizeof(minutes), "%02d", _dateTime->getMinute());
+
+  int hoursWidth = textWidth(&small4pt7b, hours), colonWidth = textWidth(&small4pt7b, ":");
+  // centre the ink, not the advance widths: the last glyph has space on its right
+  char all[8];
+  snprintf(all, sizeof(all), "%s:%s", hours, minutes);
+  int16_t x1, y1;
+  uint16_t w, h;
+  d->setFont(&small4pt7b);
+  d->getTextBounds(all, 0, 6, &x1, &y1, &w, &h);
+  int x = 2 - x1;
+
+  d->fillScreen(0);
+  d->setTextColor(0xFE40);
+  d->setCursor(x, 6);
+  d->print(hours);
+  if (_colonOn) d->print(":");
+  d->setCursor(x + hoursWidth + colonWidth, 6);
+  d->print(minutes);
+  _strip->setClock(d->getBuffer(), 40, w + 4);
+  shownMinute = _dateTime->getMinute();
+}
+
 void Clockface::updateClock(bool clear) {
+    if (isShort()) {
+      drawShortClock();
+      return;
+    }
 
     // a fade step only changes the colour: draw over the old digits, no blank frame in between
     if (clear) Locator::getDisplay()->fillRect(14, _clockY, 36, 11, 0x0000);

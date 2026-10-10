@@ -1,5 +1,19 @@
 #include "block.h"
 
+// The digits in the blocks on 32 rows: 5 pixels wide, 7 high, the left pixel is bit 4
+const uint8_t DIGITS_5X7[10][7] PROGMEM = {
+  {0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110},
+  {0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110},
+  {0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111},
+  {0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110},
+  {0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010},
+  {0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110},
+  {0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110},
+  {0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000},
+  {0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110},
+  {0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100}
+};
+
 // Coin popping out of the block: '.' is transparent, K outline, Y gold, L highlight
 const char* COIN_FULL[COIN_HEIGHT] = {
   "..KK..",
@@ -43,6 +57,20 @@ Block::Block(int x, int y) {
   _firstY = y;
   _width = 19;
   _height = 19;
+  _bitmap = BLOCK;
+}
+
+// On 32 rows the block is only 11 high: the top and bottom of the big one, with the gold between cut out
+static unsigned short blockShort[19 * 11];
+
+void Block::shorten(int y) {
+  for (int row = 0; row < 11; row++) {
+    int from = row < 6 ? row : row + 8;
+    for (int col = 0; col < 19; col++) blockShort[row * 19 + col] = BLOCK[from * 19 + col];
+  }
+  _bitmap = blockShort;
+  _height = 11;
+  _y = _firstY = y;
 }
 
 void Block::idle() {
@@ -67,16 +95,31 @@ void Block::hit() {
 
     direction = UP;
 
-    _coinActive = true;
+    _coinActive = !shortPanel;  // no room above the block for it on 32 rows
     _coinStep = 0;
     _coinMillis = 0;
   }
 }
 
 void Block::setTextBlock() {
-  Locator::getDisplay()->setTextColor(0x0000);       
-  
-  
+  Locator::getDisplay()->setTextColor(0x0000);
+
+  if (shortPanel) {  // 5x7 digits, centred in the block
+    int x = _x + (_text.length() == 1 ? 7 : 4);
+    for (unsigned int i = 0; i < _text.length(); i++) {
+      int digit = _text[i] - '0';
+      if (digit >= 0 && digit <= 9) {
+        for (int row = 0; row < 7; row++) {
+          for (int col = 0; col < 5; col++) {
+            if (pgm_read_byte(&DIGITS_5X7[digit][row]) & (16 >> col)) Locator::getDisplay()->drawPixel(x + col, _y + 2 + row, 0x0000);
+          }
+        }
+      }
+      x += 6;
+    }
+    return;
+  }
+
   if (_text.length() == 1) {
     Locator::getDisplay()->setCursor(_x+6, _y+12);
   }  else {
@@ -87,7 +130,7 @@ void Block::setTextBlock() {
 }
 
 void Block::redraw() {
-  Locator::getDisplay()->drawRGBBitmap(_x, _y, BLOCK, _width, _height);
+  Locator::getDisplay()->drawRGBBitmap(_x, _y, _bitmap, _width, _height);
   setTextBlock();
 }
 
@@ -140,7 +183,7 @@ void Block::setText(String text) {
 
 void Block::init() {
   Locator::getEventBus()->subscribe(this);
-  Locator::getDisplay()->drawRGBBitmap(_x, _y, BLOCK, _width, _height);
+  Locator::getDisplay()->drawRGBBitmap(_x, _y, _bitmap, _width, _height);
   setTextBlock();  
 }
 
@@ -164,10 +207,10 @@ void Block::update() {
       
       _y = _y + (MOVE_PACE * (direction == UP ? -1 : 1));
  
-      Locator::getDisplay()->drawRGBBitmap(_x, _y, BLOCK, _width, _height);
+      Locator::getDisplay()->drawRGBBitmap(_x, _y, _bitmap, _width, _height);
       setTextBlock();
                  
-      if (floor(_firstY - _y) >= MAX_MOVE_HEIGHT) {
+      if (floor(_firstY - _y) >= (shortPanel ? 2 : MAX_MOVE_HEIGHT)) {
         // Serial.println("DOWN");
         direction = DOWN;
       }

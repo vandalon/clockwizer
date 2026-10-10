@@ -27,6 +27,11 @@ const unsigned short PIPE_GREEN = 0x0560;
 const unsigned short PIPE_LIGHT = 0x7FEF;
 const unsigned short PIPE_DARK = 0x0300;
 
+void Plant::shorten(int pipeY, int pipeHeight) {
+  _pipeY = pipeY;
+  _pipeHeight = pipeHeight;
+}
+
 Plant::Plant(int x, int pipeY) {
   _x = x;
   _pipeY = pipeY;
@@ -36,10 +41,10 @@ void Plant::drawPipe() {
   Adafruit_GFX* d = Locator::getDisplay();
   int bodyX = _x + 1;
 
-  d->fillRect(bodyX, _pipeY + 4, PIPE_WIDTH - 2, PIPE_HEIGHT - 4, PIPE_GREEN);
-  d->drawRect(bodyX, _pipeY + 4, PIPE_WIDTH - 2, PIPE_HEIGHT - 4, 0x0000);
-  d->drawFastVLine(bodyX + 2, _pipeY + 5, PIPE_HEIGHT - 6, PIPE_LIGHT);
-  d->drawFastVLine(bodyX + PIPE_WIDTH - 4, _pipeY + 5, PIPE_HEIGHT - 6, PIPE_DARK);
+  d->fillRect(bodyX, _pipeY + 4, PIPE_WIDTH - 2, _pipeHeight - 4, PIPE_GREEN);
+  d->drawRect(bodyX, _pipeY + 4, PIPE_WIDTH - 2, _pipeHeight - 4, 0x0000);
+  d->drawFastVLine(bodyX + 2, _pipeY + 5, _pipeHeight - 6, PIPE_LIGHT);
+  d->drawFastVLine(bodyX + PIPE_WIDTH - 4, _pipeY + 5, _pipeHeight - 6, PIPE_DARK);
 
   d->fillRect(_x, _pipeY, PIPE_WIDTH, 4, PIPE_GREEN);
   d->drawRect(_x, _pipeY, PIPE_WIDTH, 4, 0x0000);

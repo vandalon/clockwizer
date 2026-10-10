@@ -4,16 +4,16 @@ Each clockface is its own firmware build, named `cw-cf-0xNN`. You switch between
 
 | Id | Name | Panel | Needs internet for more than the time |
 |----|------|-------|----------------------------------------|
-| `0x0B` | Football | 64x64 | yes, ESPN |
-| `0x0C` | Formula 1 | 64x64 | yes, ESPN and Jolpica |
+| `0x0B` | Football | 64x64 and 64x32 | yes, ESPN |
+| `0x0C` | Formula 1 | 64x64 and 64x32 | yes, ESPN and Jolpica |
 | `0x08` | Tetris | 64x64 and 64x32 | on 64x32: football and F1 ticker |
-| `0x01` | Mario | 64x64 | no |
-| `0x09` | Luigi | 64x64 | no |
-| `0x05` | Pacman | 64x64 | no |
-| `0x06` | Pokemon | 64x64 | no |
+| `0x01` | Mario | 64x64 and 64x32 | no |
+| `0x09` | Luigi | 64x64 and 64x32 | no |
+| `0x05` | Pacman | 64x64 and 64x32 | no |
+| `0x06` | Pokemon | 64x64 and 64x32 | no |
 | `0x04` | Castlevania | 64x64 | no |
-| `0x03` | World Map | 64x64 | no |
-| `0x02` | Time in Words | 64x64 | no |
+| `0x03` | World Map | 64x64 and 64x32 | no |
+| `0x02` | Time in Words | 64x64 and 64x32 | no |
 
 Every face also shows an animated [birthday screen](web-ui.md#birthdays) on the birthdays you add on the settings page. Preview it with the `T` telnet command.
 
@@ -23,13 +23,13 @@ All faces get the time over NTP, so they all need the internet once to show the 
 
 These come from upstream Clockwise. The thumbnails are in the clockface folders under `firmware/clockfaces/`.
 
-- **Mario (`0x01`)**: the time in blocks that Mario bumps, with the Super Mario world around it.
+- **Mario (`0x01`)**: the time in blocks that Mario bumps, with the Super Mario world around it. On a 64x32 panel the blocks are lower and the plant sits in a shorter pipe; the coin has no room and does not pop out.
 - **Luigi (`0x09`)**: the Mario clockface in Luigi's colours (it is built from the same folder as Mario).
-- **Pacman (`0x05`)**: Pacman and the ghosts run through a maze that shows the time. The wall, ghost and dot colours can be set on the [settings page](web-ui.md#pacman-colours-pacman).
-- **Pokemon (`0x06`)**: a Pokedex-style screen with the time.
+- **Pacman (`0x05`)**: Pacman and the ghosts run through a maze that shows the time. The wall, ghost and dot colours can be set on the [settings page](web-ui.md#pacman-colours-pacman). On a 64x32 panel the maze does not fit, so the screen scrolls through a bigger one: 10x10 junctions (120x120 pixels) that wraps round, made by the same kind of generator as the 64x64 maze (mostly mirrored, junctions left out, no big black areas, everything reachable). Pacman and the ghosts play in it as they do on 64x64, with a power pellet in each quarter. The clock sits in a box in the middle of the screen, as wide as the time needs; the maze, Pacman and the ghosts show dimmed behind it. The maze has a wall all round it with none, one or two tunnels through it; Pacman warps through a tunnel with a trail and speed lines. A new maze comes when all the dots are eaten.
+- **Pokemon (`0x06`)**: a Pokedex-style screen with the time. On 64x32 the Pokedex is rebuilt smaller: the screen with the Pokemon on the left, the time and weekday squares on the right.
 - **Castlevania (`0x04`)**: the clock tower, with a second hand.
-- **World Map (`0x03`)**: a map of the world with the day and night side, and the time. The map follows UTC and moves a pixel every 12 minutes.
-- **Time in Words (`0x02`)**: the time and date written out in words. The date text exists in English and Portuguese (`DateI18nEN.h`, `DateI18nPT.h`).
+- **World Map (`0x03`)**: a map of the world with the day and night side, and the time. The map follows UTC and moves a pixel every 12 minutes (a smaller map on 64x32 that moves a pixel every 20 minutes).
+- **Time in Words (`0x02`)**: the time and date written out in words. The date text exists in English and Portuguese (`DateI18nEN.h`, `DateI18nPT.h`). On a 64x32 panel the words are smaller and the date is left out.
 
 ## Tetris (`0x08`)
 
@@ -52,6 +52,8 @@ Football as two clocks, depending on what is on.
 
 With several live matches the main view takes them one by one (see *Next live match every*). With one match and nothing else the time moves to the bottom, with seconds. A card or a substitution plays a full-screen animation, and a goal a full celebration with the team's kit colours.
 
+**On a 64x32 panel** a match gets the whole panel: the green bar with the competition, the game time and the time, both shirts around the score, and the timeline under them with the goals and cards. Several live matches take turns, and so does a result with no live match. With no match the clock sits above the next two kick-offs (a match on another day shows its day now and then), or above the date when there are none. Goal, card and substitution animations play as before.
+
 Without a live match the same view shows results: a favourite's, otherwise the latest on top (FT), with the other results and today's coming matches below.
 
 **With no matches at all, the main view:** flip-clock tiles, hours over minutes, a ball rolling (or resting) on a stadium band at the bottom, and the next kick-offs on the right. If there is nothing to show at all it is `HH:MM` on flip tiles over the stadium band.
@@ -62,9 +64,11 @@ Which competitions and teams are followed, and how long results stay, is set on 
 
 Three screens:
 
-1. **A session is live:** a header with the session and its lap or time left, then the running order (position, team colour, driver code) as far down as the panel goes. A safety car turns the header yellow, a red flag white.
+1. **A session is live:** a header with the session and its lap or time left, then the running order (position, team colour, driver code) as far down as the panel goes. A safety car turns the header yellow and a red flag red; the usual header is white with red letters.
 2. **A race weekend, nothing live:** the clock, the top three of the session that just finished, and the start of the next one.
 3. **Otherwise:** the clock, the top three of the drivers' championship and the next Grand Prix, with a race car in the leader's team colour driving past along the bottom.
+
+**On a 64x32 panel** a live session shows the top four, and the other two screens show the clock with one line under it that changes every few seconds: the top three and the next session, or the top three of the championship and the next Grand Prix (with the race car along the bottom).
 
 The data come from ESPN (the running order, the calendar) and from the Jolpica F1 API (the championship, successor of the Ergast API). ESPN gives the order but no gaps or lap times, so the screens don't show them.
 

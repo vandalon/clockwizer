@@ -1,5 +1,6 @@
 
 #include "Clockface.h"
+#include <CWPreferences.h>
 
 
 #define LIGHT_GREEN 0x754d
@@ -12,8 +13,11 @@
 
 #define RGB565(r, g, b) ((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
 
-#define POKEMON_X 8
-#define POKEMON_Y 21
+// Where things sit; on a panel of 32 rows the Pokedex is rebuilt smaller (see drawShortBackground)
+static int POKEMON_X = 8, POKEMON_Y = 21;
+static int rightDy = 0;                       // how far the display and the weekday squares moved up
+static int barX = 9, barY = 53, barH = 5;     // the loading bar
+static int lensX = 4, lensY = 4;              // the blinking lens
 
 #define TICK_MS 250           // screen update rate; the bob and the reveal need more than 1 Hz
 #define REVEAL_DARK_MS 1000   // "?" silhouette after a minute change
@@ -50,7 +54,11 @@ void Clockface::setup(CWDateTime *dateTime) {
   Locator::getDisplay()->fillRect(0, 0, 64, 64, 0x0000);
 
   // Draw background
-  Locator::getDisplay()->drawRGBBitmap(0, 0, POKEDEX_BG, 64, 64);
+  if (ClockwiseParams::getInstance()->displayHeight == 32) {
+    drawShortBackground();
+  } else {
+    Locator::getDisplay()->drawRGBBitmap(0, 0, POKEDEX_BG, 64, 64);
+  }
 
   Locator::getDisplay()->setFont(&PKMN_RBYGSC4pt7b);
 
@@ -61,6 +69,36 @@ void Clockface::setup(CWDateTime *dateTime) {
   refreshTime();
   refreshDate(lastWeekday, DARK_BLUE);
   updatePokemon(false);
+}
+
+// 32 rows: the display and the weekday squares of the big Pokedex, moved up 14 rows, and a new left half
+// with a smaller screen, the lens beside it and a thinner bar under it
+void Clockface::drawShortBackground() {
+  const uint16_t RED = 0xD8C3, GRAY = 0x9CF3, BLACK = 0x0000;
+  Adafruit_GFX* d = Locator::getDisplay();
+
+  POKEMON_X = 6;
+  POKEMON_Y = 6;
+  rightDy = -14;
+  barX = 5;
+  barY = 28;
+  barH = 3;
+  lensX = 27;
+  lensY = 3;
+
+  for (int y = 0; y < 32; y++)
+    for (int x = 32; x < 64; x++)
+      d->drawPixel(x, y, pgm_read_word(&POKEDEX_BG[(y + 14) * 64 + x]));
+
+  d->fillRect(0, 0, 32, 32, RED);
+  d->drawFastVLine(31, 0, 32, BLACK);
+  d->fillRect(2, 2, 24, 24, BLACK);   // the screen
+  d->fillRect(3, 3, 22, 22, GRAY);
+  d->fillRect(5, 5, 18, 18, BLACK);   // the window the Pokemon shows in
+  d->fillRect(26, 2, 5, 6, BLACK);    // behind the lens
+  d->fillRect(4, 27, 13, 5, BLACK);   // the bar
+  d->drawFastHLine(21, 29, 5, BLACK); // and a d-pad next to it
+  d->drawFastVLine(23, 27, 5, BLACK);
 }
 
 void Clockface::update() 
@@ -104,7 +142,7 @@ void Clockface::update()
 void Clockface::refreshDate(uint8_t weekday, uint16_t color) {
   // Update weekday
   uint8_t x = 36 + ((weekday > 3 ? (weekday-4) : weekday) * 6);
-  uint8_t y = 35 + (weekday > 3 ? 5 : 0);
+  uint8_t y = 35 + rightDy + (weekday > 3 ? 5 : 0);
 
   Locator::getDisplay()->fillRect(x, y, 5, 4, color);
 }
@@ -113,19 +151,19 @@ void Clockface::refreshDate(uint8_t weekday, uint16_t color) {
 void Clockface::refreshTime() { 
 
   // Clean up the clock area
-  Locator::getDisplay()->fillRect(35, 17, 26, 14, LIGHT_BLACK);
+  Locator::getDisplay()->fillRect(35, 17 + rightDy, 26, 14, LIGHT_BLACK);
 
   snprintf(hours, sizeof(hours), "%02d", _dateTime->getHour());
   snprintf(minutes, sizeof(minutes), "%02d", _dateTime->getMinute());
 
-  Locator::getDisplay()->setCursor(35, 22);
+  Locator::getDisplay()->setCursor(35, 22 + rightDy);
   Locator::getDisplay()->print(hours);
 
-  Locator::getDisplay()->setCursor(46, 30);
+  Locator::getDisplay()->setCursor(46, 30 + rightDy);
   Locator::getDisplay()->print(minutes);
 
   if (!_dateTime->is24hFormat())
-    Locator::getDisplay()->drawBitmap(55, 18, (_dateTime->isAM() ? AM_SIGN : PM_SIGN), 4, 4, 0xffff);
+    Locator::getDisplay()->drawBitmap(55, 18 + rightDy, (_dateTime->isAM() ? AM_SIGN : PM_SIGN), 4, 4, 0xffff);
 }
 
 // Picks a new Pokemon (never the same one twice in a row). With reveal it starts
@@ -198,16 +236,16 @@ void Clockface::updateLoadingBar(uint8_t seconds) {
 
   uint8_t width = (11 * left) / 60;
 
-  Locator::getDisplay()->fillRect(9, 53, 11, 5, DARK_GREEN);
+  Locator::getDisplay()->fillRect(barX, barY, 11, barH, DARK_GREEN);
   // a zero-width fillRect must be skipped, it can smear across the screen
-  if (width > 0) Locator::getDisplay()->fillRect(9, 53, width, 5, color);
+  if (width > 0) Locator::getDisplay()->fillRect(barX, barY, width, barH, color);
 }
 
 // Lens blink, one colour per second
 void Clockface::updateLens(uint8_t seconds) {
   uint16_t color = LENS_COLORS[seconds % 3];
-  Locator::getDisplay()->fillRect(5, 4, 2, 4, color);
-  Locator::getDisplay()->fillRect(4, 5, 4, 2, color);
+  Locator::getDisplay()->fillRect(lensX + 1, lensY, 2, 4, color);
+  Locator::getDisplay()->fillRect(lensX, lensY + 1, 4, 2, color);
 }
 
 // The spare blue square flashes for the first 6 seconds of every hour
@@ -215,5 +253,5 @@ void Clockface::updateSpare(uint8_t minute, uint8_t seconds) {
   bool lit = minute == 0 && seconds < 6 && ((millis() / 500) % 2 == 0);
   if (lit == spareLit) return;
   spareLit = lit;
-  Locator::getDisplay()->fillRect(54, 40, 5, 4, lit ? RGB565(0xff, 0xf3, 0xa0) : LIGHT_BLUE);
+  Locator::getDisplay()->fillRect(54, 40 + rightDy, 5, 4, lit ? RGB565(0xff, 0xf3, 0xa0) : LIGHT_BLUE);
 }

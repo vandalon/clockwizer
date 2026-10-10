@@ -24,6 +24,7 @@ static inline size_t cw_strlcpy(char *dst, const char *src, size_t size) {
 inline long cw_random(long hi) { return hi <= 0 ? 0 : rand() % hi; }
 inline long cw_random(long lo, long hi) { return hi <= lo ? lo : lo + rand() % (hi - lo); }
 inline void randomSeed(unsigned long seed) { srand((unsigned)seed); }
+inline unsigned long esp_random() { return (unsigned long)rand(); }
 #define random cw_random
 #define PROGMEM
 #define pgm_read_byte(addr) (*(const uint8_t *)(addr))

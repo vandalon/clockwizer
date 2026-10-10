@@ -1,5 +1,6 @@
 
 #include "Clockface.h"
+#include <CWPreferences.h>
 
 const char* FORMAT_TWO_DIGITS = "%02d";
 
@@ -51,8 +52,26 @@ void Clockface::update()
   }  
 }
 
+// A 64x32 panel has room for the hour and the minutes on a line each (the minutes in the
+// small font when they are too wide), but not for the date.
+static bool isShort() { return ClockwiseParams::getInstance()->displayHeight == 32; }
+
+static int textWidth(const GFXfont* font, const char* text) {
+  int width = 0;
+  for (; *text; text++) width += font->glyph[*text - font->first].xAdvance;
+  return width;
+}
+
+static void oneLine(char* words) {
+  for (char* c = words; *c; c++) if (*c == '\n') *c = ' ';
+}
+
 void Clockface::updateTime() 
 {
+  if (isShort()) {
+    updateTimeShort();
+    return;
+  }
   Locator::getDisplay()->fillRect(0, 0, 64, 48, 0x0000);  
 
   i18n.timeInWords(_dateTime->getHour24(), _dateTime->getMinute(), hInWords, mInWords);  
@@ -72,6 +91,43 @@ void Clockface::updateTime()
   // Separator line
   Locator::getDisplay()->drawFastHLine(1, 48, 62, 0xffff);
 
+}
+
+void Clockface::updateTimeShort()
+{
+  Adafruit_GFX* d = Locator::getDisplay();
+  d->fillRect(0, 0, 64, 32, 0x0000);
+
+  i18n.timeInWords(_dateTime->getHour(), _dateTime->getMinute(), hInWords, mInWords);
+  char* minuteLine2 = strchr(mInWords, '\n');
+  oneLine(hInWords);
+
+  // Big hour and a line of minutes when they fit, else three lines in the smaller font
+  char oneLineMinutes[20];
+  strcpy(oneLineMinutes, mInWords);
+  oneLine(oneLineMinutes);
+  bool big = textWidth(&hour8pt7b, hInWords) <= 62 && textWidth(&minute7pt7b, oneLineMinutes) <= 62;
+
+  d->setTextColor(0x02ed);
+  d->setFont(big ? &hour8pt7b : &minute7pt7b);
+  d->setCursor(1, big ? 13 : 8);
+  d->print(hInWords);
+
+  d->setFont(&minute7pt7b);
+  d->setTextColor(0xffff);
+  if (big) {
+    d->setCursor(1, 26);
+    d->print(oneLineMinutes);
+  } else if (minuteLine2) {
+    *minuteLine2 = '\0';
+    d->setCursor(1, 18);
+    d->print(mInWords);
+    d->setCursor(1, 28);
+    d->print(minuteLine2 + 1);
+  } else {
+    d->setCursor(1, 18);
+    d->print(mInWords);
+  }
 }
 
 void Clockface::updateDate() 

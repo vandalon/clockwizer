@@ -31,4 +31,5 @@ class Ghost {
     void draw(bool frightened, bool flash);
     int getX();
     int getY();
+    uint16_t color() { return _color; }
 };
