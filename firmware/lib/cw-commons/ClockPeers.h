@@ -46,7 +46,12 @@ struct ClockPeers
     }
 
     mdns_result_t *results = nullptr;
+#if ESP_IDF_VERSION_MAJOR >= 5
+    uint8_t resultCount = 0;  // ESP-IDF 5 also hands back the number of results
+    if (!mdns_query_async_get_results(search, 0, &results, &resultCount)) return;  // still searching
+#else
     if (!mdns_query_async_get_results(search, 0, &results)) return;  // still searching
+#endif
 
     std::vector<Peer> found;
     String self = WiFi.localIP().toString();
