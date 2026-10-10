@@ -1,5 +1,6 @@
 #include "Clockface.h"
 #include "F1Ticker.h"
+#include "FlipDigits.h"
 #include <Locator.h>
 #include <ezTime.h>
 #include <stdio.h>
@@ -440,7 +441,10 @@ static void drawTile(MatrixPanel_I2S_DMA *d, int k, int x, int y, uint16_t color
 static const int TILE_OFFSET[4] = {0, 11, 28, 39};  // the hours and the minutes: 2 pixels either side of the colon
 static const int BIG_OFFSET[4] = {0, 14, 35, 49};
 static const int CLOCK_WIDTH = 49, BIG_WIDTH = 62;
-static int clockWidth() { return bigClock ? BIG_WIDTH : CLOCK_WIDTH; }
+// timeStyle 0, the flip cards (as on the football clock): 14 x 23 cards on the main screen, 12 x 17 next to the session name
+static const int FLIP_BIG_OFFSET[4] = {0, 15, 33, 48}, FLIP_SMALL_OFFSET[4] = {0, 13, 28, 41};
+static const int FLIP_BIG_WIDTH = 62, FLIP_SMALL_WIDTH = 53;
+static int clockWidth() { return timeStyle == 0 ? (bigClock ? FLIP_BIG_WIDTH : FLIP_SMALL_WIDTH) : bigClock ? BIG_WIDTH : CLOCK_WIDTH; }
 static int clockLeft = (64 - CLOCK_WIDTH) / 2;  // where the clock starts: in the middle, or at the right on the results screen
 
 // The four digits for the time: starts a change on the ones that differ
@@ -449,7 +453,7 @@ static void updateClockDigits(int hour, int minute) {
   initBigGlyphs();
   int digits[4] = {hour / 10, hour % 10, minute / 10, minute % 10};
   timeStyle = ClockwiseParams::getInstance()->timeStyle;
-  if (timeStyle < 1 || timeStyle > 5) timeStyle = STYLE_ROLL;  // there are no flip cards on this clock
+  if (timeStyle > 5) timeStyle = STYLE_ROLL;
   if (!clockStateKnown) {
     for (int i = 0; i < 4; i++) clockDigits[i] = oldDigits[i] = digits[i];
     clockStateKnown = true;
@@ -473,8 +477,65 @@ static bool clockMoving() {
   return false;
 }
 
+// One row of a flip card, drawn at screen row y: the card with its rounded corners, the digit's pixels on it and the
+// split as a black row. level dims it for the folding halves.
+static const uint16_t CARD = rgb(52, 56, 66);
+static uint16_t mixColor(uint16_t c0, uint16_t c1, int k) {
+  int r0 = c0 >> 11 << 3, g0 = c0 >> 5 & 63, b0 = c0 & 31, r1 = c1 >> 11 << 3, g1 = c1 >> 5 & 63, b1 = c1 & 31;
+  return rgb(r0 + (r1 - r0) * k / 32, (g0 + (g1 - g0) * k / 32) << 2, (b0 + (b1 - b0) * k / 32) << 3);
+}
+static void drawCardRow(MatrixPanel_I2S_DMA *d, const GlyphSet &set, int digit, int x, int y, int w, int h, int row,
+                        uint16_t color, const SoftEdge &soft, int level) {
+  if (row == h / 2) {
+    d->fillRect(x, y, w, 1, 0);
+    return;
+  }
+  bool edge = row == 0 || row == h - 1;
+  d->fillRect(edge ? x + 1 : x, y, edge ? w - 2 : w, 1, scaleColor(CARD, level));
+  int gy = row - (h - set.h) / 2, gx = x + (w - set.w) / 2;
+  if (gy < 0 || gy >= set.h) return;
+  const uint8_t *px = set.pixels + (digit * set.h + gy) * set.w;
+  float lo = soft.lo * 32, scale = 32 / ((soft.hi - soft.lo) * 32);
+  for (int i = 0; i < set.w; i++) {
+    int a = (int)constrain((px[i] - lo) * scale, 0.0f, 32.0f);
+    if (a) d->drawPixel(gx + i, y, scaleColor(mixColor(CARD, color, a), level));
+  }
+}
+
+// One flip card: the old top half folds down onto the split, then the new bottom half folds out below it
+static void drawFlipCard(MatrixPanel_I2S_DMA *d, int k, int x, int y, int w, int h, uint16_t color, const SoftEdge &soft) {
+  static const GlyphSet WIDE = {12, 22, &FLIP_WIDE[0][0]}, LIVE = {10, 12, &FLIP_LIVE[0][0]};
+  const GlyphSet &set = bigClock ? WIDE : LIVE;
+  float p = changeProgress(k);
+  int digit = p < 0 ? oldDigits[k] : clockDigits[k], old = oldDigits[k];
+  int split = h / 2, below = h - 1 - split;
+  bool flipping = p >= 0 && p < 1 && old != digit;
+  for (int row = 0; row < h; row++)  // the new top half over the old bottom half
+    drawCardRow(d, set, flipping && row > split ? old : digit, x, y + row, w, h, row, color, soft, 32);
+  if (!flipping) return;
+  if (p < 0.5f) {
+    int n = (int)roundf(split * (1 - 2 * p));
+    for (int r = 0; r < n; r++) drawCardRow(d, set, old, x, y + split - n + r, w, h, r * split / n, color, soft, 18 + 14 * n / split);
+  } else {
+    int n = (int)roundf(below * (2 * p - 1));
+    for (int r = 0; r < n; r++) drawCardRow(d, set, digit, x, y + split + 1 + r, w, h, split + 1 + r * below / n, color, soft, 18 + 14 * n / below);
+  }
+}
+
 // The whole clock, or only the digits that move
 static void drawTallClock(MatrixPanel_I2S_DMA *d, int y, bool onlyMoving) {
+  if (timeStyle == 0) {
+    int w = bigClock ? 14 : 12, h = bigClock ? 23 : 17;
+    const int *offset = bigClock ? FLIP_BIG_OFFSET : FLIP_SMALL_OFFSET;
+    for (int k = 0; k < 4; k++) {
+      drawFlipCard(d, k, clockLeft + offset[k], y, w, h, k < 2 ? CLOCK : MINUTES, k < 2 ? WHITE_SOFT : GREEN_SOFT);
+      if (changeProgress(k) >= 1) tileSettled[k] = true;
+    }
+    int cx = clockLeft + 2 * w + 1 + (bigClock ? 1 : 0);
+    d->fillRect(cx, y + h / 2 - 3, 2, 2, pulsed(WHITE));
+    d->fillRect(cx, y + h / 2 + 2, 2, 2, pulsed(WHITE));
+    return;
+  }
   for (int k = 0; k < 4; k++) {
     if (onlyMoving && timeStyle != STYLE_SHIMMER && tileSettled[k]) continue;
     drawTile(d, k, clockLeft + (bigClock ? BIG_OFFSET : TILE_OFFSET)[k], y, k < 2 ? CLOCK : MINUTES, k < 2 ? WHITE_SOFT : GREEN_SOFT);

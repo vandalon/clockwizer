@@ -442,8 +442,6 @@
     faceId = g('CW_FW_ID');
     $('ballRow').style.display = faceId === '0x0B' ? 'flex' : 'none';
     $('styleRow').style.display = faceId === '0x0B' || faceId === '0x0C' ? 'block' : 'none';
-    $('timeStyle').options[0].hidden = faceId === '0x0C';  // no flipping cards on the Formula 1 clock
-    if (faceId === '0x0C' && $('timeStyle').value === '0') $('timeStyle').value = '2';
     $('pacmanBox').style.display = faceId === '0x05' ? 'block' : 'none';
     $('f1Box').style.display = faceId === '0x08' && g('displayHeight') === '32' ? 'block' : 'none';
     const rows32 = g('displayHeight') === '32';
