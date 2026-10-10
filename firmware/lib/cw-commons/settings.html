@@ -725,8 +725,9 @@
     const resultChanged = now.resultMins !== orig.resultMins;
     const birthdaysChanged = now.birthdays !== orig.birthdays;
     const leaguesChanged = now.fbLeagues !== orig.fbLeagues, teamsChanged = now.fbTeams !== orig.fbTeams;
+    const driversChanged = now.f1Drivers !== orig.f1Drivers;
     const quietChanged = now.quiet !== orig.quiet || (now.quiet && (now.qFrom !== orig.qFrom || now.qTo !== orig.qTo));
-    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !f1Changed && !ballChanged && !flagsChanged && !styleChanged && !colorChanged && !pacmanChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged && !birthdaysChanged) return;
+    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !f1Changed && !ballChanged && !flagsChanged && !styleChanged && !colorChanged && !pacmanChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged && !driversChanged && !birthdaysChanged) return;
     if (now.quiet && now.qFrom === now.qTo) { toast('Choose different start and end times', 3000); return; }
     // Checked before anything is sent: a refusal halfway would leave the settings after it unsaved
     if (fwUrlChanged && now.fwUrl && (!/^https?:\/\//i.test(now.fwUrl) || now.fwUrl.length > 120)) {
@@ -745,12 +746,13 @@
       if (now.ghost1 !== orig.ghost1) await set('ghost1Color', now.ghost1);
       if (now.ghost2 !== orig.ghost2) await set('ghost2Color', now.ghost2);
       if (now.dots !== orig.dots) await set('dotColor', now.dots);
-      if (accessChanged) await set('webAccess', now.access);
       if (now.telnet !== orig.telnet) await set('telnet', now.telnet);
+      if (accessChanged) await set('webAccess', now.access);
       if (matchChanged) await set('matchSecs', now.matchSecs);
       if (resultChanged) await set('resultMins', now.resultMins);
       if (leaguesChanged) await set('fbLeagues', now.fbLeagues);
       if (teamsChanged) await set('fbTeams', now.fbTeams);
+      if (driversChanged) await set('f1Drivers', now.f1Drivers);
       if (birthdaysChanged) await set('birthdays', encodeURIComponent(now.birthdays));
       if (nameChanged) { await set('clockName', encodeURIComponent(now.name)); setTitle(now.name); }
       if (fwUrlChanged) await set('fwUrl', encodeURIComponent(now.fwUrl));

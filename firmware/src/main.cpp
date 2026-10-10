@@ -6,6 +6,7 @@
 
 // Commons
 #include <WiFiController.h>
+#include <WifiWatchdog.h>
 #include <CWDateTime.h>
 #include <CWPreferences.h>
 #include <CWWebServer.h>
@@ -889,6 +890,7 @@ void loop() {
     }
     if (!fwValidated) checkFirmwareValid(now);
     pollMd5Fetch();
+    if (!firmwareUpdating) WifiWatchdog::getInstance()->loop();
 #ifdef CW_TEST_CRASH
     if (now > 10000) abort(); // rollback test build: die before it can be confirmed
 #endif
