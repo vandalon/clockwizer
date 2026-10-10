@@ -372,8 +372,12 @@ struct ClockwiseWebServer
         ClockwiseParams::getInstance()->footballLeagues = cleanList(value);
       } else if (key == ClockwiseParams::getInstance()->PREF_FOOTBALL_TEAMS) {
         ClockwiseParams::getInstance()->footballTeams = cleanList(value);
+      } else if (key == ClockwiseParams::getInstance()->PREF_F1_DRIVERS) {
+        ClockwiseParams::getInstance()->f1Drivers = cleanList(value);
       } else if (key == ClockwiseParams::getInstance()->PREF_SHOW_F1) {
         ClockwiseParams::getInstance()->showF1 = (value == "1");
+      } else if (key == ClockwiseParams::getInstance()->PREF_F1_FLAGS) {
+        ClockwiseParams::getInstance()->f1Flags = (value == "1");
       } else if (key == ClockwiseParams::getInstance()->PREF_BALL_ROLL) {
         ClockwiseParams::getInstance()->ballRoll = (value == "1");
       } else if (key == ClockwiseParams::getInstance()->PREF_TIME_STYLE) {
@@ -440,6 +444,7 @@ struct ClockwiseWebServer
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_GHOST2_COLOR, ClockwiseParams::getInstance()->ghost2Color);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_DOT_COLOR, ClockwiseParams::getInstance()->dotColor);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_SHOW_F1, ClockwiseParams::getInstance()->showF1);
+    client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_F1_FLAGS, ClockwiseParams::getInstance()->f1Flags);
     client.printf(HEADER_TEMPLATE_S, ClockwiseParams::getInstance()->PREF_CLOCK_NAME, ClockwiseParams::getInstance()->clockName.c_str());
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_UPD_QUIET_FROM, ClockwiseParams::getInstance()->updQuietFrom);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_UPD_QUIET_UNTIL, ClockwiseParams::getInstance()->updQuietUntil);
@@ -451,6 +456,7 @@ struct ClockwiseWebServer
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_RESULT_MINS, ClockwiseParams::getInstance()->resultMins);
     client.printf(HEADER_TEMPLATE_S, ClockwiseParams::getInstance()->PREF_FOOTBALL_LEAGUES, ClockwiseParams::getInstance()->footballLeagues.c_str());
     client.printf(HEADER_TEMPLATE_S, ClockwiseParams::getInstance()->PREF_FOOTBALL_TEAMS, ClockwiseParams::getInstance()->footballTeams.c_str());
+    client.printf(HEADER_TEMPLATE_S, ClockwiseParams::getInstance()->PREF_F1_DRIVERS, ClockwiseParams::getInstance()->f1Drivers.c_str());
     client.printf(HEADER_TEMPLATE_S, ClockwiseParams::getInstance()->PREF_BIRTHDAYS, ClockwiseParams::getInstance()->birthdays.c_str());
     client.printf(HEADER_TEMPLATE_S, "updateStatus", update_status.c_str());
 

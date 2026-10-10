@@ -65,8 +65,11 @@ struct ClockwiseParams
     // Football face: the competitions to follow (ESPN codes) and the favourite teams ("id:abbreviation:c|n"), comma separated
     const char* const PREF_FOOTBALL_LEAGUES = "fbLeagues";
     const char* const PREF_FOOTBALL_TEAMS = "fbTeams";
+    // Formula 1 face: favourite drivers (3-letter codes, comma separated), kept visible in the session lists
+    const char* const PREF_F1_DRIVERS = "f1Drivers";
     // Tetris 64x32: show the Formula 1 race in the ticker
     const char* const PREF_SHOW_F1 = "showF1";
+    const char* const PREF_F1_FLAGS = "f1Flags";
     // Football face: the ball on the main screen rolls (1) or pulses (0)
     const char* const PREF_BALL_ROLL = "ballRoll";
     // Football face: how the clock digits change (0 flip cards, 1 fade, 2 roll, 3 dissolve, 4 drift, 5 shimmer)
@@ -135,7 +138,9 @@ struct ClockwiseParams
     uint16_t resultMins;
     String footballLeagues;
     String footballTeams;
+    String f1Drivers;
     bool showF1;
+    bool f1Flags;  // Formula 1 face: the host country's flag behind the main screens
     bool ballRoll;
     uint8_t timeStyle;
     uint8_t color;
@@ -214,7 +219,9 @@ struct ClockwiseParams
         preferences.putUInt(PREF_RESULT_MINS, resultMins);
         preferences.putString(PREF_FOOTBALL_LEAGUES, footballLeagues);
         preferences.putString(PREF_FOOTBALL_TEAMS, footballTeams);
+        preferences.putString(PREF_F1_DRIVERS, f1Drivers);
         preferences.putBool(PREF_SHOW_F1, showF1);
+        preferences.putBool(PREF_F1_FLAGS, f1Flags);
         preferences.putBool(PREF_BALL_ROLL, ballRoll);
         preferences.putUInt(PREF_TIME_STYLE, timeStyle);
         preferences.putUInt(PREF_COLOR, color);
@@ -249,7 +256,9 @@ struct ClockwiseParams
         resultMins = preferences.getUInt(PREF_RESULT_MINS, 120);
         footballLeagues = preferences.getString(PREF_FOOTBALL_LEAGUES, CW_DEFAULT_FOOTBALL_LEAGUES);
         footballTeams = preferences.getString(PREF_FOOTBALL_TEAMS, CW_DEFAULT_FOOTBALL_TEAMS);
+        f1Drivers = preferences.getString(PREF_F1_DRIVERS, "");
         showF1 = preferences.getBool(PREF_SHOW_F1, true);
+        f1Flags = preferences.getBool(PREF_F1_FLAGS, false);
         ballRoll = preferences.getBool(PREF_BALL_ROLL, true);
         timeStyle = preferences.getUInt(PREF_TIME_STYLE, 2);
         color = preferences.getUInt(PREF_COLOR, 0);

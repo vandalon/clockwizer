@@ -125,7 +125,7 @@
   </section>
 
   <section id="footballBox" style="display:none">
-    <h2>Football</h2>
+    <h2 id="fbTitle">Football</h2>
     <div class="row" id="ballRow" style="margin-bottom:12px">
       <div><strong>Rolling ball</strong><p class="hint">On the clock with the upcoming matches, the ball is passed back and forth along the grass at the bottom; off, it rests there</p></div>
       <input type="checkbox" class="switch" id="ball" onchange="scheduleSave()">
@@ -138,22 +138,23 @@
       </select>
       <p class="hint">How the time changes on the clock. The shimmer is a soft highlight that sweeps over the digits all the time.</p>
     </div>
-    <label for="matchSecs">Next live match every</label>
+    <label for="matchSecs" id="matchLabel">Next live match every</label>
     <select id="matchSecs" onchange="scheduleSave()">
       <option value="4">4 seconds</option><option value="6">6 seconds</option><option value="8">8 seconds</option>
       <option value="10">10 seconds</option><option value="15">15 seconds</option><option value="20">20 seconds</option>
       <option value="30">30 seconds</option>
     </select>
-    <p class="hint">With several matches on at once, the clock shows them one by one, and lists of results slide on after the same time.</p>
+    <p class="hint" id="matchHint">With several matches on at once, the clock shows them one by one, and lists of results slide on after the same time.</p>
 
-    <label for="resultMins">Show a finished match for</label>
+    <label for="resultMins" id="resultLabel">Show a finished match for</label>
     <select id="resultMins" onchange="scheduleSave()">
       <option value="30">30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option>
       <option value="180">3 hours</option><option value="360">6 hours</option><option value="720">12 hours</option>
       <option value="1440">24 hours</option><option value="0">Until midnight</option>
     </select>
-    <p class="hint">After that the result is dropped from the screen.</p>
+    <p class="hint" id="resultHint">After that the result is dropped from the screen.</p>
 
+    <div id="fbPick">
     <label>Competitions to follow</label>
     <p class="hint" id="leagueHint"></p>
     <div class="leagues" id="leagueList"></div>
@@ -163,6 +164,21 @@
     <input type="text" id="teamSearch" placeholder="Type a club or country" autocomplete="off" oninput="searchTeams()" onfocus="searchTeams()">
     <div class="picks" id="teamPicks" style="display:none"></div>
     <p class="hint">A favourite's live matches stay at the top of the live feed, even when other matches are on too. They are also followed when their competition isn't ticked above.</p>
+    </div>
+  </section>
+
+  <section id="f1DriversBox" style="display:none">
+    <h2>Favourite drivers</h2>
+    <p class="hint" style="margin-top:0">Up to 5. In the lists of a session they stay on screen: the top three first, then the places around your best placed favourite.</p>
+    <div class="leagues" id="driverList"></div>
+  </section>
+
+  <section id="f1FlagBox" style="display:none">
+    <h2>Main screen</h2>
+    <div class="row">
+      <div><strong>Country flag</strong><p class="hint">Shows the flag of the country of this weekend's Grand Prix, or of the next one, as a dim background behind the standings and the results</p></div>
+      <input type="checkbox" class="switch" id="flags" onchange="scheduleSave()">
+    </div>
   </section>
 
   <section id="birthdayBox">
@@ -399,6 +415,7 @@
     syncAuto('dark');
     $('auto').checked = Number(g('autoBrightMax')) > 0;
     $('f1').checked = g('showF1') !== '0';
+    $('flags').checked = g('f1Flags') === '1';
     $('ball').checked = g('ballRoll') !== '0';
     $('timeStyle').value = g('timeStyle') || '2';
     $('color').value = g('color') || '0';
@@ -424,7 +441,9 @@
     ldrPin = g('ldrPin') || 35;
     faceId = g('CW_FW_ID');
     $('ballRow').style.display = faceId === '0x0B' ? 'flex' : 'none';
-    $('styleRow').style.display = faceId === '0x0B' ? 'block' : 'none';
+    $('styleRow').style.display = faceId === '0x0B' || faceId === '0x0C' ? 'block' : 'none';
+    $('timeStyle').options[0].hidden = faceId === '0x0C';  // no flipping cards on the Formula 1 clock
+    if (faceId === '0x0C' && $('timeStyle').value === '0') $('timeStyle').value = '2';
     $('pacmanBox').style.display = faceId === '0x05' ? 'block' : 'none';
     $('f1Box').style.display = faceId === '0x08' && g('displayHeight') === '32' ? 'block' : 'none';
     const rows32 = g('displayHeight') === '32';
@@ -433,12 +452,24 @@
     showFaces(shown);
     $('faceBox').style.display = shown.length > 1 ? 'block' : 'none';
     const ticker = faceId === '0x0B' || (faceId === '0x08' && rows32);  // Tetris shows football on the 64x32 panel only
-    $('footballBox').style.display = ticker ? 'block' : 'none';
+    const f1 = faceId === '0x0C';
+    $('footballBox').style.display = ticker || f1 ? 'block' : 'none';
+    $('fbPick').style.display = f1 ? 'none' : 'block';
+    $('fbTitle').textContent = f1 ? 'Formula 1' : 'Football';
+    $('matchLabel').textContent = f1 ? 'Next page of the results every' : 'Next live match every';
+    $('matchHint').textContent = f1 ? 'The whole classification of a session is shown a page at a time, with the first places fixed.' : 'With several matches on at once, the clock shows them one by one, and lists of results slide on after the same time.';
+    $('resultLabel').textContent = f1 ? 'Show the whole classification for' : 'Show a finished match for';
+    $('resultHint').textContent = f1 ? 'After a session the full list stays on screen this long, then the clock takes over until the next session.' : 'After that the result is dropped from the screen.';
+    $('f1DriversBox').style.display = f1 ? 'block' : 'none';
+    $('f1FlagBox').style.display = f1 ? 'block' : 'none';
+    f1Favs = (g('f1Drivers') || '').split(',').filter(Boolean);
+    if (f1) showDrivers();
     const ms = g('matchSecs') || '8';
     if (!Array.from($('matchSecs').options).some(o => o.value === ms)) $('matchSecs').add(new Option(ms + ' seconds', ms));
     $('matchSecs').value = ms;
     $('resultMins').value = g('resultMins') || '120';
     if (ticker) await loadFootball(g('fbLeagues'), g('fbTeams'));
+    else { fbLeagues = (g('fbLeagues') || '').split(',').filter(Boolean); fbTeams = (g('fbTeams') || '').split(',').filter(Boolean).map(c => { const [id, abbr, kind] = c.split(':'); return { id, abbr, kind, name: abbr }; }); }  // kept as they are
     loadBirthdays(g('birthdays'));
     $('info').textContent = g('CLOCKFACE_NAME') + ' · v' + g('CW_FW_VERSION') + ' · ' + g('wifiSsid');
     showAuto();
@@ -512,6 +543,7 @@
     auto: $('auto').checked,
     f1: $('f1').checked ? 1 : 0,
     ball: $('ball').checked ? 1 : 0,
+    flags: $('flags').checked ? 1 : 0,
     timeStyle: $('timeStyle').value,
     color: $('color').value,
     ghost1: $('ghost1').value,
@@ -529,11 +561,24 @@
     resultMins: $('resultMins').value,
     fbLeagues: fbLeagues.join(','),
     fbTeams: fbTeams.map(t => t.id + ':' + t.abbr + ':' + t.kind).join(','),
+    f1Drivers: f1Favs.join(','),
     birthdays: bdayString()
   });
 
   // Football: the competitions to follow and the favourite teams. The lists of what can be chosen
   // come from the clock (they are only on the Football clockface).
+  const F1_DRIVERS = [['VER','Verstappen'],['HAD','Hadjar'],['RUS','Russell'],['ANT','Antonelli'],['LEC','Leclerc'],['HAM','Hamilton'],['NOR','Norris'],['PIA','Piastri'],['ALO','Alonso'],['STR','Stroll'],['GAS','Gasly'],['COL','Colapinto'],['ALB','Albon'],['SAI','Sainz'],['LAW','Lawson'],['LIN','Lindblad'],['HUL','Hulkenberg'],['BOR','Bortoleto'],['OCO','Ocon'],['BEA','Bearman'],['PER','Perez'],['BOT','Bottas']];
+  const MAX_FAVS = 5;
+  let f1Favs = [];
+  function showDrivers() {
+    $('driverList').innerHTML = F1_DRIVERS.map(d => '<label><input type="checkbox" value="' + d[0] + '" onchange="pickDriver(this)"' + (f1Favs.includes(d[0]) ? ' checked' : '') + '>' + d[0] + ' ' + d[1] + '</label>').join('');
+  }
+  function pickDriver(box) {
+    if (box.checked && f1Favs.length >= MAX_FAVS) { box.checked = false; toast('At most ' + MAX_FAVS + ' favourites', 2500); return; }
+    f1Favs = f1Favs.filter(c => c !== box.value);
+    if (box.checked) f1Favs.push(box.value);
+    scheduleSave();
+  }
   const MAX_LEAGUES = 10, MAX_TEAMS = 8;
   let fbLeagues = [], fbTeams = [], fbCatalog = [], fbCatalogLoaded = false;
   async function loadFootball(leagueCodes, teamCodes) {
@@ -660,6 +705,7 @@
     const restart = now.h24 !== orig.h24 || now.tz !== orig.tz;
     const f1Changed = now.f1 !== orig.f1;
     const ballChanged = now.ball !== orig.ball;
+    const flagsChanged = now.flags !== orig.flags;
     const styleChanged = now.timeStyle !== orig.timeStyle;
     const colorChanged = now.color !== orig.color;
     const pacmanChanged = now.ghost1 !== orig.ghost1 || now.ghost2 !== orig.ghost2 || now.dots !== orig.dots;
@@ -671,7 +717,7 @@
     const birthdaysChanged = now.birthdays !== orig.birthdays;
     const leaguesChanged = now.fbLeagues !== orig.fbLeagues, teamsChanged = now.fbTeams !== orig.fbTeams;
     const quietChanged = now.quiet !== orig.quiet || (now.quiet && (now.qFrom !== orig.qFrom || now.qTo !== orig.qTo));
-    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !f1Changed && !ballChanged && !styleChanged && !colorChanged && !pacmanChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged && !birthdaysChanged) return;
+    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !f1Changed && !ballChanged && !flagsChanged && !styleChanged && !colorChanged && !pacmanChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged && !birthdaysChanged) return;
     if (now.quiet && now.qFrom === now.qTo) { toast('Choose different start and end times', 3000); return; }
     // Checked before anything is sent: a refusal halfway would leave the settings after it unsaved
     if (fwUrlChanged && now.fwUrl && (!/^https?:\/\//i.test(now.fwUrl) || now.fwUrl.length > 120)) {
@@ -684,6 +730,7 @@
       if (brMinChanged) await set('displayBrMin', brRaw(now.brMin));
       if (f1Changed) await set('showF1', now.f1);
       if (ballChanged) await set('ballRoll', now.ball);
+      if (flagsChanged) await set('f1Flags', now.flags);
       if (styleChanged) await set('timeStyle', now.timeStyle);
       if (colorChanged) await set('color', now.color);
       if (now.ghost1 !== orig.ghost1) await set('ghost1Color', now.ghost1);

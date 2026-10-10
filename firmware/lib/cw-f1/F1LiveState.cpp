@@ -1,43 +1,15 @@
 #include "F1LiveState.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
-
-// What a message holds that is used. In a feed update the topic's name is dropped (a filter keeps no strings
-// in an array of objects), but each topic's data looks different: Lines, CurrentLap and Status.
-static const char FILTER[] =
-    "{\"result\":{"
-      "\"DriverList\":{\"*\":{\"Tla\":true,\"TeamColour\":true}},"
-      "\"TimingData\":{\"Lines\":{\"*\":LINE}},"
-      "\"LapCount\":{\"CurrentLap\":true,\"TotalLaps\":true},"
-      "\"TrackStatus\":{\"Status\":true}},"
-    "\"arguments\":[{\"Lines\":{\"*\":LINE},\"CurrentLap\":true,\"TotalLaps\":true,\"Status\":true}]}";
-static const char LINE_FILTER[] =
-    "{\"Position\":true,\"GapToLeader\":true,\"TimeDiffToFastest\":true,\"BestLapTime\":{\"Value\":true},"
-    "\"BestLapTimes\":true,\"Stats\":true}";
-
-void F1LiveState::buildFilter(JsonDocument &filter) {
-  // LINE appears twice: spell it out rather than keep a second copy of the template
-  static char text[sizeof(FILTER) + 2 * sizeof(LINE_FILTER)];
-  char *out = text;
-  for (const char *p = FILTER; *p;) {
-    if (strncmp(p, "LINE", 4) == 0) {
-      size_t n = strlen(LINE_FILTER);
-      memcpy(out, LINE_FILTER, n);
-      out += n;
-      p += 4;
-    } else {
-      *out++ = *p++;
-    }
-  }
-  *out = 0;
-  deserializeJson(filter, text);
-}
 
 void F1LiveState::reset() {
   for (Driver &d : _drivers) d = Driver();
   _lap = _totalLaps = 0;
   _flag = 0;
+  _finished = false;
+  _topic[0] = 0;
 }
 
 F1LiveState::Driver *F1LiveState::driver(int number) {
@@ -51,10 +23,8 @@ F1LiveState::Driver *F1LiveState::driver(int number) {
   return free;
 }
 
-// Copies a string value, leaves the field alone for anything else (an update only holds what changed)
-static void setText(char *to, size_t size, JsonVariantConst value) {
-  const char *text = value.as<const char *>();
-  if (!text) return;
+// Copies a string value
+static void setText(char *to, size_t size, const char *text) {
   strncpy(to, text, size - 1);
   to[size - 1] = 0;
 }
@@ -68,74 +38,133 @@ static uint16_t hexColor(const char *hex) {
   return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 }
 
-// An array in a snapshot, an object keyed by index in an update
-template <class F>
-static void eachIndexed(JsonVariantConst value, F f) {
-  if (value.is<JsonArrayConst>()) {
-    int i = 0;
-    for (JsonVariantConst e : value.as<JsonArrayConst>()) f(i++, e);
-  } else if (value.is<JsonObjectConst>()) {
-    for (JsonPairConst kv : value.as<JsonObjectConst>()) f(atoi(kv.key().c_str()), kv.value());
+// "2026-10-09T12:34:52.123Z" -> seconds since 1970 (UTC); 0 when it doesn't parse
+static long parseUtc(const char *text) {
+  int y, mo, d, h, mi, sec;
+  if (!text || sscanf(text, "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &sec) != 6) return 0;
+  y -= mo <= 2;  // days from civil date (Howard Hinnant)
+  long era = (y >= 0 ? y : y - 399) / 400;
+  long yoe = y - era * 400;
+  long doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return (era * 146097 + doe - 719468) * 86400L + h * 3600L + mi * 60L + sec;
+}
+
+int F1LiveState::clockSecs(long nowUtc) const {
+  if (_clockUtc <= 0) return -1;
+  long left = _clockLeft;
+  if (_clockRunning) left -= nowUtc - _clockUtc;
+  return left < 0 ? 0 : (int)left;
+}
+
+// One value of a message, told apart by where it sits. path is the keys (or array indexes) leading to it:
+// {"result":{"DriverList":{"1":{"Tla":"VER"}}}} is result, DriverList, 1, Tla. A snapshot and an update differ
+// only in the first two: result and the topic's name, or arguments and the argument's index.
+void F1LiveState::leaf(const char (*path)[JsonScan::KEY], int n, const char *value, bool text) {
+  bool snapshot = !strcmp(path[0], "result");
+  if (n == 2 && text && !snapshot && !strcmp(path[0], "arguments") && !strcmp(path[1], "0")) {  // ["SessionStatus", {...}, time]
+    strlcpy(_topic, value, sizeof(_topic));
+    return;
   }
-}
-
-void F1LiveState::applyDriverList(JsonObjectConst list) {
-  for (JsonPairConst kv : list) {
-    Driver *d = driver(atoi(kv.key().c_str()));
-    if (!d) continue;
-    setText(d->code, sizeof(d->code), kv.value()["Tla"]);
-    if (kv.value()["TeamColour"].is<const char *>()) d->color = hexColor(kv.value()["TeamColour"]);
-  }
-}
-
-void F1LiveState::applyLine(int number, JsonObjectConst line) {
-  Driver *d = driver(number);
-  if (!d) return;
-  JsonVariantConst position = line["Position"];
-  if (position.is<const char *>()) d->position = atoi(position.as<const char *>());
-  else if (position.is<int>()) d->position = position.as<int>();
-  setText(d->gap, sizeof(d->gap), line["GapToLeader"]);
-  setText(d->diff, sizeof(d->diff), line["TimeDiffToFastest"]);
-  setText(d->best, sizeof(d->best), line["BestLapTime"]["Value"]);
-  eachIndexed(line["BestLapTimes"], [d](int i, JsonVariantConst e) {
-    if (i >= 0 && i < 3) setText(d->bestQ[i], sizeof(d->bestQ[i]), e["Value"]);
-  });
-  eachIndexed(line["Stats"], [d](int i, JsonVariantConst e) {
-    if (i >= 0 && i < 3) setText(d->diffQ[i], sizeof(d->diffQ[i]), e["TimeDiffToFastest"]);
-  });
-}
-
-void F1LiveState::applyTiming(JsonObjectConst timing) {
-  for (JsonPairConst kv : timing["Lines"].as<JsonObjectConst>()) applyLine(atoi(kv.key().c_str()), kv.value());
-}
-
-// One topic's data, told apart by what it holds
-void F1LiveState::applyTopic(JsonObjectConst data) {
-  if (data.containsKey("Lines")) applyTiming(data);
-  if (data.containsKey("CurrentLap")) _lap = data["CurrentLap"] | _lap;
-  if (data.containsKey("TotalLaps")) _totalLaps = data["TotalLaps"] | _totalLaps;
-  if (data.containsKey("Status")) {
-    // 1 clear, 2 yellow, 4 safety car, 5 red, 6 and 7 virtual safety car
-    int status = atoi(data["Status"] | "1");
-    _flag = status == 5 ? 'r' : (status == 2 || status == 4 || status == 6 || status == 7) ? 'y' : 0;
-  }
-}
-
-bool F1LiveState::apply(JsonDocument &message) {
-  bool any = false;
-  JsonObjectConst result = message["result"];
-  if (!result.isNull()) {
-    if (result["DriverList"].is<JsonObjectConst>()) applyDriverList(result["DriverList"]);
-    for (const char *topic : {"TimingData", "LapCount", "TrackStatus"})
-      if (result[topic].is<JsonObjectConst>()) applyTopic(result[topic]);
-    any = true;
-  }
-  for (JsonVariantConst argument : message["arguments"].as<JsonArrayConst>())
-    if (argument.is<JsonObjectConst>()) {
-      applyTopic(argument);
-      any = true;
+  if (n < 3 || (!snapshot && strcmp(path[0], "arguments"))) return;
+  const char (*r)[JsonScan::KEY] = path + 2;
+  int rn = n - 2;
+  if (snapshot && rn == 2 && !strcmp(path[1], "DriverList")) {
+    Driver *d = driver(atoi(r[0]));
+    if (!d) return;
+    if (!strcmp(r[1], "Tla") && text) setText(d->code, sizeof(d->code), value);
+    else if (!strcmp(r[1], "TeamColour") && text) d->color = hexColor(value);
+  } else if (rn == 1) {
+    const char *key = r[0];
+    if (!strcmp(key, "SessionPart") && !text) _part = atoi(value);  // qualifying: 1, 2 or 3
+    else if (!strcmp(key, "CurrentLap") && !text) _lap = atoi(value);
+    else if (!strcmp(key, "TotalLaps") && !text) _totalLaps = atoi(value);
+    else if (!strcmp(key, "Status") && text) {
+      const char *topic = snapshot ? path[1] : _topic;
+      if (!strcmp(topic, "SessionStatus")) {  // Started, Finished (the chequered flag), Finalised, Ends
+        if (!strcmp(value, "Finished") || !strcmp(value, "Finalised") || !strcmp(value, "Ends")) _finished = true;
+        else if (!strcmp(value, "Started") || !strcmp(value, "Inactive")) _finished = false;
+      } else {
+        // 1 clear, 2 yellow, 4 safety car, 5 red, 6 and 7 virtual safety car
+        int status = atoi(value);
+        _flag = status == 5 ? 'r' : (status == 2 || status == 4 || status == 6 || status == 7) ? 'y' : 0;
+      }
+    } else if (!strcmp(key, "Remaining") && text) {  // the session clock: the time left at a moment, ticking or stopped
+      int h = 0, m = 0, sec = 0;
+      if (sscanf(value, "%d:%d:%d", &h, &m, &sec) == 3) {
+        _pendingLeft = h * 3600L + m * 60L + sec;
+        _pendingClock = true;
+      }
+    } else if (!strcmp(key, "Extrapolating") && !text) _pendingRunning = !strcmp(value, "true");
+    else if (!strcmp(key, "Utc") && text) _pendingUtc = parseUtc(value);
+  } else if (rn >= 3 && !strcmp(r[0], "Lines")) {
+    Driver *d = driver(atoi(r[1]));
+    if (!d) return;
+    const char *field = r[2];
+    if (rn == 3) {
+      if (!strcmp(field, "Position")) d->position = atoi(value);
+      else if (!text) return;
+      else if (!strcmp(field, "GapToLeader")) setText(d->gap, sizeof(d->gap), value);
+      else if (!strcmp(field, "TimeDiffToFastest")) setText(d->diff, sizeof(d->diff), value);
+    } else if (rn == 4 && text && !strcmp(field, "BestLapTime") && !strcmp(r[3], "Value")) {
+      setText(d->best, sizeof(d->best), value);
+    } else if (rn == 5 && text) {
+      int i = atoi(r[3]);
+      if (i < 0 || i > 2) return;
+      if (!strcmp(field, "BestLapTimes") && !strcmp(r[4], "Value")) setText(d->bestQ[i], sizeof(d->bestQ[i]), value);
+      else if (!strcmp(field, "Stats") && !strcmp(r[4], "TimeDiffToFastest")) setText(d->diffQ[i], sizeof(d->diffQ[i]), value);
     }
-  return any;
+  }
+}
+
+// What the scanner calls with every value of a message: takes the state's lock around the change only
+struct F1LiveState::Feed {
+  F1LiveState *state;
+  std::mutex *lock;
+  bool any;
+};
+
+void F1LiveState::feedLeaf(void *sink, const char (*path)[JsonScan::KEY], int n, const char *value, bool text) {
+  Feed *feed = (Feed *)sink;
+  std::unique_lock<std::mutex> guard;
+  if (feed->lock) guard = std::unique_lock<std::mutex>(*feed->lock);
+  if (n >= 3 && (!strcmp(path[0], "result") || !strcmp(path[0], "arguments"))) feed->any = true;
+  feed->state->leaf(path, n, value, text);
+}
+
+bool F1LiveState::applyStream(int (*next)(void *), void *source, std::mutex *lock) {
+  Feed feed{this, lock, false};
+  _pendingClock = false;
+  _pendingRunning = false;
+  _pendingUtc = 0;
+  JsonScan::read(next, source, feedLeaf, &feed);
+  std::unique_lock<std::mutex> guard;
+  if (lock) guard = std::unique_lock<std::mutex>(*lock);
+  if (_pendingClock) {  // a clock message: the time left, whether it ticks, and when that was
+    _clockMessages++;
+    _clockLeft = _pendingLeft;
+    _clockRunning = _pendingRunning;
+    if (_pendingUtc) _clockUtc = _pendingUtc;
+    feed.any = true;
+  }
+  return feed.any;
+}
+
+static uint32_t hashText(uint32_t h, const char *text) {
+  for (; *text; text++) h = (h ^ (uint8_t)*text) * 16777619u;
+  return (h ^ 0xFF) * 16777619u;
+}
+
+uint32_t F1LiveState::displayHash() const {
+  uint32_t h = 2166136261u;
+  for (const Driver &d : _drivers) {
+    if (!d.number) continue;
+    h = hashText(h, d.code);
+    h = (h ^ d.position) * 16777619u;
+    h = hashText(hashText(hashText(h, d.gap), d.diff), d.best);
+    for (int p = 0; p < 3; p++) h = hashText(hashText(h, d.bestQ[p]), d.diffQ[p]);
+  }
+  return (((h ^ _lap) * 16777619u ^ _totalLaps) * 16777619u ^ (uint32_t)_flag) * 16777619u ^ (uint32_t)_part ^ (_finished ? 0x80000000u : 0);
 }
 
 bool F1LiveState::hasOrder() const {
@@ -144,14 +173,32 @@ bool F1LiveState::hasOrder() const {
   return false;
 }
 
+// "1:30.123" in milliseconds, 0 when it isn't a lap time
+static long lapMs(const char *text) {
+  int m = 0, s = 0, ms = 0;
+  if (sscanf(text, "%d:%d.%d", &m, &s, &ms) != 3) return 0;
+  return (m * 60L + s) * 1000L + ms;
+}
+
 int F1LiveState::top(char tag, Row *rows) const {
   int count = 0;
-  for (int i = 0; i < ROWS; i++) rows[i] = Row{"", 0xFFFF, ""};
+  for (int i = 0; i < ROWS; i++) rows[i] = Row{"", 0xFFFF, "", false};
+  const Driver *fastest = nullptr;  // a race: whoever has the best lap of all
+  long fastestMs = 0;
+  if (tag == 'R' || tag == 'S')
+    for (const Driver &d : _drivers) {
+      long ms = lapMs(d.best);
+      if (d.number && d.code[0] && ms > 0 && (!fastest || ms < fastestMs)) {
+        fastest = &d;
+        fastestMs = ms;
+      }
+    }
   for (const Driver &d : _drivers) {
     if (!d.number || !d.code[0] || d.position < 1 || d.position > ROWS) continue;
     Row &row = rows[d.position - 1];
     strcpy(row.code, d.code);
     row.color = d.color;
+    row.fastest = &d == fastest;
     const char *text = "";
     bool leader = d.position == 1;
     if (tag == 'R' || tag == 'S') {

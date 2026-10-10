@@ -1,30 +1,32 @@
 #pragma once
 
-#include <ArduinoJson.h>
+#include <mutex>
 #include <stdint.h>
+
+#include "JsonScan.h"
 
 // The state of a live F1 session as the live timing feed (livetiming.formula1.com, SignalR) reports it:
 // drivers with their code and team colour, running order, gaps and best laps. Pure logic, no network and
 // no Arduino: a message goes in, the top of the order comes out.
 class F1LiveState {
   public:
-    static const int ROWS = 9;
+    static const int ROWS = 22;
     static const int MAX_DRIVERS = 24;
 
     struct Row {
       char code[4];
       uint16_t color;
       char time[9];  // first place: the best lap, or LEAD in a race; others: the gap
+      bool fastest;  // a race: the driver with the fastest lap so far
     };
-
-    // Keeps just what is used of a message, so a 40KB snapshot fits in the JSON document
-    static void buildFilter(JsonDocument &filter);
 
     void reset();
 
-    // One message: the answer to Subscribe ({"type":3,"result":{...}}) or a live update
-    // ({"type":1,"target":"feed","arguments":[...]}), parsed with buildFilter(). Returns true when it held data.
-    bool apply(JsonDocument &message);
+    // One message, read a character at a time (next returns -1 at its end): the answer to Subscribe
+    // ({"type":3,"result":{...}}) or a live update ({"type":1,"target":"feed","arguments":[...]}). Nothing is
+    // kept but what is used, so even a snapshot of the whole grid takes a few hundred bytes. lock, when given,
+    // is held while the state changes, not while waiting for characters. Returns true when it held data.
+    bool applyStream(int (*next)(void *), void *source, std::mutex *lock = nullptr);
 
     // The first places. tag: 'R' race, 'S' sprint, 'P' practice, 'Q' qualifying. Returns how many rows are filled
     // (the highest place known, 0 when there are none yet).
@@ -32,8 +34,17 @@ class F1LiveState {
 
     int lap() const { return _lap; }
     int totalLaps() const { return _totalLaps; }
+    int part() const { return _part; }  // qualifying: which part, 0 when not known
+    bool finished() const { return _finished; }  // the session's own status says it is over: the chequered flag is out
     char flag() const { return _flag; }  // 'y' safety car or yellow flag, 'r' red flag, 0 clear
     bool hasOrder() const;
+
+    // Seconds left of a practice or qualifying session, counted on from the last clock message; -1 when unknown
+    int clockSecs(long nowUtc) const;
+    // Changes when anything that is shown changes (order, times, lap, flag, part), not with every sector time
+    uint32_t displayHash() const;
+    bool clockRunning() const { return _clockRunning; }
+    unsigned clockMessages() const { return _clockMessages; }
 
   private:
     struct Driver {
@@ -48,13 +59,20 @@ class F1LiveState {
       char diffQ[3][10] = {"", "", ""};
     };
 
+    struct Feed;
+    static void feedLeaf(void *sink, const char (*path)[JsonScan::KEY], int n, const char *value, bool text);
+
     Driver *driver(int number);
-    void applyDriverList(JsonObjectConst list);
-    void applyTiming(JsonObjectConst timing);
-    void applyLine(int number, JsonObjectConst line);
-    void applyTopic(JsonObjectConst data);
+    void leaf(const char (*path)[JsonScan::KEY], int n, const char *value, bool text);
 
     Driver _drivers[MAX_DRIVERS];
-    int _lap = 0, _totalLaps = 0;
+    int _lap = 0, _totalLaps = 0, _part = 0;
     char _flag = 0;
+    bool _finished = false;
+    char _topic[20] = "";  // an update names its topic first: what the Status that follows is the status of
+    long _clockUtc = 0, _clockLeft = 0;  // the time left, at that moment
+    bool _clockRunning = false;
+    unsigned _clockMessages = 0;
+    long _pendingLeft = 0, _pendingUtc = 0;  // a clock message's fields, kept until it has been read whole
+    bool _pendingClock = false, _pendingRunning = false;
 };

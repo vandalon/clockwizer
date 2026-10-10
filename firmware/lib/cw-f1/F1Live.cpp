@@ -5,8 +5,12 @@
 #include <TelnetStream.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <ezTime.h>
 
 extern volatile bool firmwareUpdating;  // main.cpp
+
+std::mutex f1TlsLock;
+RTC_NOINIT_ATTR char f1Phase[16];
 
 static const char HOST[] = "livetiming.formula1.com";
 static const unsigned long PING_MS = 15 * 1000UL;          // SignalR drops a client that stays quiet
@@ -41,14 +45,25 @@ bool F1Live::fresh() {
   return _lastData && millis() - _lastData <= FRESH_MS && _state.hasOrder();
 }
 
-bool F1Live::get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &totalLaps, char &flag) {
+bool F1Live::get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &totalLaps, char &flag, bool &finished) {
   std::lock_guard<std::mutex> guard(_lock);
   if (!_lastData || millis() - _lastData > FRESH_MS || !_state.hasOrder()) return false;
   count = _state.top(tag, rows);
   lap = _state.lap();
   totalLaps = _state.totalLaps();
   flag = _state.flag();
+  finished = _state.finished();
   return count > 0;
+}
+
+int F1Live::part() {
+  std::lock_guard<std::mutex> guard(_lock);
+  return _state.part();
+}
+
+int F1Live::clockSecs(long nowUtc) {
+  std::lock_guard<std::mutex> guard(_lock);
+  return _state.clockSecs(nowUtc);
 }
 
 void F1Live::task(void *self) {
@@ -68,19 +83,26 @@ void F1Live::task(void *self) {
 }
 
 // SignalR's first step: a connection token for the WebSocket
-bool F1Live::negotiate(char *token, size_t size) {
+bool F1Live::negotiate(char *token, size_t size, char *cookie, size_t cookieSize) {
   WiFiClientSecure client;
   client.setInsecure();  // public data, nothing to protect
   HTTPClient http;
   http.setTimeout(10000);
   if (!http.begin(client, "https://livetiming.formula1.com/signalrcore/negotiate?negotiateVersion=1")) return false;
   http.setUserAgent("BestHTTP");
+  const char *keep[] = {"Set-Cookie"};
+  http.collectHeaders(keep, 1);
   int code = http.POST("");
   if (code != HTTP_CODE_OK) {
-    liveLog("[F1 live] negotiate: HTTP %d\n", code);
+    liveLog("[F1 live] negotiate: HTTP %d (%s), heap free %u, largest block %u\n", code, HTTPClient::errorToString(code).c_str(),
+            ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     http.end();
     return false;
   }
+  // The load balancer's cookie: the WebSocket must reach the same server that issued the token
+  strlcpy(cookie, http.header("Set-Cookie").c_str(), cookieSize);
+  char *end = strchr(cookie, ';');
+  if (end) *end = 0;
   StaticJsonDocument<32> filter;
   filter["connectionToken"] = true;
   StaticJsonDocument<192> doc;
@@ -92,7 +114,7 @@ bool F1Live::negotiate(char *token, size_t size) {
   return true;
 }
 
-// A WebSocket's messages as one stream of text for ArduinoJson: frames come and go underneath, a SignalR
+// A WebSocket's messages as one stream of text: frames come and go underneath, a SignalR
 // message ends at RS. Keeps the connection alive meanwhile.
 struct WsStream {
   WiFiClientSecure &client;
@@ -107,14 +129,22 @@ struct WsStream {
   explicit WsStream(WiFiClientSecure &c) : client(c) { lastPing = lastData = millis(); }
 
   void send(uint8_t opcode, const uint8_t *data, size_t length) {
-    uint8_t frame[160];  // control frames and our few messages are short; the server needs them masked
-    if (length > 120) return;
+    uint8_t frame[280];  // control frames and our few messages are short; the server needs them masked
+    if (length > 250) return;
     uint32_t mask = esp_random();
+    size_t at = 2;
     frame[0] = 0x80 | opcode;
-    frame[1] = 0x80 | length;
-    memcpy(frame + 2, &mask, 4);
-    for (size_t i = 0; i < length; i++) frame[6 + i] = data[i] ^ ((uint8_t *)&mask)[i % 4];
-    client.write(frame, 6 + length);
+    if (length < 126) {
+      frame[1] = 0x80 | length;
+    } else {
+      frame[1] = 0x80 | 126;  // 16 bit length
+      frame[2] = length >> 8;
+      frame[3] = length & 0xFF;
+      at = 4;
+    }
+    memcpy(frame + at, &mask, 4);
+    for (size_t i = 0; i < length; i++) frame[at + 4 + i] = data[i] ^ ((uint8_t *)&mask)[i % 4];
+    client.write(frame, at + 4 + length);
   }
 
   void sendText(const char *text) { send(0x1, (const uint8_t *)text, strlen(text)); }
@@ -182,7 +212,9 @@ struct WsStream {
     return raw();
   }
 
-  // For ArduinoJson: the current message, then end of input
+  // For the scanner in F1LiveState: the current message, then end of input
+  static int nextChar(void *self) { return ((WsStream *)self)->read(); }
+
   int read() {
     if (atEnd) return -1;
     if (++count % 1024 == 0) vTaskDelay(1);
@@ -213,24 +245,30 @@ struct WsStream {
 
 // One connection, from the handshake until it ends or is no longer wanted
 void F1Live::run() {
-  char token[96];
-  if (!negotiate(token, sizeof(token))) return;
-
+  char token[96], cookie[200];
   WiFiClientSecure client;
-  client.setInsecure();
-  client.setTimeout(10);
-  if (!client.connect(HOST, 443)) {
-    liveLog("[F1 live] connect failed\n");
-    return;
+  {
+    std::lock_guard<std::mutex> tls(f1TlsLock);  // negotiate and connect each do a handshake, one after the other
+    f1At("live negotiate");
+    if (!negotiate(token, sizeof(token), cookie, sizeof(cookie))) return;
+    f1At("live connect");
+    client.setInsecure();
+    client.setTimeout(10);
+    if (!client.connect(HOST, 443)) {
+      liveLog("[F1 live] connect failed (heap free %u, largest block %u)\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      return;
+    }
   }
 
+  f1At("live upgrade");
   // The WebSocket upgrade; the token is in the address
   String path = "/signalrcore?id=";
   for (const char *p = token; *p; p++) {
     if (isalnum(*p) || *p == '-' || *p == '_' || *p == '.') path += *p;
     else path += String("%") + String((uint8_t)*p < 16 ? "0" : "") + String((uint8_t)*p, HEX);
   }
-  client.print("GET " + path + " HTTP/1.1\r\nHost: " + HOST + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+  client.print("GET " + path + " HTTP/1.1\r\nHost: " + HOST + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+               (cookie[0] ? String("Cookie: ") + cookie + "\r\n" : String()) +
                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nUser-Agent: BestHTTP\r\n\r\n");
   String status = client.readStringUntil('\n');
   if (!status.startsWith("HTTP/1.1 101")) {
@@ -242,44 +280,40 @@ void F1Live::run() {
     if (header.length() <= 1) break;
   }
 
-  // The parser's memory is only held while connected
-  DynamicJsonDocument *doc = new DynamicJsonDocument(20480);
-  if (!doc || !doc->capacity()) {
-    liveLog("[F1 live] no memory for the parser (heap %u)\n", ESP.getFreeHeap());
-    delete doc;
-    return;
-  }
-  DynamicJsonDocument filter(1536);
-  F1LiveState::buildFilter(filter);
-
+  _connected = true;
+  f1At("live subscribe");
   WsStream stream(client);
   stream.sendText("{\"protocol\":\"json\",\"version\":1}\x1e");
   stream.nextMessage();  // the empty answer, {}
   stream.sendText("{\"type\":1,\"target\":\"Subscribe\",\"invocationId\":\"1\",\"arguments\":[[\"DriverList\",\"TimingData\","
-                  "\"LapCount\",\"TrackStatus\"]]}\x1e");
-  liveLog("[F1 live] subscribed (heap free %u)\n", ESP.getFreeHeap());
+                  "\"LapCount\",\"TrackStatus\",\"SessionStatus\",\"ExtrapolatedClock\"]]}\x1e");
+  liveLog("[F1 live] subscribed (heap free %u, stack left %u)\n", ESP.getFreeHeap(), (unsigned)uxTaskGetStackHighWaterMark(nullptr));
   {
     std::lock_guard<std::mutex> guard(_lock);
     _state.reset();
   }
 
   unsigned long unwantedSince = 0;
+  unsigned clockSeen = 0;
+  uint32_t shownHash = 0;
   while (!stream.failed) {
-    doc->clear();
-    DeserializationError err = deserializeJson(*doc, stream, DeserializationOption::Filter(filter),
-                                               DeserializationOption::NestingLimit(20));
+    f1At("live parse");
+    bool data = _state.applyStream(WsStream::nextChar, &stream, &_lock);
     stream.nextMessage();
     if (stream.failed) break;
-    if (!err && !doc->overflowed()) {
+    _lastData = millis();  // any message, the server's pings too: a quiet stretch in a session isn't a stale feed
+    if (data) {
       std::lock_guard<std::mutex> guard(_lock);
-      if (_state.apply(*doc)) {
-        _lastData = millis();
+      uint32_t shown = _state.displayHash();  // most messages are sector times and the like: no redraw for those
+      if (shown != shownHash) {
+        shownHash = shown;
         _updates++;
       }
-    } else if (err == DeserializationError::NoMemory || doc->overflowed()) {
-      liveLog("[F1 live] message too big for the parser\n");
+      if (_state.clockMessages() != clockSeen) {
+        clockSeen = _state.clockMessages();
+        liveLog("[F1 live] session clock: %d s left, %s\n", _state.clockSecs((long)ezt::now()), _state.clockRunning() ? "running" : "stopped");
+      }
     }
-
     if (firmwareUpdating) break;  // hand the connection's memory to the update
     if (_wanted) {
       unwantedSince = 0;
@@ -289,7 +323,7 @@ void F1Live::run() {
       break;  // the session is over
     }
   }
-  liveLog("[F1 live] disconnected\n");
+  _connected = false;
+  liveLog("[F1 live] disconnected (stack left %u)\n", (unsigned)uxTaskGetStackHighWaterMark(nullptr));
   client.stop();
-  delete doc;
 }
