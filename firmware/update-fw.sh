@@ -24,7 +24,7 @@ usage() {
 	sed -n '2,/^set /{/^set /d;s/^# \{0,1\}//;p;}' "$0"
 }
 
-SERVER=user@192.168.1.10
+SERVER=joris@192.168.7.77
 SERVER_DIR=/var/www/html/ledMatrix
 
 # Use the PlatformIO install from the VS Code extension: Homebrew's pio lacks
@@ -150,11 +150,41 @@ if [ $INSTALL -eq 1 ]; then
 	# Clocks announce themselves as _clockwise._tcp; the address is column 8 of avahi's parsable output
 	if [ $DISCOVER -eq 1 ]; then
 		if command -v avahi-browse > /dev/null; then
-			while read -r addr; do
-				[ -n "$addr" ] && HOSTS+=("$addr")
-			done < <(avahi-browse -rtp _clockwise._tcp | awk -F';' '$1 == "=" && $3 == "IPv4" { print $8 }')
+			while read -r addr name; do
+				[ -n "$addr" ] || continue
+				echo "Found $name at $addr"
+				HOSTS+=("$addr")
+			done < <(avahi-browse -rtp _clockwise._tcp | awk -F';' '$1 == "=" && $3 == "IPv4" { print $8, $7 }')
+		elif command -v dns-sd > /dev/null; then
+			# macOS: dns-sd never exits on its own and buffers unless it has a terminal (script).
+			# dns_sd SECONDS PATTERN ARGS...: stops as soon as a line matches PATTERN (none: runs the full SECONDS)
+			dns_sd() {
+				local secs=$1 pattern=$2 pid i
+				shift 2
+				: > "$DNSSD_OUT"
+				script -q /dev/null dns-sd "$@" > "$DNSSD_OUT" 2> /dev/null < /dev/null &  # not the loop's stdin: script would eat the names
+				pid=$!
+				for ((i = 0; i < secs * 10; i++)); do
+					sleep 0.1
+					[ -n "$pattern" ] && tr -d '\r' < "$DNSSD_OUT" | grep -Eq "$pattern" && break
+				done
+				kill $pid 2> /dev/null
+				wait $pid 2> /dev/null || true
+				tr -d '\r' < "$DNSSD_OUT"
+			}
+			DNSSD_OUT=$(mktemp)
+			while read -r name; do
+				[ -n "$name" ] || continue
+				target=$(dns_sd 5 'can be reached at' -L "$name" _clockwise._tcp local | sed -n 's/.*can be reached at \(.*\)\.:[0-9]*.*/\1/p' | head -1)
+				[ -n "$target" ] || { echo "Found $name but could not resolve its host"; continue; }
+				# The address, not the name: connecting by a .local name makes macOS look it up again on every request
+				addr=$(dns_sd 5 ' Add .* [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ' -G v4 "$target" | awk '$2 == "Add" { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print $i; exit } }')
+				echo "Found $target at ${addr:-no address, using the name}"
+				HOSTS+=("${addr:-$target}")
+			done < <(dns_sd 6 '' -B _clockwise._tcp local | awk '$2 == "Add" { n = ""; for (i = 7; i <= NF; i++) n = n (i > 7 ? " " : "") $i; print n }')
+			rm -f "$DNSSD_OUT"
 		else
-			echo "avahi-browse not found (apt install avahi-utils): name the clocks with -H instead" >&2
+			echo "Neither avahi-browse nor dns-sd found: name the clocks with -H instead" >&2
 		fi
 	fi
 	[ ${#HOSTS[@]} -gt 0 ] || echo "No clocks to tell"
