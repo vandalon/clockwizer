@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <CWPreferences.h>
+#include <TelnetStream.h>
+#include <esp_heap_caps.h>
 
 // Formula 1 as three screens:
 //  - A session is live: a header with the session and its lap or time left, then the running order
@@ -1475,6 +1477,57 @@ const char *Clockface::simulateNext() {
 
 const char *Clockface::simulate() { return simulateNext(); }
 
+// What the face shows, to the serial log and telnet: every 15 s and whenever the screen changes, so a session can be
+// followed without seeing the panel
+static void logShown(int view, int page) {
+  static const char *VIEWS[] = {"LIVE", "LIST", "BETWEEN", "IDLE"};
+  static unsigned long at = 0;
+  static int lastView = -1;
+  static char lastState[160] = "";
+  char state[160];
+  const F1Ticker::Session &l = snap.live;
+  const F1Ticker::Session &n = snap.next;
+  snprintf(state, sizeof(state), "%d|%s|%c%c%d|%s|%c|%d", view, l.name, l.flag ? l.flag : '-', l.finished ? 'F' : '-', l.count,
+           n.name, n.status ? n.status : '-', snap.comingCount);
+  bool changed = view != lastView || strcmp(state, lastState) != 0;
+  if (!changed && millis() - at < 15000) return;
+  at = millis();
+  lastView = view;
+  strlcpy(lastState, state, sizeof(lastState));
+  char line[320];
+  int n_ = snprintf(line, sizeof(line), "[face] %s page %d, heap %u/%u", VIEWS[view], page,
+                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  if (l.valid) {
+    char top[120] = "";
+    for (int i = 0; i < 3 && i < l.count; i++) {
+      char shown[9];
+      strlcpy(shown, l.rows[i].time, sizeof(shown));
+      if (i == 0 && (l.tag == 'R' || l.tag == 'S') && l.finished) strlcpy(shown, "FINISHED", sizeof(shown));
+      size_t used = strlen(top);
+      snprintf(top + used, sizeof(top) - used, " %s %s", l.rows[i].code, shown);
+    }
+    n_ += snprintf(line + n_, sizeof(line) - n_, " | live %s flag %c(shown %c) finished %d lap %d/%d clock %s rows %d:%s", l.name,
+                   l.flag ? l.flag : '-', shownFlag(l) ? shownFlag(l) : '-', l.finished, l.period, l.totalLaps, l.clock, l.count, top);
+  }
+  if (snap.last.valid) n_ += snprintf(line + n_, sizeof(line) - n_, " | last %s", snap.last.name);
+  if (snap.next.valid || snap.comingCount) {
+    n_ += snprintf(line + n_, sizeof(line) - n_, " | next");
+    for (int i = 0; i < snap.comingCount && n_ < (int)sizeof(line) - 24; i++) {
+      const F1Ticker::Snapshot::Coming &c = snap.coming[i];
+      n_ += snprintf(line + n_, sizeof(line) - n_, " %s@%ld%s", c.name, (long)(c.start - ezt::now()) / 60,
+                     c.status == 'd' ? "m DELAYED" : c.status == 'n' ? "m NEWTIME" : "m");
+    }
+  }
+  if (view == 2 && snap.comingCount) {  // the bottom row of the between-sessions screen
+    int i = comingIndex();
+    n_ += snprintf(line + n_, sizeof(line) - n_, " | row %d/%d %s%s", i + 1, comingCount(), snap.coming[i].name,
+                   snap.coming[i].status == 'd' ? " DELAYED(orange)" : snap.coming[i].status == 'n' ? " new time(cyan)" : "");
+  }
+  snprintf(line + n_, sizeof(line) - n_, "\n");
+  Serial.print(line);
+  TelnetStream.print(line);
+}
+
 void Clockface::update() {
   int hour = _dateTime->getHour(), minute = _dateTime->getMinute();
   uint32_t version = f1Ticker.version();
@@ -1526,6 +1579,7 @@ void Clockface::update() {
   } else {
     clockZeroAt = 0;
   }
+  logShown((int)view, page);
   updateClockDigits(hour, minute);
   // Where the soft clock is: on the idle and result screens, and on the one of a delayed start. Its digits change on
   // their own, so the minute is not part of the key there

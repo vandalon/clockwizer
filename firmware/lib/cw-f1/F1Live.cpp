@@ -264,7 +264,7 @@ void F1Live::run() {
   char token[96], cookie[200];
   WiFiClientSecure client;
   bool mdnsOff = false;
-  struct MdnsBack { bool &off; ~MdnsBack() { if (off && f1PauseMdns) f1PauseMdns(false); } } mdnsBack{mdnsOff};
+  struct MdnsBack { bool &off; ~MdnsBack() { if (off && f1PauseMdns) { f1PauseMdns(false); liveLog("[F1 live] mDNS started again\n"); } } } mdnsBack{mdnsOff};
   {
     std::lock_guard<std::mutex> net(f1NetLock);  // the ticker is idle meanwhile: its downloads take heap the handshake needs
     f1Park = true;  // the ticker hands its stack back, see F1Live.h

@@ -488,7 +488,24 @@ unsigned long F1Ticker::fetchWeekend() {
       snap.last = _lastTimed;
     } else {
       fetchTimes(snap.last, ROWS);  // everyone: the result lists show them all
-      if (snap.last.rows[0].time[0]) _lastTimed = snap.last;
+      {
+        // The live feed knew who had the fastest lap of a race; Jolpica only has it hours later
+        std::lock_guard<std::mutex> guard(_lock);
+        if (_saved.id == snap.last.id)
+          for (const Row &old : _saved.rows)
+            if (old.fastest)
+              for (Row &row : snap.last.rows)
+                if (!strcmp(row.code, old.code)) row.fastest = true;
+      }
+      if (snap.last.rows[0].time[0]) {
+        _lastTimed = snap.last;
+        // Keep the final result for the next boot: the saved order is otherwise the live feed's older one
+        std::lock_guard<std::mutex> guard(_lock);
+        _saved.id = snap.last.id;
+        _saved.count = snap.last.count;
+        memcpy(_saved.rows, snap.last.rows, sizeof(_saved.rows));
+        _savedDirty = true;
+      }
     }
     // A race or sprint: who had the fastest lap. Jolpica has the results some time after the finish: look again
     // every 10 minutes until they are there
@@ -672,9 +689,12 @@ void F1Ticker::fetchTimes(Session &session, int count) {
 
   bool race = session.tag == 'R' || session.tag == 'S';
   if (ms[0] >= 0) {
-    strlcpy(session.rows[0].time, race ? "LEAD" : leader, sizeof(session.rows[0].time));
-    for (int i = 1; i < count && i < ROWS; i++)
-      if (ms[i] >= ms[0]) formatGap(session.rows[i].time, sizeof(session.rows[i].time), ms[i] - ms[0]);
+    strlcpy(session.rows[0].time, race ? (session.live ? "LEAD" : "WINNER") : leader, sizeof(session.rows[0].time));
+    for (int i = 1; i < count && i < ROWS; i++) {
+      Row &row = session.rows[i];
+      if (ms[i] >= ms[0]) formatGap(row.time, sizeof(row.time), ms[i] - ms[0]);
+      else if (race && !session.live && row.athleteId) strlcpy(row.time, "RETIRED", sizeof(row.time));  // no time: out of the race
+    }
   }
   f1log("[F1] times %s: leader %ld ms\n", session.name, ms[0]);
 }
