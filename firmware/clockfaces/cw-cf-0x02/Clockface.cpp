@@ -57,24 +57,24 @@ void Clockface::update()
 
 void Clockface::updateTime() 
 {
-  Locator::getDisplay()->fillRect(0, 0, 64, 48, 0x0000);  
+  Locator::getDisplay()->fillRect(0, 0, 64, 49, 0x0000);  
 
   WordPhrase phrase;
   language().say(_dateTime->getHour24(), _dateTime->getMinute(), phrase);
 
   // The hour in blue, the rest in white, centred above the line
-  WordLayout layout(Locator::getDisplay(), &hour8pt7b, &minute7pt7b, 64, 47);
+  WordLayout layout(Locator::getDisplay(), &hour8pt7b, &minute7pt7b, 64, 48);
   layout.build(phrase);
   layout.draw(0x02ed, 0xffff);
 
   // Separator line
-  Locator::getDisplay()->drawFastHLine(1, 48, 62, 0xffff);
+  Locator::getDisplay()->drawFastHLine(1, 49, 62, 0xffff);
 
 }
 
 void Clockface::updateDate() 
 {
-  Locator::getDisplay()->fillRect(0, 51, 64, 13, 0x0000);
+  Locator::getDisplay()->fillRect(0, 52, 64, 12, 0x0000);
 
   // Date
   char date[12];
@@ -82,7 +82,7 @@ void Clockface::updateDate()
   snprintf(date, sizeof(date), language().dateFormat, language().monthFirst ? month : day,
            language().monthFirst ? day : month);
   Locator::getDisplay()->setFont(&minute7pt7b);
-  Locator::getDisplay()->setCursor(0, 61);
+  Locator::getDisplay()->setCursor(0, 62);
   Locator::getDisplay()->setTextColor(0x02ed);
   Locator::getDisplay()->print(date);
 
@@ -94,7 +94,7 @@ void Clockface::updateDate()
   char weekday[8];
   WordLayout::toFontCodes(language().weekdays[_dateTime->getWeekday() % 7], weekday, sizeof(weekday));
   Locator::getDisplay()->setFont(&small4pt7b);
-  Locator::getDisplay()->setCursor(dateWidth + 4, 61);
+  Locator::getDisplay()->setCursor(dateWidth + 4, 62);
   Locator::getDisplay()->setTextColor(0xffff);
   Locator::getDisplay()->print(weekday);
 }

@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
     for (int t = 0; t < 24 * 60; t++) {
       WordPhrase phrase;
       language.say(t / 60, t % 60, phrase);
-      WordLayout layout(&display, &hour8pt7b, &minute7pt7b, 64, 47);
+      WordLayout layout(&display, &hour8pt7b, &minute7pt7b, 64, 48);
       layout.build(phrase);
       lines[layout.count]++;
       bool missing = false;
