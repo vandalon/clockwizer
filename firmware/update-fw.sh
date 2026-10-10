@@ -75,7 +75,7 @@ for f in "${FACES[@]}"; do
 	ENV_ARGS+=(-e "cw-cf-0x$f")
 done
 
-"$PIO" run "${ENV_ARGS[@]}"
+"$PIO" run "${ENV_ARGS[@]}" || "$PIO" run "${ENV_ARGS[@]}"
 
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
