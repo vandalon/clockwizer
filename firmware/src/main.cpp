@@ -1012,7 +1012,7 @@ void loop() {
             break;
           case 'C':
             TelnetStream.println(currentTimeWithSeconds + " [INFO] Checking for a firmware update...");
-            checkForUpdate();
+            checkForUpdate(false, true);  // asked for by a person, like the web UI does: also during a live match
             break;
           case 'X':
             TelnetStream.println(currentTimeWithSeconds + " [INFO] Forcing a firmware update, ignoring earlier failures...");
