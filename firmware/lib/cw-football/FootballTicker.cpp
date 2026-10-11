@@ -195,7 +195,9 @@ void FootballTicker::task(void *self) {
       try {
         ticker->dropOldDay();
         wait = ticker->refresh();
+#ifdef CW_FOOTBALL_RACE
         if (ticker->_withRace) wait = std::min(wait, ticker->refreshRace());
+#endif
       } catch (const std::exception &e) {  // std::bad_alloc: keep the data of the last round
         logf("[Football] out of memory in a refresh (%s), heap free %u, largest block %u\n", e.what(), ESP.getFreeHeap(),
              ESP.getMaxAllocHeap());
@@ -379,6 +381,7 @@ unsigned long FootballTicker::refresh() {
 
 // Downloads the Formula 1 scoreboard when due. Returns how long until the next
 // download is due.
+#ifdef CW_FOOTBALL_RACE  // only the faces that show the Formula 1 top 3 (Tetris) carry the race code
 unsigned long FootballTicker::refreshRace() {
   if (WiFi.status() != WL_CONNECTED || cwt::timeStatus() != timeSet) return 10 * 1000UL;
   unsigned long now = millis();
@@ -481,6 +484,7 @@ unsigned long FootballTicker::fetchRace() {
   }
   return std::min(wait, untilMidnightMs(localNow));
 }
+#endif  // CW_FOOTBALL_RACE
 
 // Reads the followed leagues and favourite teams from the settings. Returns true when they changed.
 bool FootballTicker::loadConfig() {
