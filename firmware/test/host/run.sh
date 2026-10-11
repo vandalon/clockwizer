@@ -7,5 +7,5 @@ cd "$(dirname "$0")"
 AJ=${ARDUINOJSON:-$(ls -d ../../.pio/libdeps/*/ArduinoJson/src 2>/dev/null | head -1)}
 [ -n "$AJ" ] || { echo "ArduinoJson not found: set ARDUINOJSON to its src folder" >&2; exit 1; }
 OUT=${TMPDIR:-/tmp}/espn_parse_test
-g++ -std=c++17 -O1 -Wall -Wextra -I"$AJ" -I../../lib/cw-f1 -o "$OUT" espn_parse_test.cpp ../../lib/cw-football/EspnParse.cpp ../../lib/cw-f1/JsonScan.cpp
+g++ -std=c++17 -O1 -Wall -Wextra -I"$AJ" -I../../lib/cw-commons -o "$OUT" espn_parse_test.cpp ../../lib/cw-football/EspnParse.cpp ../../lib/cw-commons/JsonScan.cpp
 "$OUT" "${1:-../espn-samples}"

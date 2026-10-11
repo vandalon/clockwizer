@@ -249,8 +249,9 @@ static void bootUpdateCheck();
 static bool inBootCheck = false;  // the check right after a restart: a failure there doesn't restart again
 static void crashGuard();
 
-// F1Live.cpp holds the real definition; the weak one keeps the other clockfaces linking
-__attribute__((weak)) void (*f1PauseMdns)(bool pause) = nullptr;
+#ifdef CW_F1  // the Formula 1 face: F1Live.cpp holds the definition
+extern void (*f1PauseMdns)(bool pause);
+#endif
 
 void setup()
 {
@@ -261,7 +262,9 @@ void setup()
   md5Result.reserve(32);
   md5Failure.reserve(384);
   crashGuard();
+#ifdef CW_F1
   f1PauseMdns = [](bool pause) { ClockwiseWebServer::getInstance()->pauseMdns(pause); };
+#endif
 
   ClockwiseParams::getInstance()->load();
 
@@ -1034,7 +1037,9 @@ void loop() {
               TelnetStream.println(String(CW_FACES[i].key) + " - Install latest '" + CW_FACES[i].name + "' firmware");
             TelnetStream.println("T - Show the birthday screen for a minute (again to stop)");
 #ifdef CW_FOOTBALL_SIM
+#ifdef CW_F1
             TelnetStream.println("S, N - Football simulator of the Formula 1 face");
+#endif
             TelnetStream.println("G - Celebrate a test goal");
             TelnetStream.println("Y - Show a test yellow card");
             TelnetStream.println("D - Show a test red card");
