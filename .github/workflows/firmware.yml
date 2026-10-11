@@ -1,5 +1,7 @@
-# Builds every clockface on each push and pull request. Build only: nothing is uploaded or published, and the
-# workflow uses no secrets (publishing to the update server and GitHub Pages stays with firmware/update-fw.sh).
+# Builds every clockface on each push and pull request (no secrets, nothing uploaded). A successful push to main
+# also publishes the builds to the gh-pages branch, which GitHub Pages serves: that is where the clocks download
+# their firmware (https://vandalon.github.io/clockwizer/cw-cf-0xNN.bin and .md5) and where the web flasher lives.
+# Publishing to your own update server stays with firmware/update-fw.sh.
 name: Build firmware
 
 on:
@@ -54,9 +56,62 @@ jobs:
         # The first build on a new platform folder sometimes fails once: run it again
         run: pio run -e ${{ matrix.env }} || pio run -e ${{ matrix.env }}
 
+      - name: Collect the files of the web flasher
+        run: cp ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin firmware/.pio/build/${{ matrix.env }}/
+
       - name: Keep the firmware
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.env }}
-          path: firmware/.pio/build/${{ matrix.env }}/firmware.bin
+          path: |
+            firmware/.pio/build/${{ matrix.env }}/firmware.bin
+            firmware/.pio/build/${{ matrix.env }}/bootloader.bin
+            firmware/.pio/build/${{ matrix.env }}/partitions.bin
+            firmware/.pio/build/${{ matrix.env }}/boot_app0.bin
           retention-days: 14
+
+  # Only a push to main (never a pull request or another branch) and only when every face built
+  publish:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'vandalon/clockwizer'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # the push to gh-pages
+      pages: write     # ask for a Pages build afterwards
+    concurrency:
+      group: publish-pages
+      cancel-in-progress: false  # two pushes in a row publish one after the other
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: source
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: builds
+          pattern: cw-cf-*
+
+      - name: Publish to the gh-pages branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 -b gh-pages "https://github.com/$GITHUB_REPOSITORY.git" pages
+          python3 source/firmware/tools/make_pages.py builds pages
+          cd pages
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Pages already has these builds"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # A single commit each time: Pages only needs the latest files, and the history would only grow
+          git checkout -q --orphan publish
+          git commit -q -m "Firmware $(date -u '+%Y-%m-%d %H:%M') ($(echo "$GITHUB_SHA" | cut -c1-7))"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push -q --force origin publish:gh-pages
+          echo "Published to the gh-pages branch"
+          # A push with the workflow's token does not always start the Pages build by itself
+          gh api -X POST "repos/$GITHUB_REPOSITORY/pages/builds" --silent || echo "Pages build not requested (it may start by itself)"
