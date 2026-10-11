@@ -34,10 +34,13 @@ static uint32_t resultWindowSecs() { return ClockwiseParams::getInstance()->resu
 static bool shortPanel() { return ClockwiseParams::getInstance()->displayHeight == 32; }
 
 static constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); }
-// The dimmest a colour channel can be and still light up. The display shows the top CW_PIXEL_DEPTH_BITS bits of the
-// gamma-corrected 16-bit value: from 40 with 6 bits (level 1 of 64), from 56 with 5 (level 1 of 32, twice as bright)
+// A neutral RGB565 colour at the lowest visible level in the driver's CIE table for this colour depth.
 #if defined(CW_PIXEL_DEPTH_BITS) && CW_PIXEL_DEPTH_BITS <= 5
 static const uint8_t MIN_LIT = 56;
+#elif defined(CW_PIXEL_DEPTH_BITS) && CW_PIXEL_DEPTH_BITS == 7
+static const uint8_t MIN_LIT = 16;
+#elif defined(CW_PIXEL_DEPTH_BITS) && CW_PIXEL_DEPTH_BITS >= 8
+static const uint8_t MIN_LIT = 8;
 #else
 static const uint8_t MIN_LIT = 40;
 #endif
@@ -53,6 +56,8 @@ static const uint16_t DELAYED = rgb(255, 150, 0);   // a session that has not st
 static const uint16_t NEW_TIME = rgb(80, 205, 255);  // its new start time
 static const uint16_t GOLD = rgb(255, 214, 0);
 static const uint16_t F1_RED = rgb(225, 6, 0);
+static const uint16_t LIVE_GREEN = rgb(60, 230, 90);
+static const uint16_t LIVE_GREEN_ON_YELLOW = rgb(0, 85, 20);
 static const uint16_t HEADER_NAVY = rgb(14, 22, MIN_LIT > 52 ? MIN_LIT : 52);  // the header bar: dark, with a small coloured tab on its left edge
 static const uint16_t TAB_QUIET = rgb(90, 110, 150);  // the tab when it is not a race or qualifying
 static const uint16_t RED_FLAG_BAR = rgb(150, 8, 6);
@@ -261,12 +266,12 @@ static void drawTimeRight(MatrixPanel_I2S_DMA *d, const char *s, int right, int 
   }
 }
 
-// The colon of the current time breathes: a fade between off and full brightness, in 32 steps (a frame is 50 ms)
+// The colon of the current time breathes: a fade between a third and full brightness, in 32 steps (a frame is 50 ms)
 static const unsigned long PULSE_MS = 2000;
 static int pulseLevel() { return (int)roundf((0.5f - 0.5f * cosf((millis() % PULSE_MS) * 6.2831853f / PULSE_MS)) * 31); }
-// The colour at the pulse's level, from bg (dark) to color (bright): on a header the dark end is its fill, not black
+// Blend toward the background at the dim end: headers and backdrop tiles keep their colour beneath the pulse
 static uint16_t pulsed(uint16_t color, uint16_t bg = 0) {
-  int f = pulseLevel() * 255 / 31;  // out of 255
+  int f = 85 + pulseLevel() * 170 / 31;  // out of 255; keep the dim end visible to avoid a blink
   auto mix = [f](int c, int b) { return b + (c - b) * f / 255; };
   int r = mix(color >> 11 & 31, bg >> 11 & 31), g = mix(color >> 5 & 63, bg >> 5 & 63), b = mix(color & 31, bg & 31);
   return r << 11 | g << 5 | b;
@@ -392,26 +397,20 @@ static void drawHeaderMixed(MatrixPanel_I2S_DMA *d, const char *s, int x, int y,
 // While the times are still to come, a dot sits at the far right of the header and the text moves left to make room
 static int dotShift = 0;
 
-static void drawHeader(MatrixPanel_I2S_DMA *d, const char *left, const char *right, uint16_t fill, uint16_t ink, uint16_t tab = 0, uint16_t rightInk = 0, bool rightTime = false) {
+static void drawHeader(MatrixPanel_I2S_DMA *d, const char *left, const char *right, uint16_t fill, uint16_t ink, uint16_t tab = 0, uint16_t rightInk = 0, bool rightTime = false, uint16_t leftInk = 0) {
   if (!rightInk) rightInk = ink;
+  if (!leftInk) leftInk = ink;
   int h = shortPanel() ? 8 : 9;
   d->fillRect(0, 0, W, h, fill);
   if (tab) d->fillRect(0, 0, 2, h, tab);
   int x = tab ? 4 : 2;
   if (x + headerTextWidth(left) + 3 + headerTextWidth(right) + 2 + dotShift <= W) {
-    drawHeaderMixed(d, left, x, 1, ink);
+    drawHeaderMixed(d, left, x, 1, leftInk);
     drawHeaderMixed(d, right, W - 2 - dotShift - headerTextWidth(right), 1, rightInk, rightTime, fill);
   } else {
-    drawHeaderText(d, left, x, 1, ink);
+    drawHeaderText(d, left, x, 1, leftInk);
     drawHeaderText(d, right, W - 2 - dotShift - textWidth(right), 1, rightInk);
   }
-}
-
-// A dot after the session's name while the times are still to come: pulsing slowly, red and still when several
-// downloads in a row got none
-// A live session: a small green dot after its name, breathing
-static void drawLiveDot(MatrixPanel_I2S_DMA *d, const char *name, bool tab, uint16_t bg) {
-  d->fillRect((tab ? 4 : 2) + headerTextWidth(name) + 3, 3, 2, 2, pulsed(rgb(60, 230, 90), bg));
 }
 
 // Downloads for the times failed more than once: a red stripe at the far right of the header, like the tab on the left
@@ -680,6 +679,7 @@ static const uint16_t KNOCKED_OUT = rgb(255, 90, 80);  // red-orange: the driver
 static const uint16_t IN_PIT = rgb(80, 200, 255);  // cyan: the driver is in the pit lane
 static const uint16_t FAV_IN_PIT = rgb(70, 120, 255);  // a favourite in the pit lane: a deeper blue than the others
 static bool tintKnockedOut = false;
+static bool loadingTimes = false;  // show an ellipsis in an empty time column while data is still pending
 static bool dimPlaces = false;  // the places shown are the ones kept in flash from before the boot: dimmed until new data is in
 static uint16_t placeInk(uint16_t c) { return dimPlaces ? scaleColor(c, 12) : c; }
 static bool showPit = true;  // off while the list of a finished part is drawn: everybody is in the pit lane  // set while the list after a qualifying part is drawn
@@ -693,7 +693,7 @@ static void drawPlace(MatrixPanel_I2S_DMA *d, int place, const F1Ticker::Row &ro
   snprintf(number, sizeof(number), "%d", place);
   drawText(d, number, place < 10 ? 4 : 2, y, placeInk(place == 1 ? GOLD : GREY));
   d->fillRect(10, y, 2, 5, placeInk(row.color));
-  drawText(d, row.code, 14, y, placeInk(fav ? (row.pit && showPit ? FAV_IN_PIT : GOLD) : row.fastest ? FASTEST : row.pit && showPit ? IN_PIT : tintKnockedOut ? KNOCKED_OUT : WHITE));  // a favourite driver; the fastest lap in purple
+  drawText(d, row.code, 14, y, placeInk(row.fastest ? FASTEST : fav ? (row.pit && showPit ? FAV_IN_PIT : GOLD) : row.pit && showPit ? IN_PIT : tintKnockedOut ? KNOCKED_OUT : WHITE));  // a favourite driver; the fastest lap in purple
   if (moved) {  // a little arrow between the code and the time
     uint16_t color = moved > 0 ? rgb(60, 230, 90) : rgb(255, 70, 60);
     int top = moved > 0 ? y : y + 4;
@@ -702,7 +702,8 @@ static void drawPlace(MatrixPanel_I2S_DMA *d, int place, const F1Ticker::Row &ro
     d->drawFastHLine(27, top + dy, 3, color);
     d->drawFastHLine(26, top + 2 * dy, 5, color);
   }
-  drawTimeRight(d, row.time, W - 2, y, placeInk(row.improved ? rgb(60, 230, 90) : place > 1 || !strcmp(row.time, "NO TIME") ? TIME_GREY : race ? MINUTES : FASTEST));  // green: a better lap just now
+  if (!row.time[0] && loadingTimes) drawTimeRight(d, "...", W - 2, y, TIME_GREY);
+  else drawTimeRight(d, row.time, W - 2, y, placeInk(row.improved ? rgb(60, 230, 90) : place > 1 || !strcmp(row.time, "NO TIME") ? TIME_GREY : race ? MINUTES : FASTEST));  // green: a better lap just now
 }
 
 // Who moved up or down at the last change of the order, and until when it is shown
@@ -783,11 +784,12 @@ static void liveRight(const F1Ticker::Session &s, char *right, size_t size, int 
   right[0] = 0;
   if (s.tag == 'R' || s.tag == 'S') {
     if (s.period > 0 && s.totalLaps > 0) snprintf(right, size, "L%d/%d", s.period, s.totalLaps);
-    else if (s.period > 0) snprintf(right, size, "L%d", s.period);
+    else if (s.period > 0) snprintf(right, size, "L%d/...", s.period);
+    else strlcpy(right, "...", size);
   } else if (clockZeroAt && millis() - clockZeroAt > OVER_MS) {
     snprintf(right, size, "%d:%02d", hour, minute);
   } else {
-    strlcpy(right, s.clock, size);
+    strlcpy(right, s.clock[0] ? s.clock : "...", size);
   }
 }
 
@@ -1028,7 +1030,7 @@ static void drawBottomChequers(MatrixPanel_I2S_DMA *d) {
 // the results
 static void drawLiveBackdrop(MatrixPanel_I2S_DMA *d, int top, int bottom) {
   if (shortPanel()) return;
-  chequer(d, top, bottom);
+  chequer(d, max(top, 9), bottom);  // the tall panel's header occupies rows 0 through 8
 }
 
 // Is the flag out? A race: as soon as the leader has finished; practice and qualifying: when the clock reads 0:00
@@ -1202,6 +1204,7 @@ static int q3Pos(int extra) {
 
 static void drawLiveScroll(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, const char *right, uint16_t fill, uint16_t ink, uint16_t tab, int page, uint16_t rightInk = 0) {
   dimPlaces = s.stale;
+  loadingTimes = s.live || (!s.fromFeed && (!s.rows[0].time[0] || s.timeFails));
   const int SLOTS = 6, TOP = 10;
   int n = shownRows(s);
   bool step = q3Scroll(s) > 0;  // a row at a time, the page is the row
@@ -1242,8 +1245,7 @@ static void drawLiveScroll(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, c
     if (flag) flagFill(d, 0, 8, W, TOP + 3 * 6 - 9);
     else drawLiveBackdrop(d, 8, TOP + 3 * 6 - 1);
   }
-  drawHeader(d, s.name, right, fill, ink, tab, rightInk, rightInk != 0);  // a right side in its own colour is the time of day
-  if (s.live) drawLiveDot(d, s.name, tab, fill);
+  drawHeader(d, s.name, right, fill, ink, tab, rightInk, rightInk != 0, s.live ? (fill == GOLD ? LIVE_GREEN_ON_YELLOW : LIVE_GREEN) : 0);  // a right side in its own colour is the time of day
   drawWaitDot(d, s);
   for (int k = 0; k < 3; k++) drawPlace(d, k + 1, liveRow(s, k), TOP + k * 6, false, 0, isFavourite(s.rows[k].code));
   showPit = true;
@@ -1251,9 +1253,10 @@ static void drawLiveScroll(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, c
 
 static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hour, int minute, int page) {
   dimPlaces = s.stale;
+  loadingTimes = s.live || (!s.fromFeed && (!s.rows[0].time[0] || s.timeFails));
   // Marked live, but nothing is happening yet (a delayed start): say so, with the time to look at meanwhile
   if (s.rows[0].code[0] == 0) {
-    drawHeader(d, s.name, "WAITING", HEADER_NAVY, WHITE, TAB_QUIET);
+    drawHeader(d, s.name, "LOADING", HEADER_NAVY, WHITE, TAB_QUIET, 0, false, s.live ? LIVE_GREEN : 0);
     clockLeft = (W - clockWidth()) / 2;
     drawClock(d, hour, minute, shortPanel() ? 14 : 24, !shortPanel());
     return;
@@ -1266,8 +1269,7 @@ static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hou
     drawLiveScroll(d, s, right, fill, ink, tab, page, timeOfDay(s) ? MINUTES : 0);
     return;
   }
-  drawHeader(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, right, fill, ink, tab, 0, timeOfDay(s));
-  if (s.live) drawLiveDot(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, tab, fill);
+  drawHeader(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, right, fill, ink, tab, 0, timeOfDay(s), s.live && shownFlag(s) != 'r' ? (fill == GOLD ? LIVE_GREEN_ON_YELLOW : LIVE_GREEN) : 0);
   drawWaitDot(d, s);
   bool flag = flagOn(s);
   if (flag) flagFill(d, 0, shortPanel() ? 8 : 9, W, shortPanel() ? 56 : 55);  // below the header
@@ -1340,15 +1342,54 @@ static int standingsShown(int *out, int rows = 3) {
   return n;
 }
 
+// The same little car used beside the championship leader.
+static void drawCar(MatrixPanel_I2S_DMA *d, int x, int y, uint16_t color) {
+  static const char *const CAR[5] = {"XX....XX.....", "XXXXXXXXXXX..", ".XXXXXXXXXXXX", ".WWW...WWW...", ".WWW...WWW..."};
+  for (int j = 0; j < 5; j++)
+    for (int c = 0; c < 13; c++)
+      if (x + c >= 0 && x + c < W && CAR[j][c] != '.')
+        d->drawPixel(x + c, y + j, CAR[j][c] == 'X' ? color : GREY);
+}
+
+static bool loadingCarsShown = false;
+static void drawLoadingCars(MatrixPanel_I2S_DMA *d, int y) {
+  static const uint16_t COLORS[] = {rgb(235, 35, 35), rgb(255, 145, 0), rgb(35, 190, 220),
+                                  rgb(50, 110, 255), rgb(60, 210, 100), rgb(235, 235, 245)};
+  static unsigned long started = 0;
+  static int speed = 0, gap = 0, spacing = 0, firstColor = 0, lastColor = 0;
+  static uint16_t secondColor = 0;
+  unsigned long now = millis();
+  if (!speed || now - started >= (unsigned long)((W + 13 + spacing) * speed + gap)) {
+    started = now;
+    speed = random(25, 46);  // milliseconds per pixel: cars have different speeds
+    gap = random(300, 1501);
+    spacing = random(3) == 0 ? random(18, 31) : 0;
+    firstColor = (lastColor + 1 + random(5)) % 6;
+    lastColor = firstColor;
+    if (spacing) {
+      lastColor = (firstColor + 1 + random(5)) % 6;
+      secondColor = COLORS[lastColor];
+    }
+  }
+  loadingCarsShown = true;
+  int x = (int)((now - started) / speed) - 13;
+  drawCar(d, x, y, COLORS[firstColor]);
+  if (spacing) drawCar(d, x - spacing, y, secondColor);
+}
+
 // 32 rows: the line under the clock. Idle: the top three of the championship, then the next Grand Prix.
 // Between sessions: the top three of the one that just finished, then the next one.
 static void drawInfoRow(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, bool idle, int page, int y) {
   dimPlaces = idle ? snap.standingsStale : snap.last.stale;
+  loadingTimes = !idle && !snap.last.fromFeed && (!snap.last.rows[0].time[0] || snap.last.timeFails);
   int shown[4];
-  int places = idle ? standingsShown(shown) : 3;
+  int places = idle ? standingsShown(shown) : min(3, filledRows(snap.last));
   bool next = idle ? snap.upcomingCount > 0 : snap.next.valid;
   int count = places + (next ? 1 : 0);
-  if (count == 0) return;
+  if (count == 0) {
+    drawLoadingCars(d, y);
+    return;
+  }
   int item = page % count;
   if (item < places) {
     if (idle) {
@@ -1454,6 +1495,7 @@ static bool qualiList(const F1Ticker::Session &s) { return !shortPanel() && s.ta
 
 static void drawResultList(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hour, int minute, int page) {
   dimPlaces = s.stale;
+  loadingTimes = s.live || (!s.fromFeed && (!s.rows[0].time[0] || s.timeFails));
   if (qualiList(s)) {  // qualifying: the look of its live list, the top three fixed and the other places scrolling
     F1Ticker::Session shown = s;
     shown.flag = 0;
@@ -1498,6 +1540,7 @@ static void drawResultList(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, i
 
 static void drawBetween(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int minute, int page) {
   dimPlaces = snap.last.stale;
+  loadingTimes = !snap.last.fromFeed && (!snap.last.rows[0].time[0] || snap.last.timeFails);
   if (shortPanel()) {
     drawClock(d, hour, minute, 1);
     d->drawFastHLine(2, 16, 60, LINE);
@@ -1555,6 +1598,7 @@ static void whenText(CWDateTime *dateTime, time_t utc, char *out, size_t size) {
 // No header: the clock on top, then the championship, and the coming race along the bottom
 static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int minute, int page) {
   dimPlaces = snap.standingsStale;
+  loadingTimes = false;
   if (shortPanel()) {
     drawClock(d, hour, minute, 1);
     d->drawFastHLine(2, 16, 60, LINE);
@@ -1569,6 +1613,7 @@ static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int
   int shown[4];
   int places = standingsShown(shown, 4);
   d->drawFastHLine(0, 26, W, RULE);
+  if (!places) drawLoadingCars(d, 39);
   for (int i = 0; i < places; i++) {
     int k = shown[i];
     int y = 29 + i * 6;  // 2 clear rows to both lines
@@ -1580,15 +1625,13 @@ static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int
     snprintf(points, sizeof(points), "%d", snap.standings[k].points);
     drawTextRight(d, points, W - 2, y, placeInk(k == 0 ? MINUTES : GREY));
     if (i == 0 && k == 0) {  // the leading team's car, in the middle of the empty part of the row
-      static const char *const CAR[5] = {"XX....XX.....", "XXXXXXXXXXX..", ".XXXXXXXXXXXX", ".WWW...WWW...", ".WWW...WWW..."};
       int left = (14 + 11 + 1 + W - 2 - (int)strlen(points) * 4) / 2 - 6;
-      for (int j = 0; j < 5; j++)
-        for (int c = 0; c < 13; c++)
-          if (CAR[j][c] != '.') d->drawPixel(left + c, y + j, CAR[j][c] == 'X' ? row.color : GREY);
+      drawCar(d, left, y, row.color);
     }
   }
   d->drawFastHLine(0, 54, W, RULE);  // a second line, between the list and the bottom bar
   drawBottomChequers(d);
+  if (places && !snap.upcomingCount) drawLoadingCars(d, 57);
   time_t nowUtc = cwt::now();
   for (int i = 0; i < snap.upcomingCount; i++) {
     if (snap.upcoming[i].start <= nowUtc) continue;
@@ -1765,7 +1808,50 @@ static void logShown(int view, int page) {
   TelnetStream.print(line);
 }
 
+// The main clock's digits roll while searching for the time on boot.
+static void drawTimeSync(MatrixPanel_I2S_DMA *d) {
+  d->fillScreen(0);
+  unsigned long now = millis();
+  bool wasBig = bigClock;
+  bigClock = !shortPanel();
+  int height = shortPanel() ? 32 : 64;
+  int left = (W - clockWidth()) / 2, y = (height - tileH()) / 2;
+  for (int k = 0; k < 4; k++) {
+    unsigned long phase = now + k * 170;
+    int digit = (phase / 700 + k * 3) % 10;
+    float p = (phase % 700) / 700.0f;
+    int run = tileH() + 2, offset = (int)roundf(p * p * (3 - 2 * p) * run);
+    int x = left + (bigClock ? BIG_OFFSET : TILE_OFFSET)[k];
+    uint16_t color = k < 2 ? CLOCK : MINUTES;
+    const SoftEdge &soft = k < 2 ? WHITE_SOFT : GREEN_SOFT;
+    drawGlyph(d, digit, x, y, color, soft, 32, -offset, 0);
+    drawGlyph(d, (digit + 1) % 10, x, y, color, soft, 32, run - offset, 0);
+  }
+  int colonX = left + (bigClock ? 28 : 23), size = bigClock ? 4 : 3;
+  uint16_t colon = pulsed(WHITE, BLACK);
+  d->fillRect(colonX, y + (bigClock ? 6 : 4), size, size, colon);
+  d->fillRect(colonX, y + (bigClock ? 13 : 11), size, size, colon);
+  bigClock = wasBig;
+  d->flipDMABuffer();
+}
+
 void Clockface::update() {
+  static bool syncingTime = false;
+  if (cwt::timeStatus() != timeSet) {
+    if (!syncingTime) {
+      Serial.println("[face] syncing time");
+      TelnetStream.println("[face] syncing time");
+      syncingTime = true;
+    }
+    drawTimeSync(_display);
+    lastKey[0] = 0;
+    return;
+  }
+  if (syncingTime) {
+    Serial.println("[face] time synced");
+    TelnetStream.println("[face] time synced");
+    syncingTime = false;
+  }
   int hour = _dateTime->getHour(), minute = _dateTime->getMinute();
   uint32_t version = f1Ticker.version();
   if (simScenario) {
@@ -1874,10 +1960,10 @@ void Clockface::update() {
   char key[96];
   int rowPage = view == BETWEEN ? comingIndex() : 0;  // which of the coming sessions the bottom row shows
   int pulse = view != LIVE ? pulseLevel() : 0;  // the colon of the time breathes: drawn again at each step
-  if (view == LIVE && (snap.live.live || timeOfDay(snap.live))) pulse = pulseLevel();  // the live dot and the time of day's colon breathe
+  if (view == LIVE && timeOfDay(snap.live)) pulse = pulseLevel();  // the time of day's colon breathes
   if (view == LIVE || view == LIST || view == BETWEEN) marqueeMax = 0;  // only the idle screen has a scrolling text
   if (marqueeMax) pulse = pulse * 1000 + marqueeOffset(marqueeMax);  // and a scrolling name moves a pixel at a time
-  snprintf(key, sizeof(key), "%lu|%d|%d:%d|%d|%lx|%d|%d", (unsigned long)version, (int)view, tallClock ? 0 : hour, tallClock ? 0 : minute, page, (unsigned long)marks, rowPage, pulse);
+  snprintf(key, sizeof(key), "%lu|%d|%d:%d|%d|%lx|%d|%d|%lu", (unsigned long)version, (int)view, tallClock ? 0 : hour, tallClock ? 0 : minute, page, (unsigned long)marks, rowPage, pulse, loadingCarsShown ? millis() / 40 : 0UL);
   char right[12] = "";
   if (view == LIVE) liveRight(snap.live, right, sizeof(right), hour, minute);
   // Two buffers are drawn in turn and the one drawn on is the frame from two flips ago, so a change is never a patch on
@@ -1897,6 +1983,7 @@ void Clockface::update() {
   _display->fillScreen(0);
   backdropShown = false;  // until the view draws it
   tileRows = 0;
+  loadingCarsShown = false;
   switch (view) {
     case LIVE: drawLive(_display, snap.live, hour, minute, page); break;
     case LIST: drawResultList(_display, snap.last, hour, minute, page); break;

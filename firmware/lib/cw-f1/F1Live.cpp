@@ -288,7 +288,7 @@ void F1Live::run() {
         if (negotiate(token, sizeof(token), cookie, sizeof(cookie))) {
           f1At("live connect");
           client.setInsecure();
-          client.setTimeout(10);
+          client.setTimeout(10000);  // Arduino 3 Stream timeouts are milliseconds: allow 10 seconds for the upgrade
           ok = client.connect(HOST, 443);
           if (!ok) liveLog("[F1 live] connect failed (heap free %u, largest block %u)\n", (unsigned)dataFree(), (unsigned)dataBlock());
         }
@@ -315,7 +315,7 @@ void F1Live::run() {
                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nUser-Agent: BestHTTP\r\n\r\n");
   String status = client.readStringUntil('\n');
   if (!status.startsWith("HTTP/1.1 101")) {
-    liveLog("[F1 live] upgrade: %s\n", status.c_str());
+    liveLog("[F1 live] upgrade: %s\n", status.length() ? status.c_str() : "no HTTP response before timeout");
     return;
   }
   while (client.connected()) {  // the rest of the headers
