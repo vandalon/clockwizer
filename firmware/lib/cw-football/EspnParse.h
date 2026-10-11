@@ -62,4 +62,24 @@ struct ScoreEvent {
 // withDetails: also the team ids and the goals and cards (a busy evening has many)
 bool parseScoreboard(JsonScan::Next next, void *source, std::vector<ScoreEvent> &out, bool withDetails);
 
+// <league>/summary?event=<id>: the squads' shirt numbers and the substitutions of a match
+struct Player {
+  std::string athleteId;
+  std::string jersey;  // "" when not there
+};
+struct Squad {
+  std::string homeAway, teamId;
+  std::vector<Player> players;
+};
+struct Substitution {
+  double clock = 0;  // seconds
+  std::string teamId;
+  std::string on, off;  // the athletes' ids: ESPN lists the one coming on first, then the one going off
+};
+struct Summary {
+  std::vector<Squad> squads;
+  std::vector<Substitution> substitutions;  // the other key events (goals, cards, kick-off...) are left out
+};
+bool parseSummary(JsonScan::Next next, void *source, Summary &out);
+
 }  // namespace espn

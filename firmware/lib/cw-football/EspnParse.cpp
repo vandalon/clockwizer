@@ -138,6 +138,55 @@ struct ScoreboardScan {
   }
 };
 
+struct SummaryScan {
+  Summary *out;
+  int squad = -1, player = -1, key = -1;
+  bool keyIsSubstitution = false;
+  Substitution current;
+
+  void endKey() {
+    if (key >= 0 && keyIsSubstitution) out->substitutions.push_back(current);
+    current = Substitution();
+    keyIsSubstitution = false;
+  }
+
+  static void leaf(void *sink, const char (*p)[JsonScan::KEY], int n, const char *v, bool) {
+    SummaryScan &s = *(SummaryScan *)sink;
+    if (n < 3) return;
+    if (!strcmp(p[0], "rosters")) {
+      int q = indexAt(p, 1);
+      if (q != s.squad) {
+        s.squad = q;
+        s.player = -1;
+        s.out->squads.emplace_back();
+      }
+      Squad &squad = s.out->squads.back();
+      if (jsonPathIs(p, n, "rosters.*.homeAway")) squad.homeAway = v;
+      else if (jsonPathIs(p, n, "rosters.*.team.id")) squad.teamId = v;
+      else if (!strcmp(p[2], "roster") && n >= 5) {
+        int k = indexAt(p, 3);
+        if (k != s.player) {
+          s.player = k;
+          squad.players.emplace_back();
+        }
+        if (jsonPathIs(p, n, "rosters.*.roster.*.athlete.id")) squad.players.back().athleteId = v;
+        else if (jsonPathIs(p, n, "rosters.*.roster.*.jersey")) squad.players.back().jersey = v;
+      }
+    } else if (!strcmp(p[0], "keyEvents")) {
+      int k = indexAt(p, 1);
+      if (k != s.key) {
+        s.endKey();
+        s.key = k;
+      }
+      if (jsonPathIs(p, n, "keyEvents.*.type.type")) s.keyIsSubstitution = !strcmp(v, "substitution");
+      else if (jsonPathIs(p, n, "keyEvents.*.clock.value")) s.current.clock = atof(v);
+      else if (jsonPathIs(p, n, "keyEvents.*.team.id")) s.current.teamId = v;
+      else if (jsonPathIs(p, n, "keyEvents.*.participants.0.athlete.id")) s.current.on = v;
+      else if (jsonPathIs(p, n, "keyEvents.*.participants.1.athlete.id")) s.current.off = v;
+    }
+  }
+};
+
 }  // namespace
 
 bool parseNextMatch(JsonScan::Next next, void *source, NextMatch &out) {
@@ -168,6 +217,14 @@ bool parseScoreboard(JsonScan::Next next, void *source, std::vector<ScoreEvent> 
   scan.details = withDetails;
   bool ok = JsonScan::read(next, source, ScoreboardScan::leaf, &scan);
   scan.endDetail(out.empty() ? nullptr : &out.back());
+  return ok;
+}
+
+bool parseSummary(JsonScan::Next next, void *source, Summary &out) {
+  SummaryScan scan;
+  scan.out = &out;
+  bool ok = JsonScan::read(next, source, SummaryScan::leaf, &scan);
+  scan.endKey();
   return ok;
 }
 

@@ -1044,35 +1044,23 @@ bool FootballTicker::fetchSubstitutions(const Match &match, std::vector<Incident
   char url[128];
   snprintf(url, sizeof(url), "http://site.api.espn.com/apis/site/v2/sports/soccer/%s/summary?event=%s",
            match.league.c_str(), match.id.c_str());
-  StaticJsonDocument<512> filter;
-  JsonObject key = filter["keyEvents"].createNestedObject();
-  key["type"]["type"] = true;
-  key["clock"]["value"] = true;
-  key["team"]["id"] = true;
-  key["participants"][0]["athlete"]["id"] = true;
-  JsonObject squad = filter["rosters"].createNestedObject();
-  squad["homeAway"] = true;
-  squad["team"]["id"] = true;
-  squad["roster"][0]["athlete"]["id"] = true;
-  squad["roster"][0]["jersey"] = true;
-  if (!getJson(url, filter)) return false;
+  espn::Summary summary;
+  if (!getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseSummary(read, source, summary); })) return false;
 
   std::map<String, uint8_t> jerseys;  // athlete id -> shirt number
   String homeTeamId;
-  for (JsonObject squadJson : (*_doc)["rosters"].as<JsonArray>()) {
-    if (strcmp(squadJson["homeAway"] | "", "home") == 0) homeTeamId = squadJson["team"]["id"] | "";
-    for (JsonObject player : squadJson["roster"].as<JsonArray>())
-      jerseys[String(player["athlete"]["id"] | "")] = atoi(player["jersey"] | "0");
+  for (const espn::Squad &squad : summary.squads) {
+    if (squad.homeAway == "home") homeTeamId = squad.teamId.c_str();
+    for (const espn::Player &player : squad.players) jerseys[String(player.athleteId.c_str())] = atoi(player.jersey.c_str());
   }
   total = 0;
-  for (JsonObject e : (*_doc)["keyEvents"].as<JsonArray>()) {
-    if (strcmp(e["type"]["type"] | "", "substitution") != 0) continue;
+  for (const espn::Substitution &s : summary.substitutions) {
     total++;
     // ESPN lists the player coming on first, then the one going off
-    uint8_t on = jerseys[String(e["participants"][0]["athlete"]["id"] | "")];
-    uint8_t off = jerseys[String(e["participants"][1]["athlete"]["id"] | "")];
-    Incident in = {'s', match.home, match.away, match.homeKit, match.awayKit, homeTeamId == (e["team"]["id"] | ""),
-                   (uint8_t)std::min(120, (int)(e["clock"]["value"] | 0.0f) / 60 + 1), "", off, on, millis()};
+    uint8_t on = jerseys[String(s.on.c_str())];
+    uint8_t off = jerseys[String(s.off.c_str())];
+    Incident in = {'s', match.home, match.away, match.homeKit, match.awayKit, homeTeamId == s.teamId.c_str(),
+                   (uint8_t)std::min(120, (int)(float)s.clock / 60 + 1), "", off, on, millis()};
     found.push_back(in);
   }
   return true;

@@ -216,6 +216,52 @@ static std::string mineScoreboard(const std::string &text, bool withEvents) {
   return out;
 }
 
+// ---- <league>/summary -------------------------------------------------------------------------------------------
+static std::string oracleSummary(const std::string &text) {
+  StaticJsonDocument<8192> filter;  // the firmware has 512 on a 32-bit chip
+  JsonObject key = filter["keyEvents"].createNestedObject();
+  key["type"]["type"] = true;
+  key["clock"]["value"] = true;
+  key["team"]["id"] = true;
+  key["participants"][0]["athlete"]["id"] = true;
+  JsonObject squad = filter["rosters"].createNestedObject();
+  squad["homeAway"] = true;
+  squad["team"]["id"] = true;
+  squad["roster"][0]["athlete"]["id"] = true;
+  squad["roster"][0]["jersey"] = true;
+  DynamicJsonDocument doc(1 << 20);
+  if (deserializeJson(doc, text, DeserializationOption::Filter(filter), DeserializationOption::NestingLimit(20))) return "ERROR";
+  std::string out;
+  for (JsonObject sq : doc["rosters"].as<JsonArray>()) {
+    out += "squad " + str(sq["homeAway"], "") + " team=" + str(sq["team"]["id"], "") + "\n";
+    for (JsonObject player : sq["roster"].as<JsonArray>())
+      out += "  player " + str(player["athlete"]["id"], "") + " jersey=" + str(player["jersey"], "0") + "\n";
+  }
+  for (JsonObject e : doc["keyEvents"].as<JsonArray>()) {
+    if (strcmp(e["type"]["type"] | "", "substitution") != 0) continue;
+    out += "sub clock=" + flt(e["clock"]["value"]) + " team=" + str(e["team"]["id"], "") + " on=" +
+           str(e["participants"][0]["athlete"]["id"], "") + " off=" + str(e["participants"][1]["athlete"]["id"], "") + "\n";
+  }
+  return out;
+}
+
+static std::string mineSummary(const std::string &text) {
+  Text t(text);
+  espn::Summary s;
+  if (!espn::parseSummary(Text::next, &t, s)) return "ERROR";
+  std::string out;
+  for (auto &sq : s.squads) {
+    out += "squad " + sq.homeAway + " team=" + sq.teamId + "\n";
+    for (auto &p : sq.players) out += "  player " + p.athleteId + " jersey=" + (p.jersey.empty() ? "0" : p.jersey) + "\n";
+  }
+  for (auto &u : s.substitutions) {
+    char b[32];
+    snprintf(b, sizeof b, "%.3f", (double)(float)u.clock);
+    out += std::string("sub clock=") + b + " team=" + u.teamId + " on=" + u.on + " off=" + u.off + "\n";
+  }
+  return out;
+}
+
 static std::vector<std::string> files(const std::string &dir, const std::string &prefix) {
   std::vector<std::string> out;
   std::string cmd = "ls " + dir + " 2>/dev/null";
@@ -238,6 +284,7 @@ int main(int argc, char **argv) {
   for (auto &f : files(dir, "flag-")) { std::string t = slurp(f); same(f, oracleFlag(t), mineFlag(t)); }
   for (auto &f : files(dir, "scoreboard-"))
     for (bool details : {true, false}) { std::string t = slurp(f); same(f + (details ? " (with details)" : " (scores only)"), oracleScoreboard(t, details), mineScoreboard(t, details)); }
+  for (auto &f : files(dir, "summary-")) { std::string t = slurp(f); same(f, oracleSummary(t), mineSummary(t)); }
   printf("%d checks (%d lines compared), %d failed\n", checks, compared, failures);
   return failures ? 1 : 0;
 }
