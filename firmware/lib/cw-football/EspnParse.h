@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <stdint.h>
 
 #include <JsonScan.h>
 
@@ -22,7 +23,8 @@ bool parseNextMatch(JsonScan::Next next, void *source, NextMatch &out);
 
 // <league>/standings: the teams' abbreviations, group by group in table order
 typedef std::vector<std::vector<std::string>> Groups;
-bool parseStandings(JsonScan::Next next, void *source, Groups &out);
+typedef std::vector<std::vector<int16_t>> GroupPoints;
+bool parseStandings(JsonScan::Next next, void *source, Groups &out, GroupPoints *points = nullptr);
 
 #if !defined(CW_FOOTBALL_ONLY)
 // racing/f1/scoreboard: the Grand Prix weekend, its sessions in the order ESPN lists them

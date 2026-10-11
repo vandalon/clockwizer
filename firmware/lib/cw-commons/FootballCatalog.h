@@ -57,6 +57,55 @@ static const FootballLeague FOOTBALL_LEAGUES[] = {
   {"isr.1", "ISR", 0x451F},
 };
 
+#ifdef CW_FOOTBALL_ONLY
+static const char *const FOOTBALL_LEAGUE_NAMES[] = {
+  "Champions League",
+  "Europa League",
+  "Conference League",
+  "UEFA Super Cup",
+  "Nations League",
+  "World Cup",
+  "European Championship",
+  "World Cup qualifying (Europe)",
+  "Euro qualifying",
+  "Premier League",
+  "Championship",
+  "FA Cup",
+  "League Cup",
+  "La Liga",
+  "La Liga 2",
+  "Copa del Rey",
+  "Bundesliga",
+  "2. Bundesliga",
+  "DFB-Pokal",
+  "Serie A",
+  "Serie B",
+  "Coppa Italia",
+  "Ligue 1",
+  "Ligue 2",
+  "Coupe de France",
+  "Eredivisie",
+  "Keuken Kampioen Divisie",
+  "KNVB Beker",
+  "Primeira Liga",
+  "Taça de Portugal",
+  "Pro League",
+  "Scottish Premiership",
+  "Scottish Championship",
+  "Süper Lig",
+  "Super League",
+  "Bundesliga",
+  "Super League",
+  "Superliga",
+  "Allsvenskan",
+  "Eliteserien",
+  "Premier League",
+  "Liga 1",
+  "First Division",
+  "Premier League",
+};
+#endif
+
 // For the settings page: [code, label, name, group]
 static const char FOOTBALL_LEAGUES_JSON[] PROGMEM = R"JSON([["uefa.champions","CL","Champions League","Europe"],["uefa.europa","EL","Europa League","Europe"],["uefa.europa.conf","ECL","Conference League","Europe"],["uefa.super_cup","USC","UEFA Super Cup","Europe"],["uefa.nations","UNL","Nations League","National teams"],["fifa.world","WC","World Cup","National teams"],["uefa.euro","EURO","European Championship","National teams"],["fifa.worldq.uefa","WCQ","World Cup qualifying (Europe)","National teams"],["uefa.euroq","EQ","Euro qualifying","National teams"],["eng.1","PL","Premier League","England"],["eng.2","CH","Championship","England"],["eng.fa","FA","FA Cup","England"],["eng.league_cup","LC","League Cup","England"],["esp.1","LL","La Liga","Spain"],["esp.2","LL2","La Liga 2","Spain"],["esp.copa_del_rey","CDR","Copa del Rey","Spain"],["ger.1","BL","Bundesliga","Germany"],["ger.2","BL2","2. Bundesliga","Germany"],["ger.dfb_pokal","DFB","DFB-Pokal","Germany"],["ita.1","SA","Serie A","Italy"],["ita.2","SB","Serie B","Italy"],["ita.coppa_italia","CI","Coppa Italia","Italy"],["fra.1","L1","Ligue 1","France"],["fra.2","L2","Ligue 2","France"],["fra.coupe_de_france","CDF","Coupe de France","France"],["ned.1","ERE","Eredivisie","Netherlands"],["ned.2","KKD","Keuken Kampioen Divisie","Netherlands"],["ned.cup","KNVB","KNVB Beker","Netherlands"],["por.1","PPL","Primeira Liga","Portugal"],["por.taca.portugal","TP","Taça de Portugal","Portugal"],["bel.1","BEL","Pro League","Belgium"],["sco.1","SPL","Scottish Premiership","Scotland"],["sco.2","SCH","Scottish Championship","Scotland"],["tur.1","TUR","Süper Lig","Turkey"],["gre.1","GRE","Super League","Greece"],["aut.1","AUT","Bundesliga","Austria"],["sui.1","SUI","Super League","Switzerland"],["den.1","DEN","Superliga","Denmark"],["swe.1","SWE","Allsvenskan","Sweden"],["nor.1","NOR","Eliteserien","Norway"],["rus.1","RUS","Premier League","Russia"],["rou.1","ROU","Liga 1","Romania"],["cyp.1","CYP","First Division","Cyprus"],["isr.1","ISR","Premier League","Israel"]])JSON";
 

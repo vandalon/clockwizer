@@ -76,6 +76,10 @@ struct ClockwiseParams
     const char* const PREF_BALL_ROLL = "ballRoll";
     // Football face: how the clock digits change (0 flip cards, 1 fade, 2 roll, 3 dissolve, 4 drift, 5 shimmer)
     const char* const PREF_TIME_STYLE = "timeStyle";
+#ifdef CW_FOOTBALL_ONLY
+    const char* const PREF_NUMBER_FONT = "numberFont";
+    const char* const PREF_SHOW_RANKINGS = "fbRankings";
+#endif
     // Accent colour (index into COLORS): Pacman walls and the night mode clock
     const char* const PREF_COLOR = "color";
     // Pacman face: colour (index into PACMAN_COLORS) of each ghost and of the dots, 0 = the default
@@ -152,6 +156,10 @@ struct ClockwiseParams
 #endif
     bool ballRoll;
     uint8_t timeStyle;
+#ifdef CW_FOOTBALL_ONLY
+    uint8_t numberFont;
+    bool showRankings;
+#endif
     uint8_t color;
     uint8_t ghost1Color;
     uint8_t ghost2Color;
@@ -237,6 +245,10 @@ struct ClockwiseParams
 #endif
         preferences.putBool(PREF_BALL_ROLL, ballRoll);
         preferences.putUInt(PREF_TIME_STYLE, timeStyle);
+#ifdef CW_FOOTBALL_ONLY
+        preferences.putUInt(PREF_NUMBER_FONT, numberFont);
+        preferences.putBool(PREF_SHOW_RANKINGS, showRankings);
+#endif
         preferences.putUInt(PREF_COLOR, color);
         preferences.putUInt(PREF_GHOST1_COLOR, ghost1Color);
         preferences.putUInt(PREF_GHOST2_COLOR, ghost2Color);
@@ -278,6 +290,10 @@ struct ClockwiseParams
 #endif
         ballRoll = preferences.getBool(PREF_BALL_ROLL, true);
         timeStyle = preferences.getUInt(PREF_TIME_STYLE, 2);
+#ifdef CW_FOOTBALL_ONLY
+        numberFont = preferences.getUInt(PREF_NUMBER_FONT, 0) == 1 ? 1 : 0;
+        showRankings = preferences.getBool(PREF_SHOW_RANKINGS, false);
+#endif
         color = preferences.getUInt(PREF_COLOR, 0);
         ghost1Color = preferences.getUInt(PREF_GHOST1_COLOR, 0);
         ghost2Color = preferences.getUInt(PREF_GHOST2_COLOR, 0);

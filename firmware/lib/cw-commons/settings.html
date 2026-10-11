@@ -145,6 +145,17 @@
       <div><strong>Rolling ball</strong><p class="hint">On the clock with the upcoming matches, the ball is passed back and forth along the grass at the bottom; off, it rests there</p></div>
       <input type="checkbox" class="switch" id="ball" onchange="scheduleSave()">
     </div>
+    <div id="numberFontRow" style="display:none">
+      <label for="numberFont">Number font</label>
+      <select id="numberFont" onchange="scheduleSave()">
+        <option value="0">Original</option><option value="1">Block</option>
+      </select>
+      <p class="hint">Applies to all numbers. Letters keep their usual font.</p>
+    </div>
+    <div class="row" id="rankingsRow" style="display:none; margin-top:12px">
+      <div><strong>Competition rankings</strong><p class="hint">Show the standings for the competitions you follow on the upcoming matches screen.</p></div>
+      <input type="checkbox" class="switch" id="fbRankings" onchange="scheduleSave()">
+    </div>
     <div id="styleRow">
       <label for="timeStyle">Clock digits change by</label>
       <select id="timeStyle" onchange="scheduleSave()">
@@ -438,6 +449,8 @@
     $('telnet').checked = g('telnet') === '1';
     $('ball').checked = g('ballRoll') !== '0';
     $('timeStyle').value = g('timeStyle') || '2';
+    $('numberFont').value = g('numberFont') || '0';
+    $('fbRankings').checked = g('fbRankings') === '1';
     $('color').value = g('color') || '0';
     const pacmanOpts = ['Default', 'Pastel green', 'Pastel pink', 'Pastel blue', 'Lemon', 'Peach', 'Pastel purple', 'Red', 'Orange', 'Cyan', 'White']
       .map((n, i) => '<option value="' + i + '">' + n + '</option>').join('');
@@ -462,6 +475,8 @@
     ldrPin = g('ldrPin') || 35;
     faceId = g('CW_FW_ID');
     $('ballRow').style.display = faceId === '0x0B' ? 'flex' : 'none';
+    $('numberFontRow').style.display = faceId === '0x0B' ? 'block' : 'none';
+    $('rankingsRow').style.display = faceId === '0x0B' ? 'flex' : 'none';
     $('styleRow').style.display = faceId === '0x0B' || faceId === '0x0C' ? 'block' : 'none';
     if (faceId === '0x0C') {  // no flipping cards on the Formula 1 clock: removed, as some browsers show hidden options anyway
       if ($('timeStyle').value === '0') $('timeStyle').value = '2';
@@ -571,6 +586,8 @@
     flags: $('flags').checked ? 1 : 0,
     telnet: $('telnet').checked ? 1 : 0,
     timeStyle: $('timeStyle').value,
+    numberFont: $('numberFont').value,
+    rankings: $('fbRankings').checked ? 1 : 0,
     color: $('color').value,
     ghost1: $('ghost1').value,
     ghost2: $('ghost2').value,
@@ -734,6 +751,8 @@
     const ballChanged = now.ball !== orig.ball;
     const flagsChanged = now.flags !== orig.flags;
     const styleChanged = now.timeStyle !== orig.timeStyle;
+    const fontChanged = now.numberFont !== orig.numberFont;
+    const rankingsChanged = now.rankings !== orig.rankings;
     const colorChanged = now.color !== orig.color;
     const pacmanChanged = now.ghost1 !== orig.ghost1 || now.ghost2 !== orig.ghost2 || now.dots !== orig.dots;
     const langChanged = now.wordLang !== orig.wordLang;
@@ -746,7 +765,7 @@
     const leaguesChanged = now.fbLeagues !== orig.fbLeagues, teamsChanged = now.fbTeams !== orig.fbTeams;
     const driversChanged = now.f1Drivers !== orig.f1Drivers;
     const quietChanged = now.quiet !== orig.quiet || (now.quiet && (now.qFrom !== orig.qFrom || now.qTo !== orig.qTo));
-    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !f1Changed && !ballChanged && !flagsChanged && !styleChanged && !colorChanged && !pacmanChanged && !langChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged && !driversChanged && !birthdaysChanged) return;
+    if (!autoChanged && !brightChanged && !brMinChanged && !restart && !f1Changed && !ballChanged && !flagsChanged && !styleChanged && !fontChanged && !rankingsChanged && !colorChanged && !pacmanChanged && !langChanged && !quietChanged && !nameChanged && !fwUrlChanged && !accessChanged && !matchChanged && !resultChanged && !leaguesChanged && !teamsChanged && !driversChanged && !birthdaysChanged) return;
     if (now.quiet && now.qFrom === now.qTo) { toast('Choose different start and end times', 3000); return; }
     // Checked before anything is sent: a refusal halfway would leave the settings after it unsaved
     if (fwUrlChanged && now.fwUrl && (!/^https?:\/\//i.test(now.fwUrl) || now.fwUrl.length > 120)) {
@@ -761,6 +780,8 @@
       if (ballChanged) await set('ballRoll', now.ball);
       if (flagsChanged) await set('f1Flags', now.flags);
       if (styleChanged) await set('timeStyle', now.timeStyle);
+      if (fontChanged) await set('numberFont', now.numberFont);
+      if (rankingsChanged) await set('fbRankings', now.rankings);
       if (colorChanged) await set('color', now.color);
       if (now.ghost1 !== orig.ghost1) await set('ghost1Color', now.ghost1);
       if (now.ghost2 !== orig.ghost2) await set('ghost2Color', now.ghost2);

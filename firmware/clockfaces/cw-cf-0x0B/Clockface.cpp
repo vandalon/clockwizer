@@ -3,6 +3,7 @@
 #include "GoalAnimation.h"
 #include "TeamColors.h"
 #include "FlipDigits.h"
+#include "NumericFont.h"
 #include <BackgroundWait.h>
 #include <CWPreferences.h>
 #include <TelnetStream.h>
@@ -41,6 +42,7 @@ static const int W = 64;
 static constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); }
 
 static const uint16_t INK = rgb(255, 255, 255);
+static const uint16_t TEAM_NAME = rgb(232, 232, 232);
 static const uint16_t CLOCK = rgb(238, 246, 240);
 static const uint16_t MINUTES = rgb(190, 235, 150);
 static const uint16_t DATE = rgb(120, 185, 140);
@@ -54,6 +56,7 @@ static const uint16_t STRIP_LINE = rgb(90, 170, 110);
 static const uint16_t TRACK = rgb(30, 32, 38);
 static const uint16_t PLAYED = rgb(50, 200, 90);
 static const uint16_t DIVIDER = rgb(40, 44, 52);
+static const uint16_t MAIN_DIVIDER = rgb(12, 14, 16);
 static const uint16_t PANEL = rgb(20, 22, 28);  // behind the upcoming games
 static const uint16_t SECONDS_TRACK = rgb(28, 30, 38);
 static const uint16_t POSITION = rgb(170, 172, 180);  // places in the table, the same for every competition
@@ -63,7 +66,7 @@ static int clipTop = 0, clipBottom = 64;
 
 static uint16_t scaleColor(uint16_t c, int level);
 static uint16_t mixColor(uint16_t c0, uint16_t c1, int k);
-static uint16_t backgroundAt(int x, int y, int stripe);
+static uint16_t backgroundAt(int x, int y, int stripe, bool withBoards);
 
 // What is drawn comes out at blockDim/32 of its brightness (32 = as it is), for the dips when a live match or
 // a coming match changes
@@ -90,7 +93,7 @@ static const uint8_t *glyph3x5(char c) {
     {'P', {6,5,6,4,4}}, {'Q', {2,5,5,7,3}}, {'R', {6,5,6,5,5}}, {'S', {3,4,2,1,6}}, {'T', {7,2,2,2,2}},
     {'U', {5,5,5,5,7}}, {'V', {5,5,5,5,2}}, {'W', {5,5,5,7,5}}, {'X', {5,5,2,5,5}}, {'Y', {5,5,2,2,2}},
     {'Z', {7,1,2,4,7}}, {'-', {0,0,7,0,0}}, {'\'', {2,2,0,0,0}}, {'+', {0,2,7,2,0}}, {':', {0,2,0,2,0}},
-    {'/', {1,1,2,4,4}},
+    {'/', {1,1,2,4,4}}, {'.', {0,0,0,0,2}},
   };
   for (const auto &g : FONT)
     if (g.c == c) return g.rows;
@@ -126,7 +129,7 @@ static void drawCentered(MatrixPanel_I2S_DMA *d, const String &s, int y, uint16_
 static void drawDigit(MatrixPanel_I2S_DMA *d, int digit, int x, int y, uint16_t color, int scale) {
   for (int j = 0; j < 7; j++)
     for (int k = 0; k < 5; k++)
-      if (DIGITS[digit][j] >> (4 - k) & 1) fill(d, x + k * scale, y + j * scale, scale, scale, color);
+      if (numericfont::enabled() ? numericfont::smallPixel(digit, k, j) : (DIGITS[digit][j] >> (4 - k) & 1)) fill(d, x + k * scale, y + j * scale, scale, scale, color);
 }
 
 // Where drawNumber() starts a number centred on cx
@@ -143,7 +146,8 @@ static void drawNumber(MatrixPanel_I2S_DMA *d, const String &digits, int cx, int
 // side of a corner, that corner of its scale x scale block is left out; where the only neighbour is
 // diagonal, the two blocks are joined instead
 static void drawRoundDigit(MatrixPanel_I2S_DMA *d, int digit, int x, int y, uint16_t color, int scale) {
-  auto lit = [digit](int k, int j) { return k >= 0 && k < 5 && j >= 0 && j < 7 && (DIGITS[digit][j] >> (4 - k) & 1); };
+  auto lit = [digit](int k, int j) { return k >= 0 && k < 5 && j >= 0 && j < 7 &&
+      (numericfont::enabled() ? numericfont::smallPixel(digit, k, j) : (DIGITS[digit][j] >> (4 - k) & 1)); };
   for (int j = 0; j < 7; j++)
     for (int k = 0; k < 5; k++) {
       if (!lit(k, j)) continue;
@@ -176,7 +180,7 @@ static int inkEdge(const String &digits, int cx, bool right) {
     if (!isdigit(digits[i])) continue;
     for (int k = 0; k < 5; k++)
       for (int j = 0; j < 7; j++)
-        if (DIGITS[digits[i] - '0'][j] >> (4 - k) & 1) edge = right ? max(edge, x0 + (int)i * 6 + k) : min(edge, x0 + (int)i * 6 + k);
+        if (numericfont::enabled() ? numericfont::smallPixel(digits[i] - '0', k, j) : (DIGITS[digits[i] - '0'][j] >> (4 - k) & 1)) edge = right ? max(edge, x0 + (int)i * 6 + k) : min(edge, x0 + (int)i * 6 + k);
   }
   return edge;
 }
@@ -251,7 +255,7 @@ static const int CLOCK_RIGHT = 41;  // where the upcoming games' panel starts: t
 // ALPHA: how much of each pixel the round ball covers (0..32), so the corners are soft: they fade into the band behind
 // the ball (backgroundAt; stripe = the width of the grass stripes there).
 static void drawBall(MatrixPanel_I2S_DMA *d, int x, int y, float angle, int level = 32, int clipRight = CLOCK_RIGHT,
-                     int stripe = 6) {
+                     int stripe = 6, bool withBoards = true) {
   static const uint8_t ALPHA[7][7] = {{0, 8, 32, 32, 32, 8, 0}, {8, 32, 32, 32, 32, 32, 8}, {32, 32, 32, 32, 32, 32, 32},
                                       {32, 32, 32, 32, 32, 32, 32}, {32, 32, 32, 32, 32, 32, 32}, {8, 32, 32, 32, 32, 32, 8},
                                       {0, 8, 32, 32, 32, 8, 0}};
@@ -268,7 +272,8 @@ static void drawBall(MatrixPanel_I2S_DMA *d, int x, int y, float angle, int leve
       if (!ALPHA[j][i] || x + i < 0 || x + i >= clipRight || y + j < 0 || y + j >= 64) continue;  // outside the ball, or rolling in or out
       char shade = SHADE[j][i];
       uint16_t color = patch[j][i] ? 0 : shade == 'g' ? dimmed(190, 190, 196, level) : shade == 'G' ? dimmed(125, 125, 134, level) : dimmed(246, 246, 246, level);
-      d->drawPixel(x + i, y + j, ALPHA[j][i] == 32 ? color : mixColor(backgroundAt(x + i, y + j, stripe), color, ALPHA[j][i]));
+      d->drawPixel(x + i, y + j, ALPHA[j][i] == 32 ? color
+                                                    : mixColor(backgroundAt(x + i, y + j, stripe, withBoards), color, ALPHA[j][i]));
     }
 }
 
@@ -292,17 +297,25 @@ static String gameTime(const FootballTicker::Entry &m) {
   return time;
 }
 
-// With no live match but results, the live view takes them: a favourite's result, else the one that ended
-// last, stays on top (FT where HT would be). The other results and today's coming matches take turns in the
-// rows below.
+// With no live match, results take turns in the main view. Favourite results
+// take turns on top instead, with the other results and today's kick-offs below.
 static bool resultsOnTop = false;
 static void showResultsLive(FootballTicker::Overview &o) {
   if (resultsOnTop || !o.live.empty() || o.finished.empty()) return;
   size_t top = 0;
   while (top < o.finished.size() && !o.finished[top].favourite) top++;
-  if (top == o.finished.size()) top = 0;  // no favourite: the latest
-  o.live.push_back(o.finished[top]);
-  o.finished.erase(o.finished.begin() + top);
+  if (top == o.finished.size()) {
+    o.live.swap(o.finished);
+  } else {
+    for (size_t i = top; i < o.finished.size();) {
+      if (o.finished[i].favourite) {
+        o.live.push_back(std::move(o.finished[i]));
+        o.finished.erase(o.finished.begin() + i);
+      } else {
+        i++;
+      }
+    }
+  }
   resultsOnTop = true;
 }
 
@@ -321,7 +334,7 @@ static size_t belowRows(CWDateTime *dateTime) {
   return n;
 }
 
-// Results slide up one row at a time: which row is on top, and how far it has moved up
+// Results slide down one row at a time: which row is leaving, and how far it has moved
 struct Slide {
   unsigned long step;
   int offset;
@@ -348,7 +361,15 @@ static void drawStrip(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, in
   if (textWidth5(status) > 30) status = gameTime(m);
   drawText5(d, status, 1, 1, INK);
   d->fillRect(32, 0, 1, STRIP_H, STRIP_LINE);
-  drawText5(d, twoDigits(hour) + ":" + twoDigits(minute), 34, 1, INK);
+  if (numericfont::enabled()) {
+    drawText5(d, twoDigits(hour), 38, 1, INK);
+    fill(d, 50, 3, 1, 1, INK);
+    fill(d, 50, 5, 1, 1, INK);
+    drawText5(d, String(minute / 10), minute / 10 == 1 ? 52 : 53, 1, INK);
+    drawText5(d, String(minute % 10), 59, 1, INK);
+  } else {
+    drawText5(d, twoDigits(hour) + ":" + twoDigits(minute), 34, 1, INK);
+  }
 }
 
 // The score between the shirts: double size, single size when a team has reached double figures
@@ -379,49 +400,50 @@ static void drawTimeline(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m,
     if (e.kind == 'g') drawSmallBall(d, x - 1, e.home ? y - 5 : y + 3);
     else fill(d, x, e.home ? y - 4 : y + 3, 1, 3, e.kind == 'r' ? RED_CARD : YELLOW_CARD);
   }
-  fill(d, min(W - 2, 2 + played), y, 2, 2, halfTime(m) ? HALF_TIME : INK);
+  fill(d, min(W - 4, 2 + played), y, 2, 2, halfTime(m) ? HALF_TIME : INK);
 }
 
 static void drawScoreTiles(MatrixPanel_I2S_DMA *d, int y);
+static void drawScoreDigits(MatrixPanel_I2S_DMA *d, int home, int away, int y);
 static bool scoreOnTiles();
 
 // The score between the shirts: on flip tiles, or the plain digits when a team has reached double figures
-static void drawScoreArea(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, int shirtY) {
-  if (scoreOnTiles()) drawScoreTiles(d, shirtY);
+static void drawScoreArea(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, int shirtY, bool settled = false) {
+  if (settled && m.score.length() == 3 && m.score[1] == '-' && isdigit(m.score[0]) && isdigit(m.score[2]))
+    drawScoreDigits(d, m.score[0] - '0', m.score[2] - '0', shirtY);
+  else if (!settled && scoreOnTiles()) drawScoreTiles(d, shirtY);
   else drawScore(d, m.score, shirtY - 9);
 }
 
-static void drawMatch(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, bool roomy, bool withScore = true) {
+static void drawMatch(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, bool roomy, int dy = 0, bool settled = false) {
   // With the list below it is one match high, so the top part spreads out; the single match view
   // keeps the clock under the timeline
-  int shirtY = roomy ? 12 : 11, nameY = roomy ? 28 : 26, timelineY = roomy ? 44 : 39;
+  int shirtY = (roomy ? 12 : 11) + dy, nameY = (roomy ? 28 : 26) + dy, timelineY = (roomy ? 44 : 39) + dy;
   uint16_t homeColor, awayColor;
   kitColors(m.homeKit, m.awayKit, homeColor, awayColor);
   drawShirt(d, 1, shirtY, homeColor, trimColor(m.homeKit, homeColor));
   drawShirt(d, 49, shirtY, awayColor, trimColor(m.awayKit, awayColor));
   // The names in the 5x7 font, 17 wide, each under its shirt
   String home = m.home.substring(0, 3), away = m.away.substring(0, 3);
-  drawText5(d, home, 8 - textWidth5(home) / 2, nameY, rgb(238, 246, 240));
-  drawText5(d, away, 55 - textWidth5(away) / 2, nameY, rgb(238, 246, 240));
+  drawText5(d, home, 8 - textWidth5(home) / 2, nameY, TEAM_NAME);
+  drawText5(d, away, 55 - textWidth5(away) / 2, nameY, TEAM_NAME);
   if (halfTime(m)) drawCentered(d, "HT", nameY + 2, HALF_TIME);
   else if (!m.live) drawCentered(d, "FT", nameY + 2, HALF_TIME);
-  if (withScore) drawScoreArea(d, m, shirtY);
+  drawScoreArea(d, m, shirtY, settled);
   drawTimeline(d, m, timelineY);
 }
 
-// When another live match takes the top: the block under the green bar dips dark, the new match takes over
-// at the darkest point and it comes back up. The score tiles are never dimmed; they flip one after the other
-// once the new match is there (update() sets that up). The green bar's text is just replaced (drawLive).
-// t is the ms since it started.
-static const unsigned long SWAP_DOWN = 300, SWAP_UP = 300, SWAP_MS = 520;  // the dip, then the score tiles (SCORE_STAGGER + SCORE_FLIP_MS) have flipped
-static const int SWAP_LOW = 0;  // brightness at the darkest, of 32: black
+// The next match enters from above; the previous match moves down into the lower row.
+static const unsigned long SWAP_MS = SLIDE_MS;
 
 static void drawMatchSwap(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &old, const FootballTicker::Entry &cur, unsigned long t) {
-  bool before = t < SWAP_DOWN;
-  blockDim = before ? 32 - (32 - SWAP_LOW) * (int)t / (int)SWAP_DOWN : SWAP_LOW + (32 - SWAP_LOW) * (int)min(t - SWAP_DOWN, SWAP_UP) / (int)SWAP_UP;
-  drawMatch(d, before ? old : cur, true, false);
-  blockDim = 32;
-  drawScoreArea(d, before ? old : cur, 12);
+  int offset = (int)(min(t, SWAP_MS) * (54 - STRIP_H) / SWAP_MS);
+  clipTop = STRIP_H;
+  clipBottom = 54;
+  drawMatch(d, old, true, offset, true);
+  drawMatch(d, cur, true, offset - (54 - STRIP_H), true);
+  clipTop = 0;
+  clipBottom = 64;
 }
 
 // The winner's number green and the loser's grey, a draw white
@@ -452,7 +474,7 @@ static void drawLive(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, size_t index,
   size_t rows = belowRows(dateTime);
   bool single = live.size() == 1 && rows == 0;
   bool swapping = swapOld && !single;
-  drawStrip(d, swapping && swapT < SWAP_DOWN ? *swapOld : m, hour, minute, !single);
+  drawStrip(d, m, hour, minute, !single);
   if (swapping) drawMatchSwap(d, *swapOld, m, swapT);
   else drawMatch(d, m, !single);
   if (single) {
@@ -462,25 +484,25 @@ static void drawLive(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, size_t index,
   d->fillRect(0, 54, W, 1, DIVIDER);
   clipTop = 55;
   clipBottom = 63;  // one row shows: the one waiting above or below must not peek in
-  if (rows > 0 && !pinned) {
-    if (rows == 1) {
-      drawRow(d, dateTime, 0, 56);
-    } else {
-      for (size_t k = 0; k < 2; k++) drawRow(d, dateTime, (slide.step + k) % rows, 56 + k * 9 - slide.offset);
-    }
+  if (!pinned && live.size() > 1 && !(resultsOnTop && m.favourite)) {
+    // The previous main match enters the lower row from above.
+    int offset = swapping ? (int)(min(swapT, SWAP_MS) * 9 / SWAP_MS) : 9;
+    for (size_t k = 0; k < 2; k++) drawResult(d, live[(index + live.size() + k - 2) % live.size()], 56 - k * 9 + offset);
   } else if (pinned) {
     // Favourites are on top and stay there; the other live matches take turns in the row below, which
-    // moves up when it is the next one's turn (the one that just left is the hidden row above it)
+    // moves down when it is the next one's turn (the next one enters from above)
     size_t others = live.size() - pinned;
     if (others == 1) {
       drawResult(d, live[pinned], 56);
     } else {
-      for (size_t k = 0; k < 2; k++) drawResult(d, live[pinned + (shift + k + others - 1) % others], 47 + k * 9 + (9 - push));
+      for (size_t k = 0; k < 2; k++) drawResult(d, live[pinned + (shift + k + others - 1) % others], 56 - k * 9 + push);
     }
-  } else {
-    // The next live match, in the order they come up. When it takes the top, the row moves up
-    // (push 0..9, 9 = done) and the one that was on top joins at the end.
-    for (size_t k = 0; k < 2; k++) drawResult(d, live[(index + k) % live.size()], 47 + k * 9 + (9 - push));
+  } else if (rows > 0) {
+    if (rows == 1) {
+      drawRow(d, dateTime, 0, 56);
+    } else {
+      for (size_t k = 0; k < 2; k++) drawRow(d, dateTime, (slide.step + k) % rows, 56 - k * 9 + slide.offset);
+    }
   }
   clipTop = 0;
   clipBottom = 64;
@@ -495,6 +517,12 @@ static void drawText5(MatrixPanel_I2S_DMA *d, const String &s, int x, int y, uin
   static GFXcanvas1 glyph(6, 8);
   for (unsigned i = 0; i < s.length(); i++, x += 6) {
     glyph.fillScreen(0);
+    if (numericfont::enabled() && isdigit(s[i])) {
+      for (int gy = 0; gy < 7; gy++)
+        for (int gx = 0; gx < 4; gx++)
+          if (numericfont::smallPixel(s[i] - '0', gx, gy)) fill(d, x + gx, y + gy, 1, 1, color);
+      continue;
+    }
     glyph.drawChar(0, 0, s[i], 1, 0, 1);
     for (int gy = 0; gy < 7; gy++)
       for (int gx = 0; gx < 5; gx++)
@@ -502,14 +530,8 @@ static void drawText5(MatrixPanel_I2S_DMA *d, const String &s, int x, int y, uin
   }
 }
 
-// White kits get a pale blue name so the white bar remains distinct.
-static uint16_t teamNameColor(uint16_t shirt) {
-  return ((shirt >> 11) & 31) >= 28 && ((shirt >> 5) & 63) >= 56 && (shirt & 31) >= 28
-             ? rgb(216, 232, 255) : INK;
-}
-
 // A result: kit bars and names around the score, the winner's number green and the loser's grey
-// (a draw white). All in all 63 wide, so a score of double figures gets the small font.
+// (a draw white). Double figures get the small font so the score fits between the names.
 // A live match has no winner yet: its numbers and dash are orange, so it stands out from the results
 static const uint16_t LIVE_ROW = rgb(255, 140, 40);
 static uint16_t scoreColor(const FootballTicker::Entry &m, int own, int other) {
@@ -523,13 +545,13 @@ static void drawResult(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, i
   bool split = splitScore(m.score, home, away);
   bool big = split && home.length() + away.length() <= 2;  // "2-1" in the 5x7 font; "12-1" doesn't fit
   int scoreWidth = big ? 17 : textWidth(m.score);
-  int x = (W - (2 + 2 + 17 + 2 + scoreWidth + 2 + 17 + 2 + 2)) / 2;  // bars keep 2 pixels from the names
-  fill(d, x, y, 2, 7, homeColor);
-  drawText5(d, m.home.substring(0, 3), x + 4, y, teamNameColor(homeColor));
-  int sx = x + 4 + 17 + 2;
+  fill(d, 0, y, 2, 7, homeColor);
+  drawText5(d, m.home.substring(0, 3), 3, y, TEAM_NAME);
+  int sx = (W - scoreWidth) / 2;
   if (big) {
     drawText5(d, home, sx, y, scoreColor(m, home.toInt(), away.toInt()));
-    drawText5(d, "-", sx + 6, y, m.live ? LIVE_ROW : DASH);
+    int dashWidth = numericfont::enabled() && away != "1" ? 4 : 5;
+    fill(d, sx + 6, y + 3, dashWidth, 1, m.live ? LIVE_ROW : DASH);
     drawText5(d, away, sx + 12, y, scoreColor(m, away.toInt(), home.toInt()));
   } else if (split) {
     drawText(d, home, sx, y + 1, scoreColor(m, home.toInt(), away.toInt()));
@@ -538,9 +560,8 @@ static void drawResult(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, i
   } else {
     drawText(d, m.score, sx, y + 1, m.live ? LIVE_ROW : INK);
   }
-  int ax = sx + scoreWidth + 2;
-  drawText5(d, m.away.substring(0, 3), ax, y, teamNameColor(awayColor));
-  fill(d, ax + 17 + 2, y, 2, 7, awayColor);
+  drawText5(d, m.away.substring(0, 3), W - 20, y, TEAM_NAME);
+  fill(d, W - 2, y, 2, 7, awayColor);
 }
 
 // How bright the pulsing colons are now, 0..32: one full cycle every 3 seconds, a bit
@@ -556,8 +577,8 @@ static int colonPulse(unsigned long now) {
 // pixels travelled, so going right x = roll - 7 (7 = ball width) and going left x = edge - roll; ballLeft says which
 // way it goes and ballLift how many rows above the ground it is.
 // Each pass is of a kind picked by a hash of its number and lasts as long as it needs, so every screen keeps its own
-// clock (ballPass). Both clocks have all of them (see clockwise-mockups/football-extra-passes.py); the one with the
-// upcoming matches is narrower, so the distances are scaled down to its width:
+// clock (ballPass). Both clocks have all of them (see clockwise-mockups/football-extra-passes.py); the upcoming-games
+// view now uses the full panel width too:
 //   roll   kicked in at BIG_ROLL_SPEED, slowing down a little
 //   lob    kicked into the air, the same speed all the way, a curve LOB_HEIGHT high
 //   header rises steeply, kinks at the top as if headed, drops and rolls on
@@ -594,7 +615,7 @@ static PassKind passKind(uint32_t pass) {
   return r < 50 ? PASS_ROLL : r < 70 ? PASS_LOB : r < 78 ? PASS_HEADER : r < 84 ? PASS_CHIP : r < 94 ? PASS_SHOT : PASS_HIGH;
 }
 
-// How much narrower than the full width the pass is
+// How much narrower than the full width the earlier upcoming-games pass is
 static float sc(int steps) { return steps / (float)BIG_ROLL_STEPS; }
 
 static float passSecs(PassKind kind, int steps) {
@@ -615,8 +636,7 @@ static int arcPass(float t, float secs, int steps, int rows) {
   return (int)roundf(steps * u);
 }
 
-// Returns the pixels travelled and sets ballLeft and ballLift. big: the clock without matches, else the one with the
-// upcoming matches.
+// Returns the pixels travelled and sets ballLeft and ballLift. big uses the full width; false keeps the earlier short pass.
 static int ballPass(unsigned long now, bool big) {
   static unsigned long start[2] = {0, 0};
   static uint32_t pass[2] = {0, 0};
@@ -682,13 +702,13 @@ static void drawComing(MatrixPanel_I2S_DMA *d, const FootballTicker::Upcoming &u
   uint16_t homeColor, awayColor;
   kitColors(u.homeKit, u.awayKit, homeColor, awayColor);
   fill(d, 0, y, 2, 7, homeColor);
-  drawText5(d, u.home.substring(0, 3), 4, y, teamNameColor(homeColor));
+  drawText5(d, u.home.substring(0, 3), 3, y, TEAM_NAME);
   drawText(d, twoDigits(local % 86400 / 3600), 23, y + 1, DATE);
   fill(d, 31, y + 2, 1, 1, DATE);
   fill(d, 31, y + 4, 1, 1, DATE);
   drawText(d, twoDigits(local % 3600 / 60), 33, y + 1, DATE);
-  drawText5(d, u.away.substring(0, 3), 42, y, teamNameColor(awayColor));
-  fill(d, 61, y, 2, 7, awayColor);
+  drawText5(d, u.away.substring(0, 3), W - 20, y, TEAM_NAME);
+  fill(d, W - 2, y, 2, 7, awayColor);
 }
 
 // ---- Flip clock ----
@@ -734,6 +754,16 @@ static uint16_t mixColor(uint16_t c0, uint16_t c1, int k) {
   return rgb(r0 + (r1 - r0) * k / 32, (g0 + (g1 - g0) * k / 32) << 2, (b0 + (b1 - b0) * k / 32) << 3);
 }
 
+static int glyphPixel(const GlyphSet &set, int digit, int x, int y) {
+  if (!set.pixels) {
+    if (numericfont::enabled()) return numericfont::pixel(digit, x, y, set.w, set.h);
+    int gx = x * MAIN_GLYPHS.w / set.w, gy = y * MAIN_GLYPHS.h / set.h;
+    return MAIN_GLYPHS.pixels[(digit * MAIN_GLYPHS.h + gy) * MAIN_GLYPHS.w + gx];
+  }
+  return numericfont::enabled() ? numericfont::pixel(digit, x, y, set.w, set.h)
+                                : set.pixels[(digit * set.h + y) * set.w + x];
+}
+
 // One row of a tile, drawn at screen row y: the card with its rounded corners, the digit's pixels on it,
 // and the split as a black row. level dims it for the folding halves.
 static void drawTileRow(MatrixPanel_I2S_DMA *d, const GlyphSet &set, int digit, int x, int y, int w, int h, int row,
@@ -747,9 +777,11 @@ static void drawTileRow(MatrixPanel_I2S_DMA *d, const GlyphSet &set, int digit, 
   fill(d, edge ? x + 1 : x, y, edge ? w - 2 : w, 1, tile);
   int gy = row - (h - set.h) / 2, gx = x + (w - set.w) / 2;
   if (gy < 0 || gy >= set.h) return;
-  const uint8_t *px = set.pixels + (digit * set.h + gy) * set.w;
   float lo = soft.lo * 32, scale = 32 / ((soft.hi - soft.lo) * 32);
-  auto share = [&](int i) { return (int)constrain((px[i] - lo) * scale, 0.0f, 32.0f); };  // 0..32 of the colour
+  auto share = [&](int i) {
+    int pixel = glyphPixel(set, digit, i, gy);
+    return (int)constrain((pixel - lo) * scale, 0.0f, 32.0f);
+  };  // 0..32 of the colour
   for (int i = 0; i < set.w;) {
     int a = share(i), run = 1;
     if (a == 0) { i++; continue; }
@@ -786,7 +818,8 @@ static void drawPlainGlyph(MatrixPanel_I2S_DMA *d, const GlyphSet &set, int digi
     int py = gy + j;
     if (py < y || py >= y + h) continue;
     for (int i = 0; i < set.w; i++) {
-      int a = (int)constrain((set.pixels[(digit * set.h + j) * set.w + i] - lo) * scale, 0.0f, 32.0f);
+      int pixel = glyphPixel(set, digit, i, j);
+      int a = (int)constrain((pixel - lo) * scale, 0.0f, 32.0f);
       if (!a) continue;
       float lv = level;
       if (dissolve != 0) {
@@ -884,15 +917,25 @@ static int scoreDigit[2] = {-1, -1}, scoreOld[2] = {-1, -1};
 static unsigned long scoreStart[2] = {0, 0};
 static float scoreProgress[2] = {1, 1};
 static const GlyphSet SCORE_GLYPHS = {8, 11, &FLIP_SCORE[0][0]};
+static const GlyphSet BLOCK_SCORE_GLYPHS = {8, 12, nullptr};
 static const int SCORE_TILE_W = 12, SCORE_TILE_H = 15;
 
 static bool scoreOnTiles() { return scoreDigit[0] >= 0 && scoreDigit[1] >= 0; }
 
+static void drawScoreDigits(MatrixPanel_I2S_DMA *d, int home, int away, int y) {
+  const GlyphSet &set = numericfont::enabled() ? BLOCK_SCORE_GLYPHS : SCORE_GLYPHS;
+  int x2 = 17 + SCORE_TILE_W + 1 + 4 + 1;
+  drawFlipTile(d, set, home, home, 1, 17, y, SCORE_TILE_W, SCORE_TILE_H, INK, WHITE_SOFT);
+  drawFlipTile(d, set, away, away, 1, x2, y, SCORE_TILE_W, SCORE_TILE_H, INK, WHITE_SOFT);
+  fill(d, 17 + SCORE_TILE_W + 1, y + SCORE_TILE_H / 2 - 1, 4, 2, DASH);
+}
+
 // The tiles from x 17, the dash between them, y = the top
 static void drawScoreTiles(MatrixPanel_I2S_DMA *d, int y) {
+  const GlyphSet &set = numericfont::enabled() ? BLOCK_SCORE_GLYPHS : SCORE_GLYPHS;
   int x2 = 17 + SCORE_TILE_W + 1 + 4 + 1;
-  drawFlipTile(d, SCORE_GLYPHS, scoreDigit[0], scoreOld[0], scoreProgress[0], 17, y, SCORE_TILE_W, SCORE_TILE_H, INK, WHITE_SOFT);
-  drawFlipTile(d, SCORE_GLYPHS, scoreDigit[1], scoreOld[1], scoreProgress[1], x2, y, SCORE_TILE_W, SCORE_TILE_H, INK, WHITE_SOFT);
+  drawFlipTile(d, set, scoreDigit[0], scoreOld[0], scoreProgress[0], 17, y, SCORE_TILE_W, SCORE_TILE_H, INK, WHITE_SOFT);
+  drawFlipTile(d, set, scoreDigit[1], scoreOld[1], scoreProgress[1], x2, y, SCORE_TILE_W, SCORE_TILE_H, INK, WHITE_SOFT);
   fill(d, 17 + SCORE_TILE_W + 1, y + SCORE_TILE_H / 2 - 1, 4, 2, DASH);
 }
 
@@ -916,36 +959,9 @@ static uint16_t grassAt(int x, int stripe = 6) { return (x / stripe) % 2 == 0 ? 
 
 // ---- Main ----
 
-// The 14 rows at the bottom, under the minutes: four rows of crowd, the front of the stand, hoardings, a touchline
-// and the grass the ball rolls on, down to the last row (the same band as the clock without matches)
-static const int MAIN_BAND_Y = 50, MAIN_BALL_Y = 56;
-static void drawMainBackground(MatrixPanel_I2S_DMA *d) {
-  for (int y = MAIN_BAND_Y; y <= MAIN_BAND_Y + 6; y += 2) {
-    int level = 12 + 3 * (y - MAIN_BAND_Y) / 2;  // a little brighter lower down
-    for (int x = (y / 2) % 2; x < CLOCK_RIGHT; x += 2) {
-      if (aisleAt(x)) continue;
-      uint16_t c = crowdDot(x, y, level);
-      if (c) d->drawPixel(x, y, c);
-    }
-  }
-  d->fillRect(0, MAIN_BAND_Y + 8, CLOCK_RIGHT, 1, BG_FRONT);
-  for (int x = 0; x < CLOCK_RIGHT; x++) d->fillRect(x, MAIN_BAND_Y + 9, 1, 2, adAt(x));
-  d->fillRect(0, MAIN_BAND_Y + 11, CLOCK_RIGHT, 1, BG_LINE);
-  for (int x = 0; x < CLOCK_RIGHT; x++) d->fillRect(x, MAIN_BAND_Y + 12, 1, 2, grassAt(x));
-}
-
-// The stands behind the tiles, like the clock without matches: thinner and dimmer upwards, an empty column and row
-// where the tiles meet. clockX = the left tile's edge
-static void drawMainStands(MatrixPanel_I2S_DMA *d, int clockX) {
-  for (int y = 2; y < MAIN_BAND_Y; y += 2) {
-    int k = 100 * (MAIN_BAND_Y - y) / (MAIN_BAND_Y - 2);  // 0 at the band .. 100 at the top
-    for (int x = (y / 2) % 2; x < CLOCK_RIGHT; x += 2) {
-      if (aisleAt(x) || x == clockX + 14 || y == 24) continue;
-      uint16_t c = crowdDot(x, y, 14 - 8 * k / 100, 80 - 30 * k / 100);
-      if (c) d->drawPixel(x, y, c);
-    }
-  }
-}
+static const int MAIN_BALL_Y = 56;
+static void drawStadium(MatrixPanel_I2S_DMA *d, int level = 32, bool withBoards = true, bool clockGaps = true, int fromX = 0,
+                        int toX = W, int fromY = 0, int toY = 64);
 
 // The two matches shown on the right. Matches that kick off together take turns in their slot, one per turn,
 // unless nothing else is on that day: then they fill both slots (two games just stay; with more they roll on
@@ -993,19 +1009,120 @@ static void drawSlot(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, const Footbal
   uint16_t homeColor, awayColor;
   kitColors(u.homeKit, u.awayKit, homeColor, awayColor);
   fill(d, 43, y + 12, 2, 7, homeColor);
-  drawText5(d, u.home.substring(0, 3), 46, y + 12, teamNameColor(homeColor));
+  drawText5(d, u.home.substring(0, 3), 46, y + 12, TEAM_NAME);
   fill(d, 43, y + 20, 2, 7, awayColor);
-  drawText5(d, u.away.substring(0, 3), 46, y + 20, teamNameColor(awayColor));
+  drawText5(d, u.away.substring(0, 3), 46, y + 20, TEAM_NAME);
+}
+
+static const unsigned long RANKING_TITLE_MS = 4000;
+static const unsigned long RANKING_SLIDE_MS = 350;
+static const int RANKING_ROW_STEP = 6, RANKING_ROWS = 6, RANKING_BOTTOM = 62;
+
+struct RankingPage {
+  String competition;
+  std::vector<String> teams;
+  std::vector<int16_t> points;
+  uint8_t firstPosition = 1;
+  size_t pageCount = 0;
+  bool valid = false;
+};
+
+static RankingPage rankingPage, previousRankingPage;
+static size_t shownRankingPage = SIZE_MAX;
+static uint32_t rankingVersion = 0;
+static unsigned long rankingStartedAt = 0;
+static bool previousRankingValid = false;
+
+static int rankingStartY(const RankingPage &page) {
+  size_t rows = min(page.teams.size(), (size_t)RANKING_ROWS);
+  return RANKING_BOTTOM - 5 - (rows ? (rows - 1) * RANKING_ROW_STEP : 0);
+}
+
+static void drawRankingClock(MatrixPanel_I2S_DMA *d) {
+  const int digitWidth = 8, digitHeight = 14, pitch = 10;
+  const GlyphSet glyphs = {digitWidth, digitHeight, nullptr};
+  int x = (CLOCK_RIGHT - (4 * digitWidth + 3 * (pitch - digitWidth))) / 2;
+  for (int i = 0; i < 4; i++, x += pitch) {
+    bool waiting = tileProgress[i] < 0;
+    flipSame = flipAll && i == 3;
+    drawFlipTile(d, glyphs, waiting ? oldDigits[i] : clockDigits[i], oldDigits[i], waiting ? 1 : tileProgress[i],
+                 x + (i >= 2 ? 1 : 0), 2, digitWidth, digitHeight, i < 2 ? CLOCK : MINUTES,
+                 i < 2 ? WHITE_SOFT : GREEN_SOFT);
+  }
+  flipSame = false;
+}
+
+static void drawRankingRows(MatrixPanel_I2S_DMA *d, const RankingPage &page, int y) {
+  for (size_t i = 0; page.valid && i < page.teams.size(); i++, y += RANKING_ROW_STEP) {
+    String place = String(page.firstPosition + i);
+    drawText(d, place, 1 + (7 - textWidth(place)) / 2, y, DATE);
+    drawText(d, page.teams[i].substring(0, 4), 10, y, TEAM_NAME);
+    if (i < page.points.size() && page.points[i] != INT16_MIN) {
+      String points = String(page.points[i]);
+      drawText(d, points, 40 - textWidth(points), y, MINUTES);
+    }
+  }
+}
+
+static void drawRankings(MatrixPanel_I2S_DMA *d, unsigned long now) {
+  if (!rankingPage.valid) return;
+  now -= rankingStartedAt;
+  unsigned long phase = now % RANKING_TITLE_MS;
+  int currentY = rankingStartY(rankingPage);
+  const int titleWidth = CLOCK_RIGHT - 2;
+  int overflow = max(0, textWidth(rankingPage.competition) - titleWidth);
+  int offset = phase < 500 ? 0 : min(overflow, (int)((phase - 500) * overflow / 2800));
+  for (unsigned i = 0; i < rankingPage.competition.length(); i++) {
+    const uint8_t *rows = glyph3x5(toupper((unsigned char)rankingPage.competition[i]));
+    if (!rows) continue;
+    int x = 1 + (int)i * 4 - offset;
+    for (int y = 0; y < 5; y++)
+      for (int px = 0; px < 3; px++)
+        if (x + px >= 1 && x + px < CLOCK_RIGHT - 1 && (rows[y] >> (2 - px) & 1))
+          fill(d, x + px, currentY - 8 + y, 1, 1, DATE);
+  }
+  fill(d, 0, currentY - 2, CLOCK_RIGHT, 1, MAIN_DIVIDER);
+  clipTop = currentY;
+  clipBottom = RANKING_BOTTOM;
+  unsigned long slidePhase = now % FootballTicker::STANDINGS_STEP_MS;
+  if (previousRankingValid && slidePhase < RANKING_SLIDE_MS) {
+    int rows = RANKING_ROWS;
+    if (rankingPage.competition == previousRankingPage.competition &&
+        rankingPage.firstPosition > previousRankingPage.firstPosition)
+      rows = min(RANKING_ROWS, rankingPage.firstPosition - previousRankingPage.firstPosition);
+    int distance = rows * RANKING_ROW_STEP;
+    float p = (float)slidePhase / RANKING_SLIDE_MS;
+    int offset = (int)roundf(distance * p * p * (3 - 2 * p));
+    clipBottom = currentY + distance - offset;
+    drawRankingRows(d, previousRankingPage, rankingStartY(previousRankingPage) - offset);
+    clipBottom = RANKING_BOTTOM;
+    drawRankingRows(d, rankingPage, currentY + distance - offset);
+  } else {
+    drawRankingRows(d, rankingPage, currentY);
+  }
+  clipTop = 0;
+  clipBottom = 64;
 }
 
 // Hours over minutes with the ball rolling under them, the next two kick-off times on the right.
 static void drawMain(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int minute, int second, int pulse, int roll,
-                     unsigned long turn) {
-  const int clockX = (CLOCK_RIGHT - 29) / 2;  // two 14 px tiles and the pixel between them, centred left of the panel
-  drawMainStands(d, clockX);
-  drawFlipPair(d, MAIN_GLYPHS, 0, clockX, 2, 14, 22, CLOCK, WHITE_SOFT);
-  drawFlipPair(d, MAIN_GLYPHS, 2, clockX, 26, 14, 22, MINUTES, GREEN_SOFT);
-  d->fillRect(CLOCK_RIGHT, 0, W - CLOCK_RIGHT, 64, PANEL);
+                     unsigned long turn, bool showRankings, unsigned long now) {
+  showRankings = showRankings && rankingPage.valid;
+  drawStadium(d, 32, false, false, 0);
+  drawStadium(d, 16, false, false, CLOCK_RIGHT);
+  if (showRankings) drawStadium(d, 16, false, false, 0, CLOCK_RIGHT, 8, 64);
+  if (roll < 0) drawBall(d, W / 3 - 3, MAIN_BALL_Y, 0, 16, W, 12, false);
+  else if (ballLeft) drawBall(d, W - roll, MAIN_BALL_Y - ballLift, -roll / 3.5f, 16, W, 12, false);
+  else drawBall(d, roll - 7, MAIN_BALL_Y - ballLift, roll / 3.5f, 16, W, 12, false);
+
+  if (showRankings) {
+    drawRankingClock(d);
+    drawRankings(d, now);
+  } else {
+    const int clockX = (CLOCK_RIGHT - 29) / 2;  // two 14 px tiles and the pixel between them, centred left of the panel
+    drawFlipPair(d, MAIN_GLYPHS, 0, clockX, 2, 14, 22, CLOCK, WHITE_SOFT);
+    drawFlipPair(d, MAIN_GLYPHS, 2, clockX, 26, 14, 22, MINUTES, GREEN_SOFT);
+  }
 
   const FootballTicker::Upcoming *slots[2];
   int n = mainSlots(dateTime, turn, slots);
@@ -1035,10 +1152,7 @@ static void drawMain(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int
       }
     }
   }
-  drawMainBackground(d);
-  if (roll < 0) drawBall(d, CLOCK_RIGHT / 3 - 3, MAIN_BALL_Y, 0);  // resting a third of the grass from the left
-  else if (ballLeft) drawBall(d, CLOCK_RIGHT - roll, MAIN_BALL_Y - ballLift, -roll / 3.5f);  // turns by distance / radius
-  else drawBall(d, roll - 7, MAIN_BALL_Y - ballLift, roll / 3.5f);
+  fill(d, CLOCK_RIGHT, 0, 1, 64, MAIN_DIVIDER);
 }
 
 // A single LED in the very top right corner, in every view: how the downloads are going. Amber pulsing until the
@@ -1056,35 +1170,53 @@ static void drawStatusDot(MatrixPanel_I2S_DMA *d, FootballTicker::Status status,
 static const int CLOCK_Y = 19, CROWD_TOP = 2, BAND_Y = 50;  // the tiles' top, the highest crowd row, the first crowd row of the band
 static const int BALL_Y = 56;  // its bottom row, 62, is in the grass
 
-// What the band (see drawStadium and drawMainBackground, the same rows) shows at x, y, for the soft edge of the ball;
+// What the band (see drawStadium) shows at x, y, for the soft edge of the ball;
 // above the band: black
-static uint16_t backgroundAt(int x, int y, int stripe) {
+static uint16_t backgroundAt(int x, int y, int stripe, bool withBoards = true) {
   int row = y - BAND_Y;
   if (row < 0 || row == 7) return 0;
   if (row < 7) return row % 2 || x % 2 != (y / 2) % 2 || aisleAt(x) ? 0 : crowdDot(x, y, 12 + 3 * row / 2);
+  if (!withBoards) return row < 11 ? 0 : grassAt(x, stripe);
   return row == 8 ? BG_FRONT : row < 11 ? adAt(x) : row == 11 ? BG_LINE : grassAt(x, stripe);
 }
 
-static void drawStadium(MatrixPanel_I2S_DMA *d) {
+static void drawStadium(MatrixPanel_I2S_DMA *d, int level, bool withBoards, bool clockGaps, int fromX, int toX, int fromY, int toY) {
   for (int y = CROWD_TOP; y < BAND_Y; y += 2) {  // the stands behind the clock: thinner and dimmer the higher
+    if (y < fromY || y >= toY) continue;
     int k = 100 * (BAND_Y - y) / (BAND_Y - CROWD_TOP);  // 0 at the band .. 100 at the top
-    for (int x = (y / 2) % 2; x < W; x += 2) {
-      if (aisleAt(x) || (y < 8 && (x < 22 || x >= 53))) continue;  // the date and the seconds stand clear of it
-      if ((x == 15 || x == 48) && y >= CLOCK_Y && y < CLOCK_Y + 26) continue;  // and the seams between the digits
+    int firstX = (y / 2) % 2;
+    while (firstX < fromX) firstX += 2;
+    for (int x = firstX; x < toX; x += 2) {
+      if (aisleAt(x) || (clockGaps && y < 8 && (x < 22 || x >= 53))) continue;  // the date and the seconds stand clear of it
+      if (clockGaps && (x == 15 || x == 48) && y >= CLOCK_Y && y < CLOCK_Y + 26) continue;  // and the seams between the digits
       uint16_t c = crowdDot(x, y, 14 - 8 * k / 100, 80 - 30 * k / 100);  // still there at the top, just thinner and dimmer
-      if (c) d->drawPixel(x, y, c);
+      if (c) d->drawPixel(x, y, scaleColor(c, level));
     }
   }
-  for (int y = BAND_Y; y <= BAND_Y + 6; y += 2)  // the band: four rows of crowd, a little brighter lower down
-    for (int x = (y / 2) % 2; x < W; x += 2) {
+  for (int y = BAND_Y; y <= BAND_Y + 6; y += 2) {  // the band: four rows of crowd, a little brighter lower down
+    if (y < fromY || y >= toY) continue;
+    int firstX = (y / 2) % 2;
+    while (firstX < fromX) firstX += 2;
+    for (int x = firstX; x < toX; x += 2) {
       if (aisleAt(x)) continue;
       uint16_t c = crowdDot(x, y, 12 + 3 * (y - BAND_Y) / 2);
-      if (c) d->drawPixel(x, y, c);
+      if (c) d->drawPixel(x, y, scaleColor(c, level));
     }
-  d->fillRect(0, BAND_Y + 8, W, 1, BG_FRONT);
-  for (int x = 0; x < W; x++) d->fillRect(x, BAND_Y + 9, 1, 2, adAt(x));
-  d->fillRect(0, BAND_Y + 11, W, 1, BG_LINE);
-  for (int x = 0; x < W; x++) d->fillRect(x, BAND_Y + 12, 1, 2, grassAt(x, 12));  // down to the last row, 63
+  }
+  if (withBoards) {
+    if (BAND_Y + 8 >= fromY && BAND_Y + 8 < toY) d->fillRect(fromX, BAND_Y + 8, toX - fromX, 1, scaleColor(BG_FRONT, level));
+    for (int x = fromX; x < toX; x++)
+      if (BAND_Y + 9 >= fromY && BAND_Y + 10 < toY) d->fillRect(x, BAND_Y + 9, 1, 2, scaleColor(adAt(x), level));
+    if (BAND_Y + 11 >= fromY && BAND_Y + 11 < toY) d->fillRect(fromX, BAND_Y + 11, toX - fromX, 1, scaleColor(BG_LINE, level));
+  }
+  int grassY = BAND_Y + (withBoards ? 12 : 11), grassH = withBoards ? 2 : 3;
+  if (grassY < fromY) {
+    grassH -= fromY - grassY;
+    grassY = fromY;
+  }
+  if (grassY + grassH > toY) grassH = toY - grassY;
+  for (int x = fromX; grassH > 0 && x < toX; x++)
+    d->fillRect(x, grassY, 1, grassH, scaleColor(grassAt(x, 12), level));
 }
 
 static void drawBigClock(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int second, int roll) {
@@ -1118,7 +1250,7 @@ static void drawIncidentBackground(MatrixPanel_I2S_DMA *d, const FootballTicker:
   String minute = String(in.minute) + "'";
   fill(d, 0, 0, W, 9, rgb(24, 30, 26));
   fill(d, 2, 2, 2, 5, in.homeTeam ? homeColor : awayColor);
-  drawText(d, in.homeTeam ? in.home : in.away, 6, 2, INK);
+  drawText(d, in.homeTeam ? in.home : in.away, 6, 2, TEAM_NAME);
   drawText(d, minute, W - 2 - textWidth(minute), 2, MINUTES);
 }
 
@@ -1210,16 +1342,63 @@ static void playIncident(MatrixPanel_I2S_DMA *d, const FootballTicker::Incident 
 
 static bool testGoalDue = false;
 static char testIncidentDue = 0;
+static bool simRankings = false, simChanged = false;
 
 void Clockface::testGoal() { testGoalDue = true; }
 void Clockface::testIncident(char kind) { testIncidentDue = kind; }
-const char *Clockface::simulate() { return "the simulator is gone, use G, Y, R and U"; }
+const char *Clockface::simulate() {
+  simRankings = !simRankings;
+  simChanged = true;
+  shownRankingPage = SIZE_MAX;
+  rankingPage.valid = previousRankingValid = false;
+  lastKey[0] = 0;
+  return simRankings ? "upcoming games and club standings (S or N to stop)" : "off, showing real matches";
+}
 const char *Clockface::simulateNext() { return simulate(); }
 
 static TeamKit testKit(const char *team) {
   TeamKit kit = {0xFFFF, 0xFFFF, 0};
   lookupTeamKit(team, "ned.1", kit);
   return kit;
+}
+
+static void simulatedUpcoming(FootballTicker::Overview &out, time_t now) {
+  out = FootballTicker::Overview();
+  const char *const teams[] = {"FEY", "AJA", "PSV", "AZ"};
+  for (int i = 0; i < 2; i++) {
+    FootballTicker::Upcoming match;
+    match.home = teams[i * 2];
+    match.away = teams[i * 2 + 1];
+    match.homeKit = testKit(teams[i * 2]);
+    match.awayKit = testKit(teams[i * 2 + 1]);
+    match.kickoff = now + (i + 1) * 86400;
+    match.color = DATE;
+    match.homePos = match.awayPos = 0;
+    out.upcoming.push_back(match);
+  }
+}
+
+static bool simulatedStandings(size_t page, RankingPage &out) {
+  static const char *const teams[] = {"ARS", "MCI", "LIV", "AVL", "TOT", "CHE", "NEW", "MUN", "WHU", "BHA", "WOL", "FUL",
+                                      "CRY", "EVE", "BRE", "NFO", "BOU", "LEI", "IPS", "SOU",
+                                      "RMA", "BAR", "ATM", "GIR", "ATH", "SOC", "BET", "VIL", "VAL", "SEV", "OSA", "GET",
+                                      "CEL", "MLL", "LAS", "ALA", "ESP", "LEG", "RAY", "VLL"};
+  const size_t firstSteps = FootballTicker::standingsSteps(20);
+  out.pageCount = firstSteps * 2;
+  page %= out.pageCount;
+  bool second = page >= firstSteps;
+  out.competition = second ? "La Liga" : "Premier League";
+  size_t firstRow = min((page % firstSteps) * RANKING_ROWS, size_t(14));
+  size_t first = (second ? 20 : 0) + firstRow;
+  out.firstPosition = firstRow + 1;
+  size_t last = first + RANKING_ROWS;
+  out.teams.clear();
+  out.points.clear();
+  for (size_t i = first; i < last; i++) {
+    out.teams.push_back(teams[i]);
+    out.points.push_back(63 - (i % 20) * 3);
+  }
+  return true;
 }
 
 // The test goal or incident, as the ticker would hand it out
@@ -1260,13 +1439,28 @@ void Clockface::setup(CWDateTime *dateTime) {
 void Clockface::update() {
   int hour = _dateTime->getHour(), minute = _dateTime->getMinute(), second = _dateTime->getSecond();
   unsigned long now = millis();
+  static int shownFont = -1;
+  int numberFont = ClockwiseParams::getInstance()->numberFont;
+  if (numberFont != shownFont) {
+    shownFont = numberFont;
+    lastKey[0] = 0;
+  }
+  static int shownRankings = -1;
+  bool showRankings = simRankings || ClockwiseParams::getInstance()->showRankings;
+  if (showRankings != (shownRankings != 0)) {
+    shownRankings = showRankings;
+    shownRankingPage = SIZE_MAX;
+    lastKey[0] = 0;
+  }
 
   footballTicker.setResultWindow(resultWindowSecs());
   uint32_t version = footballTicker.version();
-  if (version != overviewVersion) {
+  if (simChanged || version != overviewVersion) {
     try {
-      footballTicker.overview(overview);
+      if (simRankings) simulatedUpcoming(overview, time(nullptr));
+      else footballTicker.overview(overview);
       overviewVersion = version;
+      simChanged = false;
       resultsOnTop = false;
     } catch (const std::bad_alloc &) {  // no room for the copy: try again next frame instead of restarting
     }
@@ -1275,6 +1469,28 @@ void Clockface::update() {
 
   // Which view, which live match is on top, and where the sliding lists are
   enum { LIVE, MAIN, BIG } view = !overview.live.empty() ? LIVE : !overview.upcoming.empty() ? MAIN : BIG;
+  if (view == MAIN && showRankings) {
+    if (shownRankingPage == SIZE_MAX) rankingStartedAt = now;
+    size_t page = (now - rankingStartedAt) / FootballTicker::STANDINGS_STEP_MS;
+    if (page != shownRankingPage || rankingVersion != version) {
+      try {
+        previousRankingValid = rankingPage.valid && rankingVersion == version && shownRankingPage + 1 == page;
+        if (previousRankingValid) previousRankingPage = rankingPage;
+        rankingPage.valid = simRankings ? simulatedStandings(page, rankingPage)
+                           : footballTicker.standingsPage(page, rankingPage.competition, rankingPage.firstPosition,
+                                                          rankingPage.teams, rankingPage.points, rankingPage.pageCount);
+        if (previousRankingValid && rankingPage.competition == previousRankingPage.competition &&
+            rankingPage.firstPosition == previousRankingPage.firstPosition) previousRankingValid = false;
+        shownRankingPage = page;
+        rankingVersion = version;
+      } catch (const std::bad_alloc &) {
+        rankingPage.valid = false;
+        previousRankingValid = false;
+        shownRankingPage = page;
+        rankingVersion = version;
+      }
+    }
+  } else shownRankingPage = SIZE_MAX;
   unsigned long matchMs = max(3, (int)ClockwiseParams::getInstance()->matchSecs) * 1000UL;
   // Live favourites come first in the list and are pinned to the top: with just one of them the top never
   // changes, with several they take turns
@@ -1284,7 +1500,8 @@ void Clockface::update() {
   size_t shift = now / matchMs;
   size_t index = view == LIVE ? shift % (pinned ? pinned : overview.live.size()) : 0;
   size_t rows = belowRows(_dateTime);
-  bool slides = view == LIVE && rows > 1 && !pinned;
+  bool resultFavourites = resultsOnTop && !overview.live.empty() && overview.live[0].favourite;
+  bool slides = view == LIVE && rows > 1 && (overview.live.size() == 1 || resultFavourites);
   Slide slide = slides ? slideAt(now, 9, matchMs - SLIDE_MS) : Slide{0, 0};
   bool singleLive = view == LIVE && overview.live.size() == 1 && rows == 0;
   FootballTicker::Status status = footballTicker.status();
@@ -1325,12 +1542,12 @@ void Clockface::update() {
   int shimmerFrame = timeStyle == STYLE_SHIMMER && (view != LIVE || singleLive) ? now / 80 : 0;
 
   int roll = view != MAIN && view != BIG ? 0 : !rolling ? -1  // -1 = the ball rests instead
-             : ballPass(now, view == BIG);
+             : ballPass(now, view != LIVE);
   int pulse = singleLive || loading ? colonPulse(now) : 0;  // only redraw for it when shown
-  // The live list below moves up a row as the next match takes the top
+  // The live list below moves down a row as the next match takes the top
   unsigned long sinceTurn = now % matchMs;
   bool listTurns = !pinned || overview.live.size() - pinned > 1;  // pinned: only more than one other takes turns
-  int push = view == LIVE && (rows == 0 || pinned) && listTurns && sinceTurn < SLIDE_MS ? sinceTurn * 9 / SLIDE_MS : 9;
+  int push = view == LIVE && (rows == 0 || pinned || overview.live.size() > 1) && listTurns && sinceTurn < SLIDE_MS ? sinceTurn * 9 / SLIDE_MS : 9;
   unsigned long turn = view == MAIN ? now / matchMs : 0;  // matches kicking off together take turns
 
   // A slot or the live match that takes another match flips or dips: keep the old one while it lasts
@@ -1393,7 +1610,7 @@ void Clockface::update() {
 
   // A goal: the net cam animation with GOAL! and the new score, then the clock again
   FootballTicker::Goal goal;
-  if (takeTestGoal(goal) || footballTicker.nextGoal(goal)) {
+  if (takeTestGoal(goal) || (!simRankings && footballTicker.nextGoal(goal))) {
     MatrixPanel_I2S_DMA *display = _display;
     playGoalAnimation(display, goal.home.c_str(), goal.away.c_str(), goal.homeScore, goal.awayScore, goal.homeScored,
                       goal.homeKit, goal.awayKit, [display](int ms) {
@@ -1406,7 +1623,7 @@ void Clockface::update() {
 
   // A card or a substitution: the full screen animation, then the clock again
   FootballTicker::Incident incident;
-  if (takeTestIncident(incident) || footballTicker.nextIncident(incident)) {
+  if (takeTestIncident(incident) || (!simRankings && footballTicker.nextIncident(incident))) {
     MatrixPanel_I2S_DMA *display = _display;
     playIncident(display, incident, [display](int ms) {
       display->flipDMABuffer();
@@ -1416,8 +1633,7 @@ void Clockface::update() {
     return;
   }
 
-  // The score tiles: a digit that changes flips, the second tile a little after the first. With another match
-  // the flips wait for its dip. (After the goal animation, so they are seen.)
+  // Changed scores flip their digits; a different match scrolls in with its own settled score.
   unsigned long tnow = millis();
   int target[2] = {-1, -1};
   if (view == LIVE) {
@@ -1434,12 +1650,12 @@ void Clockface::update() {
       scoreProgress[i] = 1;
       continue;
     }
-    if (scoreDigit[i] < 0) {
+    if (scoreDigit[i] < 0 || swapBegan) {
       scoreDigit[i] = scoreOld[i] = target[i];
     } else if (target[i] != scoreDigit[i]) {
       scoreOld[i] = scoreDigit[i];
       scoreDigit[i] = target[i];
-      scoreStart[i] = (swapBegan ? swapStart + SWAP_DOWN : tnow) + i * SCORE_STAGGER;
+      scoreStart[i] = tnow + i * SCORE_STAGGER;
     }
     scoreProgress[i] = 1;
     if (scoreOld[i] != scoreDigit[i]) {
@@ -1455,17 +1671,21 @@ void Clockface::update() {
 
   // Only draw when something changed
   char key[192];
-  snprintf(key, sizeof(key), "%lu|%d|%d:%d:%d|%u|%lu/%d|%d|%d%d,%d|%d|%lu|%d|%u|%d,%d|%d|%d,%d,%d,%d|%d|%d|%d", (unsigned long)version, (int)view,
+  unsigned rankingFrame = view == MAIN && showRankings ? now / 40 : 0;
+  snprintf(key, sizeof(key), "%lu|%d|%d:%d:%d|%u|%lu/%d|%d|%d%d,%d|%d|%lu|%d|%u|%d,%d|%d|%d,%d,%d,%d|%d|%d|%d|%u", (unsigned long)version, (int)view,
            hour, minute, second, (unsigned)index, (unsigned long)slide.step, (int)slide.offset, pulse, roll, (int)ballLeft, ballLift,
            flipFrame, (unsigned long)turn, push, (unsigned)shift, slotFrame[0], slotFrame[1], swapFrame, scoreDigit[0], scoreDigit[1],
-           scoreFrame[0], scoreFrame[1], (int)status, timeStyle, shimmerFrame);
+           scoreFrame[0], scoreFrame[1], (int)status, timeStyle, shimmerFrame, rankingFrame);
   if (strcmp(key, lastKey) == 0) return;
   strcpy(lastKey, key);
 
   _display->fillScreen(0);
   switch (view) {
-    case LIVE: drawLive(_display, _dateTime, index, pinned, shift, hour, minute, second, pulse, slide, push, swapActive ? &liveOld : nullptr, swapT); break;
-    case MAIN: drawMain(_display, _dateTime, hour, minute, second, pulse, roll, turn); break;
+    case LIVE:
+      drawStadium(_display, 16, false);
+      drawLive(_display, _dateTime, index, pinned, shift, hour, minute, second, pulse, slide, push, swapActive ? &liveOld : nullptr, swapT);
+      break;
+    case MAIN: drawMain(_display, _dateTime, hour, minute, second, pulse, roll, turn, showRankings, now); break;
     case BIG:
       drawBigClock(_display, _dateTime, second, roll);
       break;

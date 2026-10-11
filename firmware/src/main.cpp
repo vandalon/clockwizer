@@ -1090,6 +1090,9 @@ void loop() {
               TelnetStream.println(String(CW_FACES[i].key) + " - Install latest '" + CW_FACES[i].name + "' firmware");
             TelnetStream.println("T - Show the birthday screen for a minute (again to stop)");
 #ifdef CW_FOOTBALL_SIM
+#ifdef CW_FOOTBALL_ONLY
+            TelnetStream.println("S, N - Toggle upcoming games and standings simulator");
+#endif
 #ifdef CW_F1
             TelnetStream.println("S, N - Football simulator of the Formula 1 face");
 #endif

@@ -1,5 +1,6 @@
 #include <new>
 #include "GoalAnimation.h"
+#include "NumericFont.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -24,7 +25,15 @@ static float randomFloat() {
 }
 
 static void drawText(Adafruit_GFX *d, int x, int y, const char *text, uint16_t color, uint8_t size) {
-  for (; *text; text++, x += 6 * size) d->drawChar(x, y, *text, color, color, size);
+  for (; *text; text++, x += 6 * size) {
+    if (numericfont::enabled() && *text >= '0' && *text <= '9') {
+      for (int gy = 0; gy < 7; gy++)
+        for (int gx = 0; gx < 4; gx++)
+          if (numericfont::smallPixel(*text - '0', gx, gy)) d->fillRect(x + gx * size, y + gy * size, size, size, color);
+    } else {
+      d->drawChar(x, y, *text, color, color, size);
+    }
+  }
 }
 
 // First and last lit column of a character when drawn at this size, so things can be centred on
@@ -32,7 +41,8 @@ static void drawText(Adafruit_GFX *d, int x, int y, const char *text, uint16_t c
 static void inkColumns(char c, uint8_t size, int &first, int &last) {
   static GFXcanvas1 glyph(6 * 3, 8 * 3);  // up to size 3
   glyph.fillScreen(0);
-  glyph.drawChar(0, 0, c, 1, 0, size);
+  char text[2] = {c, 0};
+  drawText(&glyph, 0, 0, text, 1, size);
   first = 6 * size;
   last = -1;
   for (int gx = 0; gx < 6 * size; gx++)
@@ -47,7 +57,8 @@ void drawTwoToneText(Adafruit_GFX *d, int x, int y, const char *text, uint16_t t
   static GFXcanvas1 glyph(6 * 2, 8 * 2);  // one character, up to size 2
   for (; *text; text++, x += 6 * size) {
     glyph.fillScreen(0);
-    glyph.drawChar(0, 0, *text, 1, 0, size);
+    char letter[2] = {*text, 0};
+    drawText(&glyph, 0, 0, letter, 1, size);
     for (int gy = 0; gy < 8 * size; gy++)
       for (int gx = 0; gx < 6 * size; gx++)
         if (glyph.getPixel(gx, gy)) d->drawPixel(x + gx, y + gy, gy < 4 * size ? top : bottom);

@@ -4,7 +4,7 @@ import gzip, os, re
 Import("env")
 
 src = os.path.join(env["PROJECT_DIR"], "lib", "cw-commons", "settings.html")
-dst = os.path.join(env.subst("$BUILD_DIR"), "SettingsWebPage.h")
+dst = os.path.join(env.subst("$BUILD_DIR"), "GeneratedSettingsWebPage.h")
 os.makedirs(os.path.dirname(dst), exist_ok=True)
 env.Prepend(CPPPATH=[os.path.dirname(dst)])
 

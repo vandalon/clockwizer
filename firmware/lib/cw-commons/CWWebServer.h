@@ -4,7 +4,7 @@
 #include <ESPmDNS.h>
 #include <CWPreferences.h>
 #include "StatusController.h"
-#include <SettingsWebPage.h>
+#include <GeneratedSettingsWebPage.h>
 #include "AppIcon.h"
 #include "ClockPeers.h"
 #include "Birthdays.h"
@@ -423,6 +423,12 @@ struct ClockwiseWebServer
         ClockwiseParams::getInstance()->telnet = (value == "1");
       } else if (key == ClockwiseParams::getInstance()->PREF_BALL_ROLL) {
         ClockwiseParams::getInstance()->ballRoll = (value == "1");
+#ifdef CW_FOOTBALL_ONLY
+      } else if (key == ClockwiseParams::getInstance()->PREF_NUMBER_FONT) {
+        ClockwiseParams::getInstance()->numberFont = constrain(value.toInt(), 0, 1);
+      } else if (key == ClockwiseParams::getInstance()->PREF_SHOW_RANKINGS) {
+        ClockwiseParams::getInstance()->showRankings = (value == "1");
+#endif
       } else if (key == ClockwiseParams::getInstance()->PREF_TIME_STYLE) {
         ClockwiseParams::getInstance()->timeStyle = constrain(value.toInt(), 0, 5);
       } else if (key == ClockwiseParams::getInstance()->PREF_COLOR) {
@@ -484,6 +490,10 @@ struct ClockwiseWebServer
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_DISPLAY_HEIGHT, ClockwiseParams::getInstance()->displayHeight);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_BALL_ROLL, ClockwiseParams::getInstance()->ballRoll);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_TIME_STYLE, ClockwiseParams::getInstance()->timeStyle);
+#ifdef CW_FOOTBALL_ONLY
+    client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_NUMBER_FONT, ClockwiseParams::getInstance()->numberFont);
+    client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_SHOW_RANKINGS, ClockwiseParams::getInstance()->showRankings);
+#endif
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_COLOR, ClockwiseParams::getInstance()->color);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_GHOST1_COLOR, ClockwiseParams::getInstance()->ghost1Color);
     client.printf(HEADER_TEMPLATE_D, ClockwiseParams::getInstance()->PREF_GHOST2_COLOR, ClockwiseParams::getInstance()->ghost2Color);

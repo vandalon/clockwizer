@@ -95,6 +95,10 @@ with open(out, "w", encoding="utf-8") as f:
     for c, l, n, g, col, _ in LEAGUES:
         f.write('  {"%s", "%s", 0x%04X},\n' % (c, l, rgb565(col)))
     f.write("};\n\n")
+    f.write("#ifdef CW_FOOTBALL_ONLY\nstatic const char *const FOOTBALL_LEAGUE_NAMES[] = {\n")
+    for _, _, name, _, _, _ in LEAGUES:
+        f.write('  "%s",\n' % name)
+    f.write("};\n#endif\n\n")
     f.write("// For the settings page: [code, label, name, group]\n")
     f.write('static const char FOOTBALL_LEAGUES_JSON[] PROGMEM = R"JSON(%s)JSON";\n\n' % leagues_json)
     f.write("// Favourites to pick from: [ESPN team id, abbreviation, name, 'c'lub or 'n'ational team]\n")

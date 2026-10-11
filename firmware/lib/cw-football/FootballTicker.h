@@ -123,6 +123,16 @@ class FootballTicker {
     // The next card or substitution of a live match to show, false when there is none
     bool nextIncident(Incident &incident);
 
+#ifdef CW_FOOTBALL_ONLY
+    static const unsigned long STANDINGS_STEP_MS = 4000;
+    static size_t standingsSteps(size_t teams) {
+      return (teams + 5) / 6;
+    }
+    // A six-team window: scroll to the last row, hold four seconds, then the next competition
+    bool standingsPage(size_t page, String &competition, uint8_t &firstPosition, std::vector<String> &teams,
+                       std::vector<int16_t> &points, size_t &pageCount);
+#endif
+
 #if !defined(CW_FOOTBALL_ONLY)
     // The Formula 1 race, shown as one more page of the ticker while it runs
     struct Race {
@@ -162,6 +172,9 @@ class FootballTicker {
     bool _withRace = true;
 #endif
     bool _extras = false;
+#ifdef CW_FOOTBALL_ONLY
+    bool _showRankings = false;
+#endif
     uint32_t _resultWindowSecs = 0;
     // Parse buffer, allocated once at startup so a fragmented heap later on
     // can't make a download fail.
@@ -210,6 +223,9 @@ class FootballTicker {
     // Only used by the background task (extras)
     // ESPN league code -> its groups (a league is one group), each the team abbreviations from the top
     std::map<String, std::vector<std::vector<String>>> _tables;
+#ifdef CW_FOOTBALL_ONLY
+    std::map<String, std::vector<std::vector<int16_t>>> _tablePoints;
+#endif
     std::map<String, unsigned long> _tablesAt;  // millis() of each table's last download
 
     std::mutex _lock;

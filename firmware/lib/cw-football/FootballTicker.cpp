@@ -143,6 +143,15 @@ static const uint32_t MIN_FREE_BLOCK = 10000;    // below this largest free bloc
 // Data memory only: ESP.getFreeHeap() and getMaxAllocHeap() include 45 KB of instruction RAM that no data can use
 static size_t dataFree() { return heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 static size_t dataBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
+
+#ifdef CW_FOOTBALL_ONLY
+static bool nationalTeamCompetition(const char *code) {
+  static const char *const national[] = {"uefa.nations", "fifa.world", "uefa.euro", "fifa.worldq.uefa", "uefa.euroq"};
+  for (const char *entry : national)
+    if (strcmp(code, entry) == 0) return true;
+  return false;
+}
+#endif
 static const size_t MAX_UPCOMING = 24;  // a Champions League evening kicks off nine at once
 
 // The debug messages go to the serial port and the telnet server. One lock: the ticker task and the clock loop
@@ -510,6 +519,9 @@ bool FootballTicker::loadConfig() {
   // Looked at every couple of seconds, so read into fixed buffers: Strings are only made when something changed
   static char leagues[401], favourites[401];  // the settings page keeps them to 400 characters
   static char lastLeagues[401] = "\x01", lastFavourites[401];  // the first call always finds a change
+#ifdef CW_FOOTBALL_ONLY
+  static int lastShowRankings = -1;
+#endif
   Preferences prefs;
   prefs.begin("clockwise", true);
   // A missing key is the default; the buffer version of getString() logs an error for one, so ask first
@@ -518,29 +530,57 @@ bool FootballTicker::loadConfig() {
   };
   read(PREF_LEAGUES, leagues, CW_DEFAULT_FOOTBALL_LEAGUES);
   read(PREF_FAVOURITES, favourites, CW_DEFAULT_FOOTBALL_TEAMS);
+#ifdef CW_FOOTBALL_ONLY
+  bool showRankings = prefs.getBool(ClockwiseParams::getInstance()->PREF_SHOW_RANKINGS, false);
+#endif
   _pageMs = constrain(prefs.getUInt("matchSecs", 8), 3, 60) * 1000UL;
   prefs.end();
-  if (strcmp(leagues, lastLeagues) == 0 && strcmp(favourites, lastFavourites) == 0) return false;
+  bool leaguesChanged = strcmp(leagues, lastLeagues) != 0;
+  bool favouritesChanged = strcmp(favourites, lastFavourites) != 0;
+#ifdef CW_FOOTBALL_ONLY
+  bool rankingsChanged = lastShowRankings < 0 || showRankings != (lastShowRankings != 0);
+  lastShowRankings = showRankings;
+#else
+  bool rankingsChanged = false;
+#endif
+  if (!leaguesChanged && !favouritesChanged && !rankingsChanged) return false;
   strlcpy(lastLeagues, leagues, sizeof(lastLeagues));
   strlcpy(lastFavourites, favourites, sizeof(lastFavourites));
 
-  _leagues.clear();
-  for (const String &code : splitList(String(leagues))) {
-    const FootballLeague *league = findLeague(code);
-    if (league && _leagues.size() < MAX_LEAGUES) _leagues.push_back(league);
+  if (leaguesChanged) {
+    std::vector<const FootballLeague *> followed;
+    for (const String &code : splitList(String(leagues))) {
+      const FootballLeague *league = findLeague(code);
+      if (league && followed.size() < MAX_LEAGUES) followed.push_back(league);
+    }
+    std::lock_guard<std::mutex> guard(_lock);
+    _leagues.swap(followed);
   }
-  _favourites.clear();
-  for (const String &item : splitList(String(favourites))) {
-    int first = item.indexOf(':'), last = item.lastIndexOf(':');
-    if (first <= 0 || last <= first || _favourites.size() >= MAX_FAVOURITES) continue;
-    Favourite fav;
-    fav.id = item.substring(0, first);
-    fav.abbreviation = item.substring(first + 1, last);
-    fav.national = item.substring(last + 1) == "n";
-    _favourites.push_back(fav);
+  if (favouritesChanged) {
+    _favourites.clear();
+    for (const String &item : splitList(String(favourites))) {
+      int first = item.indexOf(':'), last = item.lastIndexOf(':');
+      if (first <= 0 || last <= first || _favourites.size() >= MAX_FAVOURITES) continue;
+      Favourite fav;
+      fav.id = item.substring(0, first);
+      fav.abbreviation = item.substring(first + 1, last);
+      fav.national = item.substring(last + 1) == "n";
+      _favourites.push_back(fav);
+    }
   }
+#ifdef CW_FOOTBALL_ONLY
+  if (rankingsChanged) {
+    _showRankings = showRankings;
+    if (!showRankings) {
+      std::lock_guard<std::mutex> guard(_lock);
+      _tablePoints.clear();
+    }
+    _tablesAt.clear();
+    if (!leaguesChanged && !favouritesChanged) _footballNextAt = 0;
+  }
+#endif
   logf("[Football] Following %d leagues and %d favourites\n", _leagues.size(), _favourites.size());
-  return true;
+  return leaguesChanged || favouritesChanged;
 }
 
 bool FootballTicker::followsLeague(const String &code) {
@@ -723,6 +763,12 @@ void FootballTicker::refreshTables(const MatchList &matches, const std::vector<c
   };
   for (const Match *m : matches) add(*m);
   for (const Match *m : coming) add(*m);
+#ifdef CW_FOOTBALL_ONLY
+  if (_showRankings)
+    for (const FootballLeague *league : _leagues)
+      if (!nationalTeamCompetition(league->code) &&
+          std::find(leagues.begin(), leagues.end(), league->code) == leagues.end()) leagues.push_back(league->code);
+#endif
 
   for (const String &league : leagues) {
     auto at = _tablesAt.find(league);
@@ -731,7 +777,14 @@ void FootballTicker::refreshTables(const MatchList &matches, const std::vector<c
     char url[112];
     snprintf(url, sizeof(url), "http://site.api.espn.com/apis/v2/sports/soccer/%s/standings", league.c_str());
     espn::Groups table;
+#ifdef CW_FOOTBALL_ONLY
+    espn::GroupPoints points;
+    if (!getScan(url, [&](JsonScan::Next read, void *source) {
+          return espn::parseStandings(read, source, table, _showRankings ? &points : nullptr);
+        })) continue;
+#else
     if (!getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseStandings(read, source, table); })) continue;
+#endif
     std::vector<std::vector<String>> groups;
     for (const auto &group : table) {
       std::vector<String> teams;
@@ -739,9 +792,61 @@ void FootballTicker::refreshTables(const MatchList &matches, const std::vector<c
       groups.push_back(teams);
     }
     logf("[Football] Table %s: %d groups\n", league.c_str(), groups.size());
+    std::lock_guard<std::mutex> guard(_lock);
     _tables[league].swap(groups);
+#ifdef CW_FOOTBALL_ONLY
+    if (_showRankings) _tablePoints[league].swap(points);
+#endif
   }
 }
+
+#ifdef CW_FOOTBALL_ONLY
+// Each page advances six rows; the last page reaches the bottom before the next competition.
+bool FootballTicker::standingsPage(size_t page, String &competition, uint8_t &firstPosition, std::vector<String> &teams,
+                                  std::vector<int16_t> &points, size_t &pageCount) {
+  std::lock_guard<std::mutex> guard(_lock);
+  pageCount = 0;
+  teams.clear();
+  points.clear();
+  for (const FootballLeague *league : _leagues) {
+    if (nationalTeamCompetition(league->code)) continue;
+    auto table = _tables.find(league->code);
+    if (table == _tables.end()) continue;
+    for (const auto &group : table->second)
+      pageCount += standingsSteps(group.size());
+  }
+  if (!pageCount) return false;
+  page %= pageCount;
+  for (const FootballLeague *league : _leagues) {
+    if (nationalTeamCompetition(league->code)) continue;
+    auto table = _tables.find(league->code);
+    if (table == _tables.end()) continue;
+    for (size_t g = 0; g < table->second.size(); g++) {
+      const auto &group = table->second[g];
+      size_t groupPages = standingsSteps(group.size());
+      if (page >= groupPages) {
+        page -= groupPages;
+        continue;
+      }
+      competition = FOOTBALL_LEAGUE_NAMES[league - FOOTBALL_LEAGUES];
+      if (table->second.size() > 1) {
+        competition += " ";
+        competition += char('A' + g);
+      }
+      size_t first = std::min(page * 6, group.size() > 6 ? group.size() - 6 : size_t(0));
+      firstPosition = first + 1;
+      auto scores = _tablePoints.find(league->code);
+      for (size_t i = first; i < std::min(first + 6, group.size()); i++) {
+        teams.push_back(group[i]);
+        points.push_back(scores != _tablePoints.end() && g < scores->second.size() && i < scores->second[g].size()
+                             ? scores->second[g][i] : INT16_MIN);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+#endif
 
 // The places of both teams, only when they are in the same group: in a knockout round the
 // teams come from different groups, and their group places mean nothing there
@@ -1125,14 +1230,22 @@ void FootballTicker::buildOverview(const MatchList &matches, const std::vector<c
                                   time_t nowUtc) {
   Overview o;
   std::vector<const Match *> finished, next;
+  uint32_t today = _dateTime->localNow() / SECS_PER_DAY;
   for (const Match *mp : matches) {
     const Match &m = *mp;
     if (m.state == 'i') o.live.push_back(toEntry(m));
-    if (m.state == 'f' && (!_resultWindowSecs || m.endedAt + (time_t)_resultWindowSecs > nowUtc)) finished.push_back(mp);
+    bool playedToday = _dateTime->utcToLocal(m.kickoff) / SECS_PER_DAY == today;
+    if (m.state == 'f' && (playedToday || !_resultWindowSecs || m.endedAt + (time_t)_resultWindowSecs > nowUtc))
+      finished.push_back(mp);
     if (m.state == 'p') next.push_back(mp);
   }
   std::stable_partition(o.live.begin(), o.live.end(), [](const Entry &e) { return e.favourite; });
-  std::sort(finished.begin(), finished.end(), [](const Match *a, const Match *b) { return a->endedAt > b->endedAt; });
+  std::sort(finished.begin(), finished.end(), [&](const Match *a, const Match *b) {
+    bool aToday = _dateTime->utcToLocal(a->kickoff) / SECS_PER_DAY == today;
+    bool bToday = _dateTime->utcToLocal(b->kickoff) / SECS_PER_DAY == today;
+    if (aToday != bToday) return aToday;
+    return a->endedAt > b->endedAt;
+  });
   finished.resize(std::min(finished.size(), MAX_SHOWN));
   for (const Match *m : finished) o.finished.push_back(toEntry(*m));
 

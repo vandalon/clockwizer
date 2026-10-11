@@ -21,7 +21,10 @@ struct NextMatchScan {
 
 struct StandingsScan {
   Groups *out;
+  GroupPoints *points = nullptr;
   int group = -1;
+  int entry = -1, stat = -1, value = INT16_MIN;
+  bool isPoints = false;
   static void leaf(void *sink, const char (*p)[JsonScan::KEY], int n, const char *v, bool) {
     StandingsScan &s = *(StandingsScan *)sink;
     // Any value of an entry counts the entry, so a team without an abbreviation keeps its place in the table
@@ -30,10 +33,29 @@ struct StandingsScan {
     if (g != s.group) {
       s.group = g;
       s.out->emplace_back();
+      if (s.points) s.points->emplace_back();
+      s.entry = -1;
     }
     std::vector<std::string> &teams = s.out->back();
     if ((int)teams.size() <= k) teams.resize(k + 1);
     if (jsonPathIs(p, n, "children.*.standings.entries.*.team.abbreviation")) teams[k] = v;
+    if (!s.points) return;
+    auto &points = s.points->back();
+    if ((int)points.size() <= k) points.resize(k + 1, INT16_MIN);
+    if (k != s.entry) {
+      s.entry = k;
+      s.stat = -1;
+    }
+    if (n != 8 || strcmp(p[5], "stats")) return;
+    int stat = indexAt(p, 6);
+    if (stat != s.stat) {
+      s.stat = stat;
+      s.isPoints = false;
+      s.value = INT16_MIN;
+    }
+    if (!strcmp(p[7], "name")) s.isPoints = !strcmp(v, "points");
+    else if (!strcmp(p[7], "value")) s.value = atoi(v);
+    if (s.isPoints && s.value != INT16_MIN) points[k] = s.value;
   }
 };
 
@@ -196,9 +218,10 @@ bool parseNextMatch(JsonScan::Next next, void *source, NextMatch &out) {
   return JsonScan::read(next, source, NextMatchScan::leaf, &scan);
 }
 
-bool parseStandings(JsonScan::Next next, void *source, Groups &out) {
+bool parseStandings(JsonScan::Next next, void *source, Groups &out, GroupPoints *points) {
   StandingsScan scan;
   scan.out = &out;
+  scan.points = points;
   return JsonScan::read(next, source, StandingsScan::leaf, &scan);
 }
 

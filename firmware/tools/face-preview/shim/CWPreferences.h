@@ -5,6 +5,8 @@ struct ClockwiseParams {
   uint16_t resultMins = 120;
   bool ballRoll = true;
   uint8_t timeStyle = 2;
+  uint8_t numberFont = 0;
+  bool showRankings = false;
   uint8_t displayHeight = 64;
   bool showF1 = false;
   uint8_t color = 0;
