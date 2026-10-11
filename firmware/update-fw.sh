@@ -10,6 +10,7 @@
 #                               (clocks already running the same build are skipped)
 #   ./update-fw.sh -g           build + publish all clockfaces to GitHub Pages instead
 #   ./update-fw.sh -g 0B        ...or only the Football one
+#   ./update-fw.sh -t 0C        test build: build only, upload and publish nothing, and say where the .bin is
 #   ./update-fw.sh -h           this help
 #
 # Faces are named by the last two characters of their id (05 for 0x05); none named means all
@@ -40,6 +41,7 @@ PAGES_BRANCH=gh-pages
 INSTALL=0
 DISCOVER=0
 DRY=0
+TEST=0
 HOSTS=()
 GITHUB=0
 while [[ "${1:-}" == -* ]]; do
@@ -48,6 +50,7 @@ while [[ "${1:-}" == -* ]]; do
 		-H) [ $# -ge 2 ] || { echo "-H needs an address" >&2; exit 1; }
 			HOSTS+=("$2"); INSTALL=1; shift ;;
 		-n) DRY=1 ;;
+		-t) TEST=1 ;;
 		-h|--help) usage; exit 0 ;;
 		-g) GITHUB=1 ;;
 		*) echo "Unknown option $1 (try -h)" >&2; exit 1 ;;
@@ -84,6 +87,14 @@ for f in "${FACES[@]}"; do
 	# Panels compare this with their own firmware md5 to spot new builds
 	md5sum "$STAGE/cw-cf-0x$f.bin" | cut -d' ' -f1 > "$STAGE/cw-cf-0x$f.md5"
 done
+if [ $TEST -eq 1 ]; then
+	# Nothing leaves this machine: the builds stay in .pio/build
+	echo "Test build, nothing uploaded or published:"
+	for f in "${FACES[@]}"; do
+		echo "  .pio/build/cw-cf-0x$f/firmware.bin  ($(wc -c < "$STAGE/cw-cf-0x$f.bin" | tr -d ' ') bytes, md5 $(cat "$STAGE/cw-cf-0x$f.md5"))"
+	done
+	exit 0
+fi
 if [ $GITHUB -eq 1 ]; then
 	REMOTE=$(git remote get-url origin)
 	PAGES=$(mktemp -d)
