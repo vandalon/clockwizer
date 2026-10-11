@@ -39,6 +39,7 @@ class F1LiveState {
     int totalLaps() const { return _totalLaps; }
     int part() const { return _part; }  // qualifying: which part, 0 when not known
     bool finished() const { return _finished; }  // the session's own status says it is over: the chequered flag is out
+    long finishedUtc() const { return _finishedUtc; }  // timestamp of the chequered flag, recovered from SessionData
     char flag() const { return _flag; }  // 'y' yellow, 's' safety car, 'v' virtual safety car, 'r' red, 0 clear
     bool hasOrder() const;
 
@@ -65,6 +66,7 @@ class F1LiveState {
       uint8_t improvedPart = 0;
       bool inPit = false;
       bool finished = false;
+      bool retired = false;
     };
 
     struct Feed;
@@ -77,6 +79,10 @@ class F1LiveState {
     int _lap = 0, _totalLaps = 0, _part = 0;
     char _flag = 0;
     bool _finished = false;
+    long _finishedUtc = 0;
+    char _statusIndex[JsonScan::KEY] = "";
+    long _statusUtc = 0;
+    bool _statusFinished = false, _pendingFinished = false;
     char _topic[20] = "";  // an update names its topic first: what the Status that follows is the status of
     long _clockUtc = 0, _clockLeft = 0;  // the time left, at that moment
     bool _clockRunning = false;

@@ -44,6 +44,7 @@ class F1Ticker {
       int period = 0;         // the lap, for races
       int totalLaps = 0;      // of the race, from the live feed
       char clock[8] = "";     // time left, for practice and qualifying
+      time_t finishedAt = 0;  // UTC of the leader taking the flag, from the live feed
       time_t start = 0;       // UTC
       char status = 0;        // a session still to come: 'd' delayed (its start has passed), 'n' it has a new start time
       uint32_t eventId = 0, id = 0;  // ESPN's, for the times

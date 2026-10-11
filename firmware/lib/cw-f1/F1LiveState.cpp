@@ -17,6 +17,7 @@ void F1LiveState::reset() {
   _lap = _totalLaps = 0;
   _flag = 0;
   _finished = false;
+  _finishedUtc = 0;
   _topic[0] = 0;
 }
 
@@ -74,10 +75,31 @@ void F1LiveState::leaf(const char (*path)[JsonScan::KEY], int n, const char *val
     strlcpy(_topic, value, sizeof(_topic));
     return;
   }
+  // A live SessionStatus update carries its UTC timestamp as the third argument.
+  if (n == 2 && text && !snapshot && !strcmp(path[0], "arguments") && !strcmp(path[1], "2")) {
+    if (_pendingFinished && !strcmp(_topic, "SessionStatus")) {
+      long utc = parseUtc(value);
+      if (utc > 0 && (!_finishedUtc || utc < _finishedUtc)) _finishedUtc = utc;
+    }
+    _pendingFinished = false;
+    return;
+  }
   if (n < 3 || (!snapshot && strcmp(path[0], "arguments"))) return;
   const char (*r)[JsonScan::KEY] = path + 2;
   int rn = n - 2;
-  if (snapshot && rn == 2 && !strcmp(path[1], "DriverList")) {
+  const char *topic = snapshot ? path[1] : _topic;
+  if (rn == 3 && !strcmp(topic, "SessionData") && !strcmp(r[0], "StatusSeries")) {
+    // The subscription snapshot includes the original finish timestamp, even after a reboot.
+    // Keep each history entry's fields together, whichever order they arrive in.
+    if (strcmp(_statusIndex, r[1])) {
+      strlcpy(_statusIndex, r[1], sizeof(_statusIndex));
+      _statusUtc = 0;
+      _statusFinished = false;
+    }
+    if (text && !strcmp(r[2], "Utc")) _statusUtc = parseUtc(value);
+    else if (text && !strcmp(r[2], "SessionStatus")) _statusFinished = !strcmp(value, "Finished");
+    if (_statusFinished && _statusUtc > 0 && (!_finishedUtc || _statusUtc < _finishedUtc)) _finishedUtc = _statusUtc;
+  } else if (snapshot && rn == 2 && !strcmp(path[1], "DriverList")) {
     Driver *d = driver(atoi(r[0]));
     if (!d) return;
     if (!strcmp(r[1], "Tla") && text) setText(d->code, sizeof(d->code), value);
@@ -91,7 +113,8 @@ void F1LiveState::leaf(const char (*path)[JsonScan::KEY], int n, const char *val
       const char *topic = snapshot ? path[1] : _topic;
       if (!strcmp(topic, "SessionStatus")) {  // Started, Finished (the chequered flag), Finalised, Ends
         if (!strcmp(value, "Finished") || !strcmp(value, "Finalised") || !strcmp(value, "Ends")) _finished = true;
-        else if (!strcmp(value, "Started") || !strcmp(value, "Inactive")) _finished = false;
+        else if (!strcmp(value, "Started") || !strcmp(value, "Inactive")) { _finished = false; _finishedUtc = 0; }
+        _pendingFinished = !snapshot && !strcmp(value, "Finished");
       } else {
         // 1 clear, 2 yellow, 4 safety car, 5 red, 6 and 7 virtual safety car
         int status = atoi(value);
@@ -112,6 +135,7 @@ void F1LiveState::leaf(const char (*path)[JsonScan::KEY], int n, const char *val
     if (rn == 3) {
       if (!strcmp(field, "Position")) d->position = atoi(value);
       else if (!strcmp(field, "InPit")) d->inPit = !strcmp(value, "true");
+      else if (!strcmp(field, "Retired")) d->retired = !strcmp(value, "true");
       else if (!strcmp(field, "Status")) d->finished = atoi(value) == 1088;  // individual chequered flag, including lapped finishers
       else if (!text) return;
       else if (!strcmp(field, "GapToLeader")) setText(d->gap, sizeof(d->gap), value);
@@ -154,6 +178,10 @@ void F1LiveState::feedLeaf(void *sink, const char (*path)[JsonScan::KEY], int n,
 bool F1LiveState::applyStream(int (*next)(void *), void *source, std::mutex *lock) {
   Feed feed{this, lock, false};
   _pendingClock = false;
+  _pendingFinished = false;
+  _statusIndex[0] = 0;
+  _statusUtc = 0;
+  _statusFinished = false;
   _pendingRunning = false;
   _pendingUtc = 0;
   JsonScan::read(next, source, feedLeaf, &feed);
@@ -180,7 +208,7 @@ uint32_t F1LiveState::displayHash() const {
     if (!d.number) continue;
     h = hashText(h, d.code);
     h = (h ^ d.position) * 16777619u;
-    h = (h ^ (d.inPit ? 1u : 0u) ^ (d.finished ? 2u : 0u)) * 16777619u;
+    h = (h ^ (d.inPit ? 1u : 0u) ^ (d.finished ? 2u : 0u) ^ (d.retired ? 4u : 0u)) * 16777619u;
     h = hashText(hashText(hashText(hashText(h, d.gap), d.interval), d.diff), d.best);
     for (int p = 0; p < 3; p++) h = hashText(hashText(h, d.bestQ[p]), d.diffQ[p]);
   }
@@ -224,7 +252,7 @@ int F1LiveState::top(char tag, Row *rows, bool intervals) const {
     const char *text = "";
     bool leader = d.position == 1;
     if (tag == 'R' || tag == 'S') {
-      text = leader ? "LEAD" : intervals && !_finished ? d.interval : d.gap;
+      text = _finished && d.retired && !d.finished ? "DNF" : leader ? "LEAD" : intervals && !_finished ? d.interval : d.gap;
     } else if (tag == 'P') {
       text = leader ? d.best : d.diff;
     } else {  // qualifying: the latest part that has a time

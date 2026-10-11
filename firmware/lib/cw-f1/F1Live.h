@@ -35,7 +35,7 @@ class F1Live {
     bool fresh();
 
     // The first places with their times, when the feed is up to date. Returns false when it isn't.
-    bool get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &totalLaps, char &flag, bool &finished, bool intervals = false);
+    bool get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &totalLaps, char &flag, bool &finished, long &finishedUtc, bool intervals = false);
 
     // Seconds left on the session clock, -1 when not known
     int clockSecs(long nowUtc);

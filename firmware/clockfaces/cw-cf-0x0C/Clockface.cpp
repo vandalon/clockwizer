@@ -718,7 +718,7 @@ static void drawPlace(MatrixPanel_I2S_DMA *d, int place, const F1Ticker::Row &ro
     d->drawFastHLine(26, top + 2 * dy, 5, color);
   }
   if (!row.time[0] && loadingTimes) drawTimeRight(d, loadingDots(), W - 2, y, TIME_GREY);
-  else drawTimeRight(d, row.time, W - 2, y, placeInk(race && row.finished ? MINUTES : row.improved ? rgb(60, 230, 90) : place > 1 || !strcmp(row.time, "NO TIME") ? TIME_GREY : race ? MINUTES : FASTEST));  // green: a better lap just now
+  else drawTimeRight(d, race && !strcmp(row.time, "RETIRED") ? "DNF" : row.time, W - 2, y, placeInk(race && row.finished ? MINUTES : row.improved ? rgb(60, 230, 90) : place > 1 || !strcmp(row.time, "NO TIME") ? TIME_GREY : race ? MINUTES : FASTEST));  // green: a better lap just now
 }
 
 // Who moved up or down at the last change of the order, and until when it is shown
@@ -1397,12 +1397,15 @@ static void drawLoadingCars(MatrixPanel_I2S_DMA *d, int y) {
   static unsigned long started = 0;
   static int speed = 0, gap = 0, spacing = 0, firstColor = 0, lastColor = 0;
   static uint16_t secondColor = 0;
+  static int8_t firstHeight = 0, secondHeight = 0;
   unsigned long now = millis();
   if (!speed || now - started >= (unsigned long)((W + 13 + spacing) * speed + gap)) {
     started = now;
     speed = random(25, 46);  // milliseconds per pixel: cars have different speeds
     gap = random(300, 1501);
     spacing = random(3) == 0 ? random(18, 31) : 0;
+    firstHeight = random(-1, 2);  // a small vertical variation, fixed for each pass
+    secondHeight = random(-1, 2);
     firstColor = (lastColor + 1 + random(5)) % 6;
     lastColor = firstColor;
     if (spacing) {
@@ -1412,8 +1415,8 @@ static void drawLoadingCars(MatrixPanel_I2S_DMA *d, int y) {
   }
   loadingCarsShown = true;
   int x = (int)((now - started) / speed) - 13;
-  drawCar(d, x, y, COLORS[firstColor]);
-  if (spacing) drawCar(d, x - spacing, y, secondColor);
+  drawCar(d, x, y + firstHeight, COLORS[firstColor]);
+  if (spacing) drawCar(d, x - spacing, y + secondHeight, secondColor);
 }
 
 // 32 rows: the line under the clock. Idle: the top three of the championship, then the next Grand Prix.
@@ -1907,20 +1910,23 @@ void Clockface::update() {
   }
 
   // Practice and the last part of qualifying are over when the live feed says so, or 3 minutes after the clock hit 0:00,
-  // however long ESPN takes to say it: the live order becomes the result of the session
+  // however long ESPN takes to say it. Races allow 5 minutes after the leader finishes for the rest of the field.
   static uint32_t timeUpId = 0, closedId = 0;
   static unsigned long timeUpAt = 0;
   if (snap.live.valid && snap.live.id) {
+    bool race = snap.live.tag == 'R' || snap.live.tag == 'S';
     bool last = snap.live.tag == 'P' || (snap.live.tag == 'Q' && qPart(snap.live) == 3);
-    bool timeUp = last && (snap.live.finished || !strcmp(snap.live.clock, "0:00"));
+    bool timeUp = race ? snap.live.finished && snap.live.finishedAt > 0 : last && (snap.live.finished || !strcmp(snap.live.clock, "0:00"));
+    unsigned long timeout = (race ? 5 : 3) * 60 * 1000UL;
     bool close = snap.live.id == closedId || (last && snap.live.fromFeed && snap.live.finished);  // the feed says it is over
     if (!close && timeUp) {
       if (timeUpId != snap.live.id || !timeUpAt) {
         timeUpId = snap.live.id;
         timeUpAt = millis();
-        Serial.printf("[face] %s: clock at 0:00, results in 3 minutes unless the feed says it is over\n", snap.live.name);
+        if (race) Serial.printf("[face] %s: leader finished %ld s ago, results 5 minutes after the finish\n", snap.live.name, (long)(cwt::now() - snap.live.finishedAt));
+        else Serial.printf("[face] %s: clock at 0:00, results in 3 minutes unless the feed says it is over\n", snap.live.name);
       }
-      else if (millis() - timeUpAt > 3 * 60 * 1000UL) { closedId = snap.live.id; close = true; }
+      if (race ? cwt::now() >= snap.live.finishedAt + 5 * 60 : millis() - timeUpAt >= timeout) { closedId = snap.live.id; close = true; }
     } else if (!timeUp) {
       timeUpAt = 0;
     }
@@ -1928,7 +1934,7 @@ void Clockface::update() {
       static uint32_t loggedId = 0;
       if (loggedId != snap.live.id) {
         loggedId = snap.live.id;
-        Serial.printf("[face] %s is over (%s), showing the results\n", snap.live.name, snap.live.finished ? "the feed says so" : "3 minutes after 0:00");
+        Serial.printf("[face] %s is over (%s), showing the results\n", snap.live.name, race ? "5 minutes after the leader finished" : snap.live.finished ? "the feed says so" : "3 minutes after 0:00");
       }
       closedId = snap.live.id;
       snap.last = snap.live;

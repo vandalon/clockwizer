@@ -54,7 +54,7 @@ bool F1Live::fresh() {
   return _lastData && millis() - _lastData <= FRESH_MS && _state.hasOrder();
 }
 
-bool F1Live::get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &totalLaps, char &flag, bool &finished, bool intervals) {
+bool F1Live::get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &totalLaps, char &flag, bool &finished, long &finishedUtc, bool intervals) {
   std::lock_guard<std::mutex> guard(_lock);
   if (!_lastData || millis() - _lastData > FRESH_MS || !_state.hasOrder()) return false;
   count = _state.top(tag, rows, intervals);
@@ -62,6 +62,7 @@ bool F1Live::get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &to
   totalLaps = _state.totalLaps();
   flag = _state.flag();
   finished = _state.finished();
+  finishedUtc = _state.finishedUtc();
   return count > 0;
 }
 
@@ -318,7 +319,7 @@ void F1Live::run() {
   stream.sendText("{\"protocol\":\"json\",\"version\":1}\x1e");
   stream.nextMessage();  // the empty answer, {}
   stream.sendText("{\"type\":1,\"target\":\"Subscribe\",\"invocationId\":\"1\",\"arguments\":[[\"DriverList\",\"TimingData\","
-                  "\"LapCount\",\"TrackStatus\",\"SessionStatus\",\"ExtrapolatedClock\"]]}\x1e");
+                  "\"LapCount\",\"TrackStatus\",\"SessionStatus\",\"SessionData\",\"ExtrapolatedClock\"]]}\x1e");
   liveLog("[F1 live] subscribed (heap free %u, largest block %u, stack left %u)\n", (unsigned)dataFree(), (unsigned)dataBlock(),
           (unsigned)uxTaskGetStackHighWaterMark(nullptr));
   {

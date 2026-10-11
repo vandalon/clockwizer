@@ -88,7 +88,7 @@ static void keepTimes(F1Ticker::Session &now, const F1Ticker::Session &old) {
   for (F1Ticker::Row &row : now.rows) {
     if (!row.code[0] || row.time[0]) continue;
     for (const F1Ticker::Row &before : old.rows)
-      if (before.time[0] && !strcmp(before.code, row.code)) {
+      if (before.time[0] && strcmp(before.time, "DNF") && strcmp(before.time, "RETIRED") && !strcmp(before.code, row.code)) {
         strlcpy(row.time, before.time, sizeof(row.time));
         break;
       }
@@ -104,7 +104,8 @@ void F1Ticker::snapshot(Snapshot &out, bool intervals) {
   int count = 0, lap = 0, totalLaps = 0;
   char flag = 0;
   bool finished = false;
-  if (out.live.valid && _live.get(out.live.tag, rows, count, lap, totalLaps, flag, finished, intervals)) {
+  long finishedUtc = 0;
+  if (out.live.valid && _live.get(out.live.tag, rows, count, lap, totalLaps, flag, finished, finishedUtc, intervals)) {
     for (int i = 0; i < ROWS; i++) {
       strlcpy(out.live.rows[i].code, rows[i].code, sizeof(out.live.rows[i].code));
       strlcpy(out.live.rows[i].time, rows[i].time, sizeof(out.live.rows[i].time));
@@ -117,6 +118,7 @@ void F1Ticker::snapshot(Snapshot &out, bool intervals) {
     out.live.totalLaps = totalLaps;
     out.live.flag = flag;
     out.live.finished = finished;
+    out.live.finishedAt = finishedUtc;
     bool intervalView = intervals && !finished && (out.live.tag == 'R' || out.live.tag == 'S');
     if (out.live.id && !intervalView) {  // save only gaps to leader, so cached and final results keep their meaning
       std::lock_guard<std::mutex> guard(_lock);
@@ -223,6 +225,10 @@ void F1Ticker::loadCache() {
   if (prefs.getBytesLength("liveRows") == sizeof(_saved)) {
     std::lock_guard<std::mutex> guard(_lock);
     prefs.getBytes("liveRows", &_saved, sizeof(_saved));
+    // Older firmware inferred retirement from missing times, including lapped finishers.
+    // Reconfirm these labels from current status data before showing them again.
+    for (Row &row : _saved.rows)
+      if (!strcmp(row.time, "DNF") || !strcmp(row.time, "RETIRED")) row.time[0] = 0;
     _savedFromFlash = true;
   }
   if (prefs.getBytesLength("cars") == sizeof(_cars)) {
@@ -589,9 +595,10 @@ unsigned long F1Ticker::fetchWeekend() {
         std::lock_guard<std::mutex> guard(_lock);
         if (_saved.id == snap.last.id)
           for (const Row &old : _saved.rows)
-            if (old.fastest)
-              for (Row &row : snap.last.rows)
-                if (!strcmp(row.code, old.code)) row.fastest = true;
+            for (Row &row : snap.last.rows)
+              if (!strcmp(row.code, old.code)) {
+                if (old.fastest) row.fastest = true;
+              }
       }
       {
         std::lock_guard<std::mutex> guard(_lock);
@@ -782,12 +789,24 @@ struct TimesScan {
   }
 };
 
+// An explicit result status, with the number of laps completed. Missing totalTime alone says nothing about a DNF.
+struct FinishScan {
+  char status[24] = "";
+  int laps = -1;
+  static void leaf(void *sink, const char (*p)[JsonScan::KEY], int n, const char *v, bool) {
+    FinishScan &f = *(FinishScan *)sink;
+    if (jsonPathIs(p, n, "type.name")) strlcpy(f.status, v, sizeof(f.status));
+    else if (jsonPathIs(p, n, "period")) f.laps = atoi(v);
+  }
+};
+
 // Fills in the times of the first count drivers: ESPN's totalTime is the best lap in practice and
 // qualifying and the race time in a race, so the first place shows it (or LEAD in a race) and the others
 // their gap to it.
 void F1Ticker::fetchTimes(Session &session, int count) {
   f1At("fetch times");
   if (!session.id || !session.eventId) return;
+  bool race = session.tag == 'R' || session.tag == 'S';
   long ms[ROWS];
   bool failed = false;  // a request did not get through: not the same as an answer without a time
   char leader[12] = "";  // the first place's own text, "1:35.130"
@@ -801,12 +820,25 @@ void F1Ticker::fetchTimes(Session &session, int count) {
     TimesScan scan;
     if (!getScan(url, TimesScan::leaf, &scan)) { failed = true; continue; }
     scan.flush();
-    if (!scan.have) continue;
-    ms[i] = parseTimeMs(scan.total);
-    if (i == 0) strlcpy(leader, scan.total, sizeof(leader));
+    if (scan.have) {
+      ms[i] = parseTimeMs(scan.total);
+      if (i == 0) strlcpy(leader, scan.total, sizeof(leader));
+    }
+    if (race && !session.live && (ms[i] < 0 || (ms[0] >= 0 && ms[i] < ms[0]))) {
+      snprintf(url, sizeof(url),
+               "http://sports.core.api.espn.com/v2/sports/racing/leagues/f1/events/%lu/competitions/%lu/competitors/%lu/status",
+               (unsigned long)session.eventId, (unsigned long)session.id, (unsigned long)session.rows[i].athleteId);
+      FinishScan finish;
+      if (!getScan(url, FinishScan::leaf, &finish)) { failed = true; continue; }
+      Row &row = session.rows[i];
+      if (!strcmp(finish.status, "STATUS_RETIRED")) strlcpy(row.time, "DNF", sizeof(row.time));
+      else if (!strcmp(finish.status, "STATUS_CLASSIFIED")) {
+        int lapsBehind = session.period - finish.laps;
+        if (finish.laps >= 0 && lapsBehind > 0) snprintf(row.time, sizeof(row.time), "+%dL", lapsBehind);
+      }
+    }
   }
 
-  bool race = session.tag == 'R' || session.tag == 'S';
   session.timeFails = failed ? 1 : 0;
   if (!failed && ms[0] >= 0) _renewed.times = cwt::now(), _renewed.timesFrom = "ESPN";
   if (ms[0] >= 0) {
@@ -814,7 +846,6 @@ void F1Ticker::fetchTimes(Session &session, int count) {
     for (int i = 1; i < count && i < ROWS; i++) {
       Row &row = session.rows[i];
       if (ms[i] >= ms[0]) formatGap(row.time, sizeof(row.time), ms[i] - ms[0]);
-      else if (race && !session.live && row.athleteId) strlcpy(row.time, "RETIRED", sizeof(row.time));  // no time: out of the race
     }
   }
   f1log("[F1] times %s: leader %ld ms\n", session.name, ms[0]);
