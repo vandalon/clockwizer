@@ -3,6 +3,7 @@
 #include "TeamColors.h"
 
 #include <algorithm>
+#include <esp_heap_caps.h>
 #include "EspnParse.h"
 #include <Fonts/Picopixel.h>
 #include <HTTPClient.h>
@@ -132,7 +133,10 @@ static const unsigned long STAGGER_MS = 15 * 1000UL;
 static const unsigned long FIRST_STAGGER_MS = 2 * 1000UL;  // leagues or teams that have no data yet follow each other quickly
 extern volatile bool firmwareUpdating;  // main.cpp
 static const uint32_t TASK_STACK_BYTES = 14336;  // a busy evening needs more than a quiet one (the retry without events)
-static const uint32_t MIN_FREE_BLOCK = 10000;    // below this largest free block a refresh is skipped: an out of memory aborts the chip
+static const uint32_t MIN_FREE_BLOCK = 10000;    // below this largest free block of data memory a refresh is skipped: an out of memory aborts the chip
+// Data memory only: ESP.getFreeHeap() and getMaxAllocHeap() include 45 KB of instruction RAM that no data can use
+static size_t dataFree() { return heap_caps_get_free_size(MALLOC_CAP_8BIT); }
+static size_t dataBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
 static const size_t MAX_UPCOMING = 24;  // a Champions League evening kicks off nine at once
 
 // The debug messages go to the serial port and the telnet server. One lock: the ticker task and the clock loop
@@ -187,10 +191,10 @@ void FootballTicker::task(void *self) {
       vTaskDelete(nullptr);
     }
     unsigned long wait = RETRY_MS;
-    if (ESP.getMaxAllocHeap() < MIN_FREE_BLOCK) {
+    if (dataBlock() < MIN_FREE_BLOCK) {
       // C++ exceptions are on: a failed allocation that nobody catches restarts the clock. Wait for the heap to recover.
-      logf("[Football] heap too low, skipping a refresh (free %u, largest block %u)\n", ESP.getFreeHeap(),
-           ESP.getMaxAllocHeap());
+      logf("[Football] heap too low, skipping a refresh (data free %u, largest block %u)\n", (unsigned)dataFree(),
+           (unsigned)dataBlock());
     } else {
       try {
         ticker->dropOldDay();
@@ -199,8 +203,8 @@ void FootballTicker::task(void *self) {
         if (ticker->_withRace) wait = std::min(wait, ticker->refreshRace());
 #endif
       } catch (const std::exception &e) {  // std::bad_alloc: keep the data of the last round
-        logf("[Football] out of memory in a refresh (%s), heap free %u, largest block %u\n", e.what(), ESP.getFreeHeap(),
-             ESP.getMaxAllocHeap());
+        logf("[Football] out of memory in a refresh (%s), data free %u, largest block %u\n", e.what(), (unsigned)dataFree(),
+             (unsigned)dataBlock());
         ticker->_fetching = false;
         ticker->_footballNextAt = millis() + RETRY_MS;
         wait = RETRY_MS;
@@ -372,7 +376,7 @@ unsigned long FootballTicker::refresh() {
   else if (laterToday) wait = TODAY_REFRESH_MS;
   wait = std::min(wait, untilMidnightMs(today));  // yesterday's scores go at midnight
   if (_deferred) wait = std::min(wait, _deferredFirst ? FIRST_STAGGER_MS : STAGGER_MS);
-  logf("[Football] refreshed, heap free %u, largest block %u, stack left %u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+  logf("[Football] refreshed, data free %u, largest block %u, stack left %u\n", (unsigned)dataFree(), (unsigned)dataBlock(),
        (unsigned)uxTaskGetStackHighWaterMark(nullptr));
   setStatus(OK);
   _footballNextAt = millis() + wait;
@@ -870,7 +874,7 @@ bool FootballTicker::getScanNow(const char *url, const std::function<bool(JsonSc
   bool ok = parse([](void *r) { return ((YieldingReader *)r)->read(); }, &reader);
   http.end();
   if (!ok) logf("[Football] %s: cut off or not JSON after %u bytes (heap free %u, largest block %u)\n", url,
-                (unsigned)reader.count, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+                (unsigned)reader.count, (unsigned)dataFree(), (unsigned)dataBlock());
   return ok;
 }
 
