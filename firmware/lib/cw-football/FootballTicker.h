@@ -4,6 +4,8 @@
 #include <Adafruit_GFX.h>
 #include <CWDateTime.h>
 #include <ArduinoJson.h>
+#include <JsonScan.h>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <vector>
@@ -242,6 +244,9 @@ class FootballTicker {
     void tablePositions(const Match &m, uint8_t &homePos, uint8_t &awayPos);
     bool getJson(const char *url, JsonDocument &filter);
     bool getJsonNow(const char *url, JsonDocument &filter);
+    // Downloads url and hands the text to parse (an espn::parse... call), without keeping the text or a tree of it
+    bool getScan(const char *url, const std::function<bool(JsonScan::Next, void *)> &parse);
+    bool getScanNow(const char *url, const std::function<bool(JsonScan::Next, void *)> &parse);
     void trackEndTimes(MatchList &matches, time_t nowUtc);
     void detectGoals(const MatchList &matches);
     void detectCards(const MatchList &matches);

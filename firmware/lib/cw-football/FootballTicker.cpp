@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <ArduinoJson.h>
+#include "EspnParse.h"
 #include <Fonts/Picopixel.h>
 #include <HTTPClient.h>
 #include <TelnetStream.h>
@@ -585,15 +586,10 @@ bool FootballTicker::fetchNextMatch(const char *teamId, String &league, time_t &
   char url[96];
   snprintf(url, sizeof(url), "http://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/%s", teamId);
 
-  StaticJsonDocument<256> filter;
-  JsonObject event = filter["team"]["nextEvent"].createNestedObject();
-  event["date"] = true;
-  event["league"]["slug"] = true;
-
-  if (!getJson(url, filter)) return false;
-  JsonObject next = (*_doc)["team"]["nextEvent"][0];
-  league = next["league"]["slug"] | "";
-  kickoff = parseEspnDate(next["date"] | "");
+  espn::NextMatch next;
+  if (!getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseNextMatch(read, source, next); })) return false;
+  league = next.league.c_str();
+  kickoff = parseEspnDate(next.date.c_str());
   return true;
 }
 
@@ -723,20 +719,19 @@ void FootballTicker::refreshTables(const MatchList &matches, const std::vector<c
   for (const Match *m : matches) add(*m);
   for (const Match *m : coming) add(*m);
 
-  StaticJsonDocument<256> filter;
-  filter["children"][0]["standings"]["entries"][0]["team"]["abbreviation"] = true;
   for (const String &league : leagues) {
     auto at = _tablesAt.find(league);
     if (at != _tablesAt.end() && millis() - at->second < TABLES_REFRESH_MS) continue;
     _tablesAt[league] = millis();  // also after a failure: a missing table only means no places
     char url[112];
     snprintf(url, sizeof(url), "http://site.api.espn.com/apis/v2/sports/soccer/%s/standings", league.c_str());
-    if (!getJson(url, filter)) continue;
+    espn::Groups table;
+    if (!getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseStandings(read, source, table); })) continue;
     std::vector<std::vector<String>> groups;
-    for (JsonObject child : (*_doc)["children"].as<JsonArray>()) {
+    for (const auto &group : table) {
       std::vector<String> teams;
-      for (JsonObject e : child["standings"]["entries"].as<JsonArray>()) teams.push_back(e["team"]["abbreviation"] | "");
-      if (!teams.empty()) groups.push_back(teams);
+      for (const std::string &abbreviation : group) teams.push_back(abbreviation.c_str());
+      groups.push_back(teams);
     }
     logf("[Football] Table %s: %d groups\n", league.c_str(), groups.size());
     _tables[league].swap(groups);
@@ -897,6 +892,38 @@ bool FootballTicker::fetchScoreboard(const char *league, time_t localDay, const 
 // Downloads url into _doc, keeping only the fields in filter
 bool FootballTicker::updating() {
   return _fetching || (_fetchEnded && millis() - _fetchEnded < 1500);
+}
+
+bool FootballTicker::getScan(const char *url, const std::function<bool(JsonScan::Next, void *)> &parse) {
+  _fetching = true;
+  bool ok = getScanNow(url, parse);
+  _fetching = false;
+  _fetchEnded = millis();
+  return ok;
+}
+
+bool FootballTicker::getScanNow(const char *url, const std::function<bool(JsonScan::Next, void *)> &parse) {
+  // Plain HTTP: public score data, and the ESP32's TLS client sometimes stalls
+  // after the first 16KB record of these ~50KB responses
+  WiFiClient client;
+  HTTPClient http;
+  http.useHTTP10(true);  // no chunked encoding, so the JSON can be streamed
+  http.setTimeout(10000);
+  if (!http.begin(client, url)) return false;
+
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    logf("[Football] %s: HTTP %d\n", url, code);
+    http.end();
+    return false;
+  }
+
+  YieldingReader reader(http.getStream(), 10000);
+  bool ok = parse([](void *r) { return ((YieldingReader *)r)->read(); }, &reader);
+  http.end();
+  if (!ok) logf("[Football] %s: cut off or not JSON after %u bytes (heap free %u, largest block %u)\n", url,
+                (unsigned)reader.count, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  return ok;
 }
 
 bool FootballTicker::getJson(const char *url, JsonDocument &filter) {
