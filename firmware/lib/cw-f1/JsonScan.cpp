@@ -76,7 +76,7 @@ struct Scanner {
   // One value whose key path is path[0..level)
   void value(int level) {
     if (failed) return;
-    if (level > JsonScan::MAX_DEPTH + 4) { failed = true; return; }
+    if (level > JsonScan::MAX_DEPTH + 10) { failed = true; return; }  // 20 deep, like ESPN needs (ArduinoJson had a limit of 20 too)
     space();
     int c = peek();
     if (c == '{') {

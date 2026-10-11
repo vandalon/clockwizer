@@ -780,7 +780,7 @@ static void surname(const char *fullName, char *out) {
 }
 
 // localDay = 0: no date, which gets the coming matchday. withEvents (and extras) also reads
-// the goals and cards; when they don't fit in _doc, the scoreboard is read again without them.
+// the goals and cards.
 bool FootballTicker::fetchScoreboard(const char *league, time_t localDay, const char *label, uint16_t color,
                                      const char *onlyTeam, std::vector<Match> &out, bool withEvents) {
   char url[128];
@@ -795,81 +795,44 @@ bool FootballTicker::fetchScoreboard(const char *league, time_t localDay, const 
   }
   withEvents &= _extras;
 
-  // A busy evening may not fit in _doc with the goals and cards: then the scoreboard is read again without
-  // them, the scores matter more. A loop, not a recursive call: the filter stays on the stack of the caller.
-  for (;;) {
-    bool ok;
-    {
-      StaticJsonDocument<1024> filter;
-      JsonObject event = filter["events"].createNestedObject();
-      event["id"] = true;
-      event["date"] = true;
-      event["status"]["type"]["state"] = true;
-      event["status"]["type"]["name"] = true;
-      event["status"]["type"]["shortDetail"] = true;
-      JsonObject team = event["competitions"][0]["competitors"].createNestedObject();
-      team["homeAway"] = true;
-      team["score"] = true;
-      team["team"]["abbreviation"] = true;
-      team["team"]["color"] = true;
-      team["team"]["alternateColor"] = true;
-      if (withEvents) {
-        team["id"] = true;
-        JsonObject detail = event["competitions"][0]["details"].createNestedObject();
-        detail["clock"]["value"] = true;
-        detail["team"]["id"] = true;
-        detail["scoringPlay"] = true;
-        detail["yellowCard"] = true;
-        detail["redCard"] = true;
-        JsonObject player = detail["athletesInvolved"].createNestedObject();
-        player["jersey"] = true;
-        player["displayName"] = true;
-      }
-      ok = getJson(url, filter);
-    }
-    if (ok) break;
-    if (!withEvents || !_lastNoMemory) return false;
-    withEvents = false;
-  }
+  std::vector<espn::ScoreEvent> events;
+  if (!getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseScoreboard(read, source, events, withEvents); }))
+    return false;
 
-  for (JsonObject e : (*_doc)["events"].as<JsonArray>()) {
-    String status = e["status"]["type"]["name"] | "";
-    if (status == "STATUS_POSTPONED" || status == "STATUS_CANCELED" || status == "STATUS_ABANDONED")
-      continue;
+  for (const espn::ScoreEvent &e : events) {
+    if (e.name == "STATUS_POSTPONED" || e.name == "STATUS_CANCELED" || e.name == "STATUS_ABANDONED") continue;
 
     Match m;
     m.label = label;
     m.league = league;
     m.competition = competitionCode(league, onlyTeam != nullptr && nationalFavourite(onlyTeam));
     m.color = color;
-    m.kickoff = parseEspnDate(e["date"] | "");
+    m.kickoff = parseEspnDate(e.date.c_str());
     if (m.kickoff == 0) continue;
-    m.id = e["id"] | "";
+    m.id = e.id.c_str();
 
-    String state = e["status"]["type"]["state"] | "";
-    m.state = state == "in" ? 'i' : state == "post" ? 'f' : 'p';
-    m.detail = e["status"]["type"]["shortDetail"] | "";
+    m.state = e.state == "in" ? 'i' : e.state == "post" ? 'f' : 'p';
+    m.detail = e.shortDetail.c_str();
 
     String homeId;
-    for (JsonObject c : e["competitions"][0]["competitors"].as<JsonArray>()) {
-      bool home = strcmp(c["homeAway"] | "", "home") == 0;
-      (home ? m.home : m.away) = c["team"]["abbreviation"] | "?";
-      (home ? m.homeKit : m.awayKit) =
-          clubKit(home ? m.home : m.away, league, c["team"]["color"], c["team"]["alternateColor"]);
-      (home ? m.homeScore : m.awayScore) = atoi(c["score"] | "0");
-      if (home) homeId = c["id"] | "";
+    for (const espn::Competitor &c : e.competitors) {
+      bool home = c.homeAway == "home";
+      (home ? m.home : m.away) = c.hasAbbreviation ? c.abbreviation.c_str() : "?";
+      (home ? m.homeKit : m.awayKit) = clubKit(home ? m.home : m.away, league, c.hasColor ? c.color.c_str() : nullptr,
+                                               c.hasAlternateColor ? c.alternateColor.c_str() : nullptr);
+      (home ? m.homeScore : m.awayScore) = atoi(c.score.c_str());
+      if (home) homeId = c.id.c_str();
     }
 
     // Goals and cards: the clock is in seconds, "6'" is anywhere in the 6th minute
-    for (JsonObject d : e["competitions"][0]["details"].as<JsonArray>()) {
-      char kind = (d["redCard"] | false) ? 'r' : (d["yellowCard"] | false) ? 'y' : (d["scoringPlay"] | false) ? 'g' : 0;
+    for (const espn::Detail &d : e.details) {
+      char kind = d.redCard ? 'r' : d.yellowCard ? 'y' : d.scoringPlay ? 'g' : 0;
       if (!kind) continue;
-      int minute = std::min(120, (int)(d["clock"]["value"] | 0.0f) / 60 + 1);
-      Event event = {(uint8_t)minute, kind, homeId == (d["team"]["id"] | ""), 0, ""};
+      int minute = std::min(120, (int)(float)d.clock / 60 + 1);
+      Event event = {(uint8_t)minute, kind, homeId == d.teamId.c_str(), 0, ""};
       if (kind != 'g') {
-        JsonObject player = d["athletesInvolved"][0];
-        event.number = atoi(player["jersey"] | "0");
-        surname(player["displayName"] | "", event.name);
+        event.number = d.hasJersey ? atoi(d.jersey.c_str()) : 0;
+        surname(d.hasDisplayName ? d.displayName.c_str() : "", event.name);
       }
       m.events.push_back(event);
     }

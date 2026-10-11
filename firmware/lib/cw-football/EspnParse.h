@@ -42,4 +42,24 @@ bool parseRace(JsonScan::Next next, void *source, Weekend &out);
 // racing/f1/events/<event>/competitions/<session>/status: the flag being shown ("Yellow"), "" when there is none
 bool parseFlag(JsonScan::Next next, void *source, std::string &flag);
 
+// <league>/scoreboard: the matches of a day. Only the first competition of an event is read, like the ticker always did.
+struct Competitor {
+  std::string homeAway, score, id;  // "home" or "away"; the score is text ("2")
+  std::string abbreviation, color, alternateColor;
+  bool hasAbbreviation = false, hasColor = false, hasAlternateColor = false;
+};
+struct Detail {  // a goal, a card or another play of the match
+  double clock = 0;  // seconds
+  std::string teamId, jersey, displayName;  // of the first player involved
+  bool scoringPlay = false, yellowCard = false, redCard = false;
+  bool hasJersey = false, hasDisplayName = false;
+};
+struct ScoreEvent {
+  std::string id, date, state, name, shortDetail;  // state: "pre", "in" or "post"; name: "STATUS_FULL_TIME"...
+  std::vector<Competitor> competitors;
+  std::vector<Detail> details;
+};
+// withDetails: also the team ids and the goals and cards (a busy evening has many)
+bool parseScoreboard(JsonScan::Next next, void *source, std::vector<ScoreEvent> &out, bool withDetails);
+
 }  // namespace espn
