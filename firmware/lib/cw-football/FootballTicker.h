@@ -123,6 +123,7 @@ class FootballTicker {
     // The next card or substitution of a live match to show, false when there is none
     bool nextIncident(Incident &incident);
 
+#if !defined(CW_FOOTBALL_ONLY)
     // The Formula 1 race, shown as one more page of the ticker while it runs
     struct Race {
       bool live = false;
@@ -132,6 +133,7 @@ class FootballTicker {
       uint16_t color[3];  // and their teams' colours
     };
 
+#endif
   private:
     struct Match {
       String label;       // for the log
@@ -156,7 +158,9 @@ class FootballTicker {
     CWDateTime *_dateTime = nullptr;
     bool _started = false;
     TaskHandle_t _task = nullptr;  // the fetch task; none while a firmware update needs the memory
+#ifndef CW_FOOTBALL_ONLY
     bool _withRace = true;
+#endif
     bool _extras = false;
     uint32_t _resultWindowSecs = 0;
     // Parse buffer, allocated once at startup so a fragmented heap later on
@@ -194,10 +198,12 @@ class FootballTicker {
     std::vector<Favourite> _favourites;
     volatile uint32_t _pageMs = 8000;  // how long a match is shown, from the settings (read by the display)
 
+#ifndef CW_FOOTBALL_ONLY
     // The Formula 1 race, shown as one more page of the ticker while it runs
     Race _race;                       // the session being run, guarded by _lock
     std::vector<Race> _results;       // the sessions finished today, guarded by _lock
     unsigned long _raceNextAt = 0;    // millis() of the next download, 0 = now
+#endif
     uint32_t _day = 0;                // local day number the scores on show are from, 0 = not known yet
     unsigned long _footballNextAt = 0;  // millis() of the next football refresh, 0 = now
 
@@ -222,8 +228,10 @@ class FootballTicker {
     static void task(void *self);
     void dropOldDay();
     unsigned long refresh();
+#ifndef CW_FOOTBALL_ONLY
     unsigned long refreshRace();
     unsigned long fetchRace();
+#endif
     bool loadConfig();
     bool followsLeague(const String &code);
     bool isFavourite(const String &abbreviation);

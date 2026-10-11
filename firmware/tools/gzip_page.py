@@ -1,12 +1,29 @@
 # Build step: gzips lib/cw-commons/settings.html into SettingsWebPage.h, which the
 # web server sends compressed. Edit the .html, never the header.
-import gzip, os
+import gzip, os, re
 Import("env")
 
 src = os.path.join(env["PROJECT_DIR"], "lib", "cw-commons", "settings.html")
-dst = os.path.join(env["PROJECT_DIR"], "lib", "cw-commons", "SettingsWebPage.h")
+dst = os.path.join(env.subst("$BUILD_DIR"), "SettingsWebPage.h")
+os.makedirs(os.path.dirname(dst), exist_ok=True)
+env.Prepend(CPPPATH=[os.path.dirname(dst)])
 
-data = gzip.compress(open(src, "rb").read(), 9, mtime=0)
+page = open(src, "r").read()
+if env["PIOENV"] == "cw-cf-0x0B":
+    # Football ships only football settings; other faces keep the shared page.
+    page = re.sub(r'  <section id="(?:f1Box|f1DriversBox|f1FlagBox)".*?</section>\n', '', page, flags=re.S)
+    page = page.replace(" or a Formula 1 session", "")
+    page = re.sub(r"    if \(faceId === '0x0C'\) \{.*?\n    \}\n", '', page, flags=re.S)
+    page = page.replace(" || faceId === '0x0C'", "")
+    page = re.sub(r"    const f1 = .*?    if \(f1\) showDrivers\(\);\n",
+                  "    $('footballBox').style.display = ticker ? 'block' : 'none';\n", page, flags=re.S)
+    page = re.sub(r"  const F1_DRIVERS = .*?  const MAX_LEAGUES", "  const MAX_LEAGUES", page, flags=re.S)
+    page = re.sub(r"^.*(?:\$\('f1'\)|\$\('flags'\)|\$\('f1Box'\)|f1Favs|const f1Changed|const flagsChanged|const driversChanged|if \(f1Changed\)|if \(flagsChanged\)|if \(driversChanged\)).*\n", '', page, flags=re.M)
+    for term in (" && !f1Changed", " && !flagsChanged", " && !driversChanged"):
+        page = page.replace(term, "")
+    if re.search(r"f1|Formula 1|Grand Prix", page, re.I):
+        raise ValueError("Race settings remain in the Football page")
+data = gzip.compress(page.encode(), 9, mtime=0)
 lines = []
 for i in range(0, len(data), 20):
     lines.append("  " + ",".join("0x%02x" % b for b in data[i:i + 20]))

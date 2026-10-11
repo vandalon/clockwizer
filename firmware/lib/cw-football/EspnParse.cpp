@@ -37,6 +37,7 @@ struct StandingsScan {
   }
 };
 
+#if !defined(CW_FOOTBALL_ONLY)
 struct RaceScan {
   Weekend *out;
   int session = -1, driver = -1;
@@ -75,6 +76,7 @@ struct FlagScan {
   }
 };
 
+#endif
 struct ScoreboardScan {
   std::vector<ScoreEvent> *out;
   bool details;
@@ -200,6 +202,7 @@ bool parseStandings(JsonScan::Next next, void *source, Groups &out) {
   return JsonScan::read(next, source, StandingsScan::leaf, &scan);
 }
 
+#if !defined(CW_FOOTBALL_ONLY)
 bool parseRace(JsonScan::Next next, void *source, Weekend &out) {
   RaceScan scan;
   scan.out = &out;
@@ -211,6 +214,7 @@ bool parseFlag(JsonScan::Next next, void *source, std::string &flag) {
   return JsonScan::read(next, source, FlagScan::leaf, &scan);
 }
 
+#endif
 bool parseScoreboard(JsonScan::Next next, void *source, std::vector<ScoreEvent> &out, bool withDetails) {
   ScoreboardScan scan;
   scan.out = &out;

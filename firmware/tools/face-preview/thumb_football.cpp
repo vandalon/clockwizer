@@ -77,9 +77,11 @@ static FootballTicker::Event ev(int minute, char kind, bool home, int number, co
 
 int main(int argc, char **argv) {
   outDir = argc > 1 ? argv[1] : ".";
+  bool stoppage = argc > 2 && std::string(argv[2]) == "stoppage";
+  bool upcoming = argc > 2 && std::string(argv[2]) == "upcoming";
   const TeamKit orange = {rgb(255, 120, 0), rgb(255, 255, 255), 0}, white = {rgb(255, 255, 255), rgb(30, 30, 30), 0};
   const TeamKit red = {rgb(220, 30, 40), rgb(255, 255, 255), 0}, blue = {rgb(30, 80, 200), rgb(255, 255, 255), 0};
-  FootballTicker::Entry live = match("NED", "ENG", "2-1", orange, white, true, "67'", 0.74f);
+  FootballTicker::Entry live = match("NED", "ENG", "2-1", orange, white, true, stoppage ? "90'+4" : "67'", stoppage ? 1.0f : 0.74f);
   live.events.push_back(ev(12, 'g', true, 0, ""));
   live.events.push_back(ev(34, 'g', false, 0, ""));
   live.events.push_back(ev(52, 'y', false, 4, "SMITH"));
@@ -87,6 +89,14 @@ int main(int argc, char **argv) {
   theOverview.live.push_back(live);
   theOverview.finished.push_back(match("ESP", "ITA", "1-0", red, blue, false, "FT", 1));
   theOverview.finished.push_back(match("FRA", "BEL", "2-2", blue, red, false, "FT", 1));
+  if (stoppage) theOverview.finished[0].homeKit = white;
+  if (upcoming) {
+    theOverview.finished.clear();
+    FootballTicker::Upcoming u = {};
+    u.home = "ENG"; u.away = "NED"; u.homeKit = white; u.awayKit = orange;
+    u.kickoff = 1791146700;  // 20:45 on the preview day
+    theOverview.upcoming.push_back(u);
+  }
   Clockface face(&display);
   setTime(0);
   face.setup(&clockTime);

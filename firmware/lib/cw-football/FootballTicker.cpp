@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <esp_heap_caps.h>
 #include "EspnParse.h"
+#ifndef CW_FOOTBALL_ONLY
 #include <Fonts/Picopixel.h>
+#endif
 #include <HTTPClient.h>
 #include <TelnetStream.h>
 #include <mutex>
@@ -15,7 +17,9 @@
 
 #include <CWPreferences.h>
 #include <EspnFeed.h>
+#ifndef CW_FOOTBALL_ONLY
 #include <F1Drivers.h>
+#endif
 #include "FootballCatalog.h"
 
 // Which competitions and favourite teams to follow is set on the settings page (see FootballCatalog.h
@@ -105,7 +109,9 @@ static size_t pageAt(const std::vector<FootballTicker::Entry> &entries, unsigned
 // Matches that finished today stay on the ticker for the rest of the day, but
 // only while no match is live, and at most MAX_SHOWN of them.
 static const size_t MAX_SHOWN = 12;
+#ifndef CW_FOOTBALL_ONLY
 static const unsigned long RACE_SLIDE_MS = 600;  // places swapping in the F1 row
+#endif
 // End of a match we only saw after it finished: kick-off + 2 halves, half
 // time and stoppage time
 static const time_t TYPICAL_MATCH_SECS = 115 * 60;
@@ -162,7 +168,11 @@ void FootballTicker::setResultWindow(uint32_t secs) {
 void FootballTicker::begin(CWDateTime *dateTime, bool withRace, bool extras, uint32_t resultWindowSecs) {
   if (_started) return;
   _started = true;
+#ifndef CW_FOOTBALL_ONLY
   _withRace = withRace;
+#else
+  (void)withRace;
+#endif
   _extras = extras;
   _resultWindowSecs = resultWindowSecs;
   _dateTime = dateTime;
@@ -235,8 +245,10 @@ void FootballTicker::dropOldDay() {
   _day = todayNr;
   std::lock_guard<std::mutex> guard(_lock);
   if (!_resultWindowSecs) _entries.clear();  // with a result window, older matches stay
+#ifndef CW_FOOTBALL_ONLY
   _results.clear();
   _race = Race();
+#endif
   liveEventOn = !_overview.live.empty();
 }
 
@@ -474,7 +486,10 @@ unsigned long FootballTicker::fetchRace() {
   {
     std::lock_guard<std::mutex> guard(_lock);
     _race = live;
-    liveEventOn = !_overview.live.empty() || _race.live;
+    liveEventOn = !_overview.live.empty();
+#ifndef CW_FOOTBALL_ONLY
+  liveEventOn |= _race.live;
+#endif
     _results.swap(results);
   }
 
@@ -1141,7 +1156,10 @@ void FootballTicker::buildOverview(const MatchList &matches, const std::vector<c
 
   std::lock_guard<std::mutex> guard(_lock);
   _overview = std::move(o);
-  liveEventOn = !_overview.live.empty() || _race.live;
+  liveEventOn = !_overview.live.empty();
+#ifndef CW_FOOTBALL_ONLY
+  liveEventOn |= _race.live;
+#endif
   _version++;
 }
 
@@ -1176,6 +1194,7 @@ static void drawName(Adafruit_GFX *display, int16_t x, int16_t y, const String &
   }
 }
 
+#if !defined(CW_FOOTBALL_ONLY)
 // The F1 logo in red and the first three of the race in white, each with a bar in
 // their team's colour underneath, in Picopixel (its cursor is the baseline).
 // A safety car turns the row's background yellow, a red flag red.
@@ -1236,6 +1255,7 @@ static void drawRace(Adafruit_GFX *display, int16_t y, const FootballTicker::Rac
   display->setFont(NULL);
 }
 
+#endif
 bool FootballTicker::current(Entry &entry) {
   std::lock_guard<std::mutex> guard(_lock);
   if (_entries.empty()) return false;
@@ -1248,6 +1268,7 @@ bool FootballTicker::current(Entry &entry) {
 // and the score in between, and the playing time as a bar along the bottom.
 bool FootballTicker::draw(Adafruit_GFX *display, int16_t y) {
   std::lock_guard<std::mutex> guard(_lock);
+#ifndef CW_FOOTBALL_ONLY
   // Live matches come first: a live match hides a live race, and both hide
   // anything finished. When nothing is live, today's finished matches and F1
   // sessions are pages of one rotation.
@@ -1261,17 +1282,24 @@ bool FootballTicker::draw(Adafruit_GFX *display, int16_t y) {
   if (footballLive) page = pageAt(_entries, millis() / _pageMs);
   bool showRace = raceLive || page >= _entries.size();
 
+#else
+  if (_entries.empty()) return false;
+  size_t page = pageAt(_entries, millis() / _pageMs);
+#endif
+
   // The text sits one pixel higher than the row, leaving a gap above the bar
   display->fillRect(0, y - 1, 64, display->height() - (y - 1), 0);  // to the very bottom
   display->setFont(NULL);
   display->setTextSize(1);
   display->setTextWrap(false);
   int16_t textY = y - 1;
+#if !defined(CW_FOOTBALL_ONLY)
   if (showRace) {
     drawRace(display, y, raceLive ? _race : _results[page - _entries.size()], raceLive);
     display->setTextWrap(true);
     return true;
   }
+#endif
   const Entry &e = _entries[page];
 
   // Two 4-letter names and a double-digit score don't fit: shorten the names

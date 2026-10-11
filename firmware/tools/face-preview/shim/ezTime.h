@@ -1,6 +1,6 @@
 #pragma once
 #include <time.h>
-#define SECS_PER_DAY 86400UL
+#define SECS_PER_DAY ((time_t)86400)
 namespace ezt {
 extern time_t fakeNow;
 inline time_t now() { return fakeNow; }

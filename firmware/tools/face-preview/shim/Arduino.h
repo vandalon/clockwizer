@@ -25,6 +25,8 @@ inline long cw_random(long hi) { return hi <= 0 ? 0 : rand() % hi; }
 inline long cw_random(long lo, long hi) { return hi <= lo ? lo : lo + rand() % (hi - lo); }
 inline void randomSeed(unsigned long seed) { srand((unsigned)seed); }
 #define random cw_random
+#define radians(degrees) ((degrees) * 0.017453292519943295)
+using TaskHandle_t = void *;
 #define PROGMEM
 #define pgm_read_byte(addr) (*(const uint8_t *)(addr))
 #define pgm_read_word(addr) (*(const uint16_t *)(addr))

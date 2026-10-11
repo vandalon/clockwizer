@@ -283,12 +283,13 @@ static bool splitScore(const String &score, String &home, String &away) {
 
 static bool halfTime(const FootballTicker::Entry &m) { return m.live && m.detail.startsWith("HT"); }
 
-// The game time for the green bar: "67'", "45+2'" for stoppage time, "45'" at half time
+// The game time for the green bar: "67'", "45+2" for stoppage time, "45'" at half time
 static String gameTime(const FootballTicker::Entry &m) {
   if (halfTime(m)) return "45'";
   if (!m.live) return "90'";  // a finished match shown on top (see showResultsLive)
-  int plus = m.detail.indexOf("'+");
-  return plus > 0 ? m.detail.substring(0, plus) + m.detail.substring(plus + 1) : m.detail;
+  String time = m.detail;
+  if (time.indexOf('+') > 0) time.replace("'", "");  // keep only the extra minutes supplied by ESPN
+  return time;
 }
 
 // With no live match but results, the live view takes them: a favourite's result, else the one that ended
@@ -332,19 +333,22 @@ static Slide slideAt(unsigned long now, int rowHeight, unsigned long pauseMs) {
 
 // ---- Live ----
 
-// The green bar: competition and game time, and the time right of a separator. With a single
-// match the time sits at the bottom instead and the game time is centred.
+static int textWidth5(const String &s);
+static void drawText5(MatrixPanel_I2S_DMA *d, const String &s, int x, int y, uint16_t color);
+
+// The green bar: 7px text with a pixel above and below. With a single match
+// the clock sits at the bottom instead.
 static void drawStrip(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, int hour, int minute, bool withClock) {
-  d->fillRect(0, 0, W, STRIP_H, STRIP);  // the 5 high text has 2 pixels above and below
+  d->fillRect(0, 0, W, STRIP_H, STRIP);
   String status = m.competition + " " + gameTime(m);
   if (!withClock) {
-    drawCentered(d, status, 2, INK);
+    drawText5(d, status, (W - textWidth5(status)) / 2, 1, INK);
     return;
   }
-  if (textWidth(status) > 36) status = gameTime(m);  // "KNVB 90+3'" doesn't fit next to the time
-  drawText(d, status, 2, 2, INK);
-  d->fillRect(39, 0, 1, STRIP_H, STRIP_LINE);
-  drawText(d, twoDigits(hour) + ":" + twoDigits(minute), 43, 2, INK);
+  if (textWidth5(status) > 30) status = gameTime(m);
+  drawText5(d, status, 1, 1, INK);
+  d->fillRect(32, 0, 1, STRIP_H, STRIP_LINE);
+  drawText5(d, twoDigits(hour) + ":" + twoDigits(minute), 34, 1, INK);
 }
 
 // The score between the shirts: double size, single size when a team has reached double figures
@@ -377,9 +381,6 @@ static void drawTimeline(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m,
   }
   fill(d, min(W - 2, 2 + played), y, 2, 2, halfTime(m) ? HALF_TIME : INK);
 }
-
-static int textWidth5(const String &s);
-static void drawText5(MatrixPanel_I2S_DMA *d, const String &s, int x, int y, uint16_t color);
 
 static void drawScoreTiles(MatrixPanel_I2S_DMA *d, int y);
 static bool scoreOnTiles();
@@ -458,8 +459,8 @@ static void drawLive(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, size_t index,
     drawLiveClock(d, pulse);
     return;
   }
-  d->fillRect(2, 53, W - 4, 1, DIVIDER);
-  clipTop = 54;
+  d->fillRect(0, 54, W, 1, DIVIDER);
+  clipTop = 55;
   clipBottom = 63;  // one row shows: the one waiting above or below must not peek in
   if (rows > 0 && !pinned) {
     if (rows == 1) {
@@ -501,6 +502,12 @@ static void drawText5(MatrixPanel_I2S_DMA *d, const String &s, int x, int y, uin
   }
 }
 
+// White kits get a pale blue name so the white bar remains distinct.
+static uint16_t teamNameColor(uint16_t shirt) {
+  return ((shirt >> 11) & 31) >= 28 && ((shirt >> 5) & 63) >= 56 && (shirt & 31) >= 28
+             ? rgb(216, 232, 255) : INK;
+}
+
 // A result: kit bars and names around the score, the winner's number green and the loser's grey
 // (a draw white). All in all 63 wide, so a score of double figures gets the small font.
 // A live match has no winner yet: its numbers and dash are orange, so it stands out from the results
@@ -517,8 +524,8 @@ static void drawResult(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, i
   bool big = split && home.length() + away.length() <= 2;  // "2-1" in the 5x7 font; "12-1" doesn't fit
   int scoreWidth = big ? 17 : textWidth(m.score);
   int x = (W - (2 + 2 + 17 + 2 + scoreWidth + 2 + 17 + 2 + 2)) / 2;  // bars keep 2 pixels from the names
-  fill(d, x, y, 1, 7, homeColor);
-  drawText5(d, m.home.substring(0, 3), x + 3, y, INK);
+  fill(d, x, y, 2, 7, homeColor);
+  drawText5(d, m.home.substring(0, 3), x + 4, y, teamNameColor(homeColor));
   int sx = x + 4 + 17 + 2;
   if (big) {
     drawText5(d, home, sx, y, scoreColor(m, home.toInt(), away.toInt()));
@@ -532,8 +539,8 @@ static void drawResult(MatrixPanel_I2S_DMA *d, const FootballTicker::Entry &m, i
     drawText(d, m.score, sx, y + 1, m.live ? LIVE_ROW : INK);
   }
   int ax = sx + scoreWidth + 2;
-  drawText5(d, m.away.substring(0, 3), ax + 1, y, INK);
-  fill(d, ax + 17 + 3, y, 1, 7, awayColor);
+  drawText5(d, m.away.substring(0, 3), ax, y, teamNameColor(awayColor));
+  fill(d, ax + 17 + 2, y, 2, 7, awayColor);
 }
 
 // How bright the pulsing colons are now, 0..32: one full cycle every 3 seconds, a bit
@@ -674,11 +681,14 @@ static int ballPass(unsigned long now, bool big) {
 static void drawComing(MatrixPanel_I2S_DMA *d, const FootballTicker::Upcoming &u, time_t local, int y) {
   uint16_t homeColor, awayColor;
   kitColors(u.homeKit, u.awayKit, homeColor, awayColor);
-  fill(d, 0, y, 1, 7, homeColor);  // 1px bars on the outer edges: the time needs the room
-  drawText5(d, u.home.substring(0, 3), 3, y, INK);
-  drawText(d, twoDigits(local % 86400 / 3600) + ":" + twoDigits(local % 3600 / 60), 22, y + 1, DATE);
-  drawText5(d, u.away.substring(0, 3), 43, y, INK);
-  fill(d, 62, y, 1, 7, awayColor);
+  fill(d, 0, y, 2, 7, homeColor);
+  drawText5(d, u.home.substring(0, 3), 4, y, teamNameColor(homeColor));
+  drawText(d, twoDigits(local % 86400 / 3600), 23, y + 1, DATE);
+  fill(d, 31, y + 2, 1, 1, DATE);
+  fill(d, 31, y + 4, 1, 1, DATE);
+  drawText(d, twoDigits(local % 3600 / 60), 33, y + 1, DATE);
+  drawText5(d, u.away.substring(0, 3), 42, y, teamNameColor(awayColor));
+  fill(d, 61, y, 2, 7, awayColor);
 }
 
 // ---- Flip clock ----
@@ -983,9 +993,9 @@ static void drawSlot(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, const Footbal
   uint16_t homeColor, awayColor;
   kitColors(u.homeKit, u.awayKit, homeColor, awayColor);
   fill(d, 43, y + 12, 2, 7, homeColor);
-  drawText5(d, u.home.substring(0, 3), 46, y + 12, INK);
+  drawText5(d, u.home.substring(0, 3), 46, y + 12, teamNameColor(homeColor));
   fill(d, 43, y + 20, 2, 7, awayColor);
-  drawText5(d, u.away.substring(0, 3), 46, y + 20, INK);
+  drawText5(d, u.away.substring(0, 3), 46, y + 20, teamNameColor(awayColor));
 }
 
 // Hours over minutes with the ball rolling under them, the next two kick-off times on the right.
@@ -1244,7 +1254,7 @@ Clockface::Clockface(MatrixPanel_I2S_DMA* display) {
 void Clockface::setup(CWDateTime *dateTime) {
   _dateTime = dateTime;
   lastKey[0] = 0;  // whatever was drawn over the face (notification, birthday) must be redrawn
-  footballTicker.begin(dateTime, false, true, resultWindowSecs());  // no Formula 1; goals, cards, tables, kick-offs
+  footballTicker.begin(dateTime, false, true, resultWindowSecs());  // goals, cards, tables, kick-offs
 }
 
 void Clockface::update() {

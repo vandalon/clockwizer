@@ -24,6 +24,7 @@ bool parseNextMatch(JsonScan::Next next, void *source, NextMatch &out);
 typedef std::vector<std::vector<std::string>> Groups;
 bool parseStandings(JsonScan::Next next, void *source, Groups &out);
 
+#if !defined(CW_FOOTBALL_ONLY)
 // racing/f1/scoreboard: the Grand Prix weekend, its sessions in the order ESPN lists them
 struct RaceDriver {
   int order = 0;          // the place in the session, 0 when not there
@@ -42,6 +43,7 @@ bool parseRace(JsonScan::Next next, void *source, Weekend &out);
 // racing/f1/events/<event>/competitions/<session>/status: the flag being shown ("Yellow"), "" when there is none
 bool parseFlag(JsonScan::Next next, void *source, std::string &flag);
 
+#endif
 // <league>/scoreboard: the matches of a day. Only the first competition of an event is read, like the ticker always did.
 struct Competitor {
   std::string homeAway, score, id;  // "home" or "away"; the score is text ("2")
