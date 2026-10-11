@@ -1,11 +1,11 @@
 # Builds every clockface on each push and pull request (no secrets, nothing uploaded).
 #
 # A release is a tag on a commit of main, and its name picks the channel:
-#   v...      stable: published at the root of the gh-pages branch (https://vandalon.github.io/clockwizer/), which is
+#   release... stable: published at the root of the gh-pages branch (https://vandalon.github.io/clockwizer/), which is
 #             where the clocks download their firmware by default (cw-cf-0xNN.bin and .md5) and where the web flasher lives
 #   beta...   beta: published in the beta/ folder (https://vandalon.github.io/clockwizer/beta/); a clock gets those builds
 #             when its firmware location setting points there. Stable is not touched.
-# Example: git tag v1 && git push origin v1, or git tag beta1 && git push origin beta1 (or "Create release" on GitHub).
+# Example: git tag release1 && git push origin release1, or git tag beta1 && git push origin beta1 (or "Create release" on GitHub).
 # The firmware version is made by the workflow: the build date and a number that counts up during the day, per channel
 # (2026.10.11.1, and 2026.10.11.1-beta for a beta). Publishing to your own update server stays with firmware/update-fw.sh.
 name: Build firmware
@@ -112,11 +112,11 @@ jobs:
             firmware/.pio/build/${{ matrix.env }}/boot_app0.bin
           retention-days: 14
 
-  # Only a tag starting with v (stable) or beta (beta), on a commit of main, and only when every face built:
+  # Only a tag starting with release (stable) or beta (beta), on a commit of main, and only when every face built:
   # never a pull request or a branch
   publish:
     needs: [version, build]
-    if: github.ref_type == 'tag' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'beta')) && github.repository == 'vandalon/clockwizer'
+    if: github.ref_type == 'tag' && (startsWith(github.ref_name, 'release') || startsWith(github.ref_name, 'beta')) && github.repository == 'vandalon/clockwizer'
     runs-on: ubuntu-latest
     permissions:
       contents: write  # the push to gh-pages
