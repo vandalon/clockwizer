@@ -54,7 +54,7 @@ void Clockface::update()
 // wherever the clock is.
 int Clockface::noonColumn()
 {
-  long secs = (NOON_AT_BRAZIL_UTC - (long)(ezt::now() % 86400) + 86400) % 86400;
+  long secs = (NOON_AT_BRAZIL_UTC - (long)(cwt::now() % 86400) + 86400) % 86400;
   return (BRAZIL_TZ + secs / SECS_PER_PIXEL) % MAP_WIDTH;
 }
 

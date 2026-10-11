@@ -24,6 +24,7 @@ struct ClockwiseWebServer
   String httpBuffer;
   bool mdnsStarted = false;
   bool mdnsPaused = false;
+  bool mdnsShed = false;  // stopped by the memory guard
   bool force_restart;
   bool update_requested = false;  // picked up by the main loop
   // Outcome of the last update check, for the web UI: "checking", "uptodate", "installing",
@@ -54,7 +55,7 @@ struct ClockwiseWebServer
   // service below is how clocks find each other whatever their host names became.
   void startMdns()
   {
-    if (!mdnsStarted && !mdnsPaused && MDNS.begin("clockwizer"))
+    if (!mdnsStarted && !mdnsPaused && !mdnsShed && MDNS.begin("clockwizer"))
     {
       MDNS.addService("http", "tcp", 80);
       MDNS.addService("clockwise", "tcp", 80);
@@ -75,6 +76,22 @@ struct ClockwiseWebServer
       mdnsStarted = false;
     }
     else if (!pause)
+    {
+      startMdns();
+    }
+  }
+
+  // The memory guard in main.cpp stops mDNS while the clock is short of memory, whatever face it runs, and starts it
+  // again when there is room. Separate from pauseMdns() so a face's own pause and the guard don't undo each other.
+  void shedMdns(bool shed)
+  {
+    mdnsShed = shed;
+    if (shed && mdnsStarted)
+    {
+      MDNS.end();
+      mdnsStarted = false;
+    }
+    else if (!shed)
     {
       startMdns();
     }

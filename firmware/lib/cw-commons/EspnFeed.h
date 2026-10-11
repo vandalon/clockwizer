@@ -1,17 +1,18 @@
 #pragma once
 
 #include <Arduino.h>
-#include <ezTime.h>
+#include <CWTime.h>
 
 // What the football and the F1 tickers share for reading ESPN's feeds.
 
-// Feeds the HTTP stream to ArduinoJson without busy-waiting. Stream's own
+// Feeds the HTTP stream to the JSON reader (JsonScan) without busy-waiting. Stream's own
 // timed read spins while waiting for data, which starves the idle task on
 // core 0 and trips the task watchdog during a slow download.
 struct YieldingReader {
   Stream &stream;
   unsigned long timeoutMs;
   size_t count = 0;
+  bool dry = false;  // the stream gave nothing for the whole timeout: the server stopped sending or the connection closed
 
   YieldingReader(Stream &s, unsigned long timeout) : stream(s), timeoutMs(timeout) {}
 
@@ -23,6 +24,7 @@ struct YieldingReader {
       if (c >= 0) return c;
       vTaskDelay(1);
     } while (millis() - start < timeoutMs);
+    dry = true;
     return -1;
   }
 
@@ -41,5 +43,5 @@ struct YieldingReader {
 static inline time_t parseEspnDate(const char *date) {
   int y, mo, d, h, mi;
   if (sscanf(date, "%d-%d-%dT%d:%d", &y, &mo, &d, &h, &mi) != 5) return 0;
-  return ezt::makeTime(h, mi, 0, d, mo, y);
+  return cwt::makeTime(h, mi, 0, d, mo, y);
 }

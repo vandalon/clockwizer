@@ -3,7 +3,8 @@
 #include <Arduino.h>
 #include <Adafruit_GFX.h>
 #include <CWDateTime.h>
-#include <ArduinoJson.h>
+#include <JsonScan.h>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <vector>
@@ -160,7 +161,6 @@ class FootballTicker {
     uint32_t _resultWindowSecs = 0;
     // Parse buffer, allocated once at startup so a fragmented heap later on
     // can't make a download fail.
-    DynamicJsonDocument *_doc = nullptr;
 
     // Only used by the background task
     std::map<String, std::pair<int, int>> _scores;  // highest score seen per match
@@ -205,7 +205,6 @@ class FootballTicker {
     // ESPN league code -> its groups (a league is one group), each the team abbreviations from the top
     std::map<String, std::vector<std::vector<String>>> _tables;
     std::map<String, unsigned long> _tablesAt;  // millis() of each table's last download
-    bool _lastNoMemory = false;       // the last getJson() ran out of room in _doc
 
     std::mutex _lock;
     Overview _overview;               // guarded by _lock
@@ -240,8 +239,9 @@ class FootballTicker {
     bool updateNextFavouriteBoard(const Favourite &fav, const String &key);
     void refreshTables(const MatchList &matches, const std::vector<const Match *> &coming);
     void tablePositions(const Match &m, uint8_t &homePos, uint8_t &awayPos);
-    bool getJson(const char *url, JsonDocument &filter);
-    bool getJsonNow(const char *url, JsonDocument &filter);
+    // Downloads url and hands the text to parse (an espn::parse... call), without keeping the text or a tree of it
+    bool getScan(const char *url, const std::function<bool(JsonScan::Next, void *)> &parse);
+    bool getScanNow(const char *url, const std::function<bool(JsonScan::Next, void *)> &parse);
     void trackEndTimes(MatchList &matches, time_t nowUtc);
     void detectGoals(const MatchList &matches);
     void detectCards(const MatchList &matches);

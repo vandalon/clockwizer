@@ -1,19 +1,19 @@
 #pragma once
 #include <Arduino.h>
 
-#include <ezTime.h>
+#include "CWTime.h"
 #include <WiFi.h>
 
 class CWDateTime
 {
 private:
-  Timezone myTZ;
+  struct tm localTm() const;  // the local time right now
   bool use24hFormat = true;
 
 public:
   void begin(const char *timeZone, bool use24format, const char *ntpServer, const char *posixTZ);
   String getFormattedTime();
-  String getFormattedTime(const char* format);
+  String getFormattedTime(const char* format);  // strftime format, local time
 
   char *getHour(const char *format);
   char *getMinute(const char *format);

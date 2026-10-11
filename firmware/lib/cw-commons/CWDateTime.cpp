@@ -1,108 +1,128 @@
 #include "CWDateTime.h"
 #include "TelnetStream.h"
+#include <sys/time.h>
 
-void CWDateTime::begin(const char *timeZone, bool use24format, const char *ntpServer = NTP_SERVER, const char *posixTZ = "")
+void CWDateTime::begin(const char *timeZone, bool use24format, const char *ntpServer = "time.cloudflare.com", const char *posixTZ = "")
 {
   Serial.printf("[Time] NTP Server: %s, Timezone: %s\n", ntpServer, timeZone);
-  ezt::setServer(String(ntpServer));
 
-  if (strlen(posixTZ) > 1) {
-    // An empty value still contains a null character so not empty is a value greater than 1.
-    // Set to defined Posix TZ
-    myTZ.setPosix(posixTZ);
-  } else {
-    // Use automatic eztime remote lookup
-    myTZ.setLocation(timeZone);
+  const char *rule = posixTZ;
+  if (strlen(rule) <= 1) {
+    // No POSIX rule given: look the timezone name up in the built-in table
+    rule = cwt::posixForZone(timeZone);
+    if (!rule) {
+      Serial.printf("[Time] Unknown timezone '%s', using UTC. Set a POSIX rule instead\n", timeZone);
+      rule = "UTC0";
+    }
   }
+  Serial.printf("[Time] Rule: %s\n", rule);
 
   this->use24hFormat = use24format;
-  ezt::updateNTP();
-  //waitForSync(15);
+  cwt::begin(ntpServer, rule);
+}
+
+struct tm CWDateTime::localTm() const
+{
+  time_t t = cwt::now();
+  struct tm tm;
+  localtime_r(&t, &tm);
+  return tm;
 }
 
 String CWDateTime::getFormattedTime()
 {
-  return myTZ.dateTime();
+  return getFormattedTime("%a, %d-%b-%Y %H:%M:%S");
 }
 
 String CWDateTime::getFormattedTime(const char *format)
 {
-  return myTZ.dateTime(format);
+  struct tm tm = localTm();
+  char buffer[64];
+  strftime(buffer, sizeof(buffer), format, &tm);
+  return String(buffer);
 }
 
 char *CWDateTime::getHour(const char *format)
 {
   static char buffer[3] = {'\0'};
-  strncpy(buffer, myTZ.dateTime((use24hFormat ? "H" : "h")).c_str(), sizeof(buffer));
+  snprintf(buffer, sizeof(buffer), "%02d", getHour());
   return buffer;
 }
 
 char *CWDateTime::getMinute(const char *format)
 {
   static char buffer[3] = {'\0'};
-  strncpy(buffer, myTZ.dateTime("i").c_str(), sizeof(buffer));
+  snprintf(buffer, sizeof(buffer), "%02d", getMinute());
   return buffer;
 }
 
 int CWDateTime::getHour()
 {
-  return myTZ.dateTime((use24hFormat ? "H" : "h")).toInt();
+  int h = localTm().tm_hour;
+  if (use24hFormat) return h;
+  return h % 12 == 0 ? 12 : h % 12;
 }
 
 int CWDateTime::getHour24()
 {
-  return myTZ.dateTime("H").toInt();
+  return localTm().tm_hour;
 }
 
 int CWDateTime::getMinute()
 {
-  return myTZ.dateTime("i").toInt();
+  return localTm().tm_min;
 }
 
 int CWDateTime::getSecond()
 {
-  return myTZ.dateTime("s").toInt();
+  return localTm().tm_sec;
 }
 
-int CWDateTime::getDay() 
+int CWDateTime::getDay()
 {
-  return myTZ.dateTime("d").toInt();
+  return localTm().tm_mday;
 }
+
 int CWDateTime::getMonth()
 {
-  return myTZ.dateTime("m").toInt();
+  return localTm().tm_mon + 1;
 }
+
 int CWDateTime::getYear()
 {
-  return myTZ.dateTime("Y").toInt();
+  return localTm().tm_year + 1900;
 }
 
-int CWDateTime::getWeekday() 
+int CWDateTime::getWeekday()
 {
-  return myTZ.dateTime("w").toInt()-1;
+  return localTm().tm_wday;  // 0 = Sunday
 }
 
-long CWDateTime::getMilliseconds() 
+long CWDateTime::getMilliseconds()
 {
-  return myTZ.ms(TIME_NOW);
+  struct timeval tv;
+  gettimeofday(&tv, nullptr);
+  return tv.tv_usec / 1000;
 }
 
 time_t CWDateTime::localNow()
 {
-  return myTZ.now();
+  return utcToLocal(cwt::now());
 }
 
 time_t CWDateTime::utcToLocal(time_t utc)
 {
-  return myTZ.tzTime(utc, UTC_TIME);
+  struct tm tm;
+  localtime_r(&utc, &tm);
+  return cwt::makeTime(tm.tm_hour, tm.tm_min, tm.tm_sec, tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900);
 }
 
-bool CWDateTime::isAM() 
+bool CWDateTime::isAM()
 {
-  return myTZ.isAM();
+  return localTm().tm_hour < 12;
 }
 
-bool CWDateTime::is24hFormat() 
+bool CWDateTime::is24hFormat()
 {
   return this->use24hFormat;
 }

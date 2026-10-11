@@ -17,8 +17,8 @@
 #include <HTTPUpdate.h>
 #include <WiFiClientSecure.h>
 #include <Preferences.h>
+#include <esp_heap_caps.h>
 #include <esp_ota_ops.h>
-#include <uptime_formatter.h>
 #include "NotificationServer.h"
 #include "BackgroundWait.h"
 
@@ -250,8 +250,9 @@ static void bootUpdateCheck();
 static bool inBootCheck = false;  // the check right after a restart: a failure there doesn't restart again
 static void crashGuard();
 
-// F1Live.cpp holds the real definition; the weak one keeps the other clockfaces linking
-__attribute__((weak)) void (*f1PauseMdns)(bool pause) = nullptr;
+#ifdef CW_F1  // the Formula 1 face: F1Live.cpp holds the definition
+extern void (*f1PauseMdns)(bool pause);
+#endif
 
 void setup()
 {
@@ -262,7 +263,9 @@ void setup()
   md5Result.reserve(32);
   md5Failure.reserve(384);
   crashGuard();
+#ifdef CW_F1
   f1PauseMdns = [](bool pause) { ClockwiseWebServer::getInstance()->pauseMdns(pause); };
+#endif
 
   ClockwiseParams::getInstance()->load();
 
@@ -339,7 +342,7 @@ void setup()
   cwBackgroundWork() = []() {
     ClockwiseWebServer::getInstance()->handleHttpRequest();
     notificationServer.handle();
-    ezt::events();
+    cwt::events();
   };
   TelnetStream.println("[Main] Device IP: " + WiFi.localIP().toString());
   
@@ -623,7 +626,7 @@ void checkFirmwareValid(int64_t now) {
 // (web UI, telnet) still works. Without a synced clock the hour is unknown.
 static bool inUpdateQuietHours() {
   int from = ClockwiseParams::getInstance()->updQuietFrom, until = ClockwiseParams::getInstance()->updQuietUntil;
-  if (from == until || ezt::timeStatus() != timeSet) return false;
+  if (from == until || cwt::timeStatus() != timeSet) return false;
   int hour = cwDateTime.getHour24();
   return from < until ? (hour >= from && hour < until) : (hour >= from || hour < until);
 }
@@ -869,6 +872,13 @@ static void crashGuard() {
   prefs.end();
 }
 
+// Time since boot as "x days, y hours, z minutes, s seconds" (esp_timer does not wrap after 49 days like millis())
+static String uptimeText() {
+  uint32_t secs = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+  return String(secs / 86400) + " days, " + String(secs / 3600 % 24) + " hours, " + String(secs / 60 % 60) +
+         " minutes, " + String(secs % 60) + " seconds";
+}
+
 // For the uptime lines: the crashes still counted against this build
 static String crashCountText() {
   Preferences prefs;
@@ -876,6 +886,55 @@ static String crashCountText() {
   uint8_t crashes = prefs.getUChar("crashes", 0);
   prefs.end();
   return String(", crash count ") + crashes + "/" + CRASH_LIMIT;
+}
+
+// Memory guard: when the clock is short of memory, whatever face it runs, the optional services give theirs back:
+// first mDNS (the clock is then no longer found as clockwizer.local, the IP address keeps working), then the telnet log.
+// They start again when there has been room for a while. Two marks, so it does not flap. Data memory only: free heap
+// and largest block as ESP reports them include 45 KB of instruction RAM that nothing can allocate data in.
+static const size_t GUARD_LOW_BLOCK = 16000, GUARD_LOW_FREE = 26000;   // below one of these: shed
+static const size_t GUARD_OK_BLOCK = 24000, GUARD_OK_FREE = 34000;    // above both for GUARD_OK_MS: start again
+static const unsigned long GUARD_OK_MS = 30000;
+static int guardShed = 0;  // 0 nothing stopped, 1 mDNS stopped, 2 mDNS and telnet stopped
+static unsigned long guardNextCheck = 0, guardOkSince = 0, guardNextLog = 0;
+
+static void memoryGuard(unsigned long now) {
+  if ((long)(now - guardNextCheck) < 0) return;
+  guardNextCheck = now + 2000;
+  size_t free8 = heap_caps_get_free_size(MALLOC_CAP_8BIT), block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  bool low = block < GUARD_LOW_BLOCK || free8 < GUARD_LOW_FREE;
+  bool roomy = block > GUARD_OK_BLOCK && free8 > GUARD_OK_FREE;
+  if ((long)(now - guardNextLog) >= 0) {  // a line a minute: the numbers to pick the marks from
+    guardNextLog = now + 60000;
+    Serial.printf("[Memory] data free %u, largest block %u, services stopped: %d\n", (unsigned)free8, (unsigned)block, guardShed);
+  }
+  if (low) {
+    guardOkSince = 0;
+    if (guardShed < 2) {
+      guardShed++;
+      if (guardShed == 1) ClockwiseWebServer::getInstance()->shedMdns(true);
+      else TelnetStream.stop();
+      Serial.printf("[Memory] low (data free %u, largest block %u): %s stopped\n", (unsigned)free8, (unsigned)block,
+                    guardShed == 1 ? "mDNS" : "telnet");
+      guardNextCheck = now + 5000;  // give the memory a moment to come back before stopping more
+    }
+  } else if (guardShed > 0 && roomy) {
+    if (!guardOkSince) guardOkSince = now;
+    if (now - guardOkSince >= GUARD_OK_MS) {
+      if (guardShed == 2) {
+        if (ClockwiseParams::getInstance()->telnet) TelnetStream.begin();
+        guardShed = 1;
+      } else {
+        ClockwiseWebServer::getInstance()->shedMdns(false);
+        guardShed = 0;
+      }
+      guardOkSince = 0;
+      Serial.printf("[Memory] room again (data free %u, largest block %u): %s started\n", (unsigned)free8, (unsigned)block,
+                    guardShed == 1 ? "telnet" : "mDNS");
+    }
+  } else {
+    guardOkSince = 0;
+  }
 }
 
 void loop() {
@@ -898,6 +957,7 @@ void loop() {
     }
     if (!fwValidated) checkFirmwareValid(now);
     pollMd5Fetch();
+    memoryGuard(millis());
     if (!firmwareUpdating) WifiWatchdog::getInstance()->loop();
 #ifdef CW_TEST_CRASH
     if (now > 10000) abort(); // rollback test build: die before it can be confirmed
@@ -933,7 +993,7 @@ void loop() {
           restartForFace(id);
         }
         ClockPeers::getInstance()->loop();
-        ezt::events();
+        cwt::events();
         // Daily update check, not in the quiet hours and not during a live match or session. The timer
         // only advances when it runs, so a check that comes due during them happens when they end.
         // The first check waits until the clockface has its data: its TLS handshakes need the whole heap
@@ -952,7 +1012,7 @@ void loop() {
             break;
           case 'C':
             TelnetStream.println(currentTimeWithSeconds + " [INFO] Checking for a firmware update...");
-            checkForUpdate();
+            checkForUpdate(false, true);  // asked for by a person, like the web UI does: also during a live match
             break;
           case 'X':
             TelnetStream.println(currentTimeWithSeconds + " [INFO] Forcing a firmware update, ignoring earlier failures...");
@@ -967,7 +1027,7 @@ void loop() {
             }
             break;
           case 'U':
-            TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime() + crashCountText() + ", reset reason " +
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptimeText() + crashCountText() + ", reset reason " +
                                  String((int)esp_reset_reason()) + " (1 power on, 3 software, 4 panic/exception, 5-7 watchdog, 9 brownout), heap free " +
                                  String(ESP.getFreeHeap()) + ", largest block " + String(ESP.getMaxAllocHeap()) + ", lowest ever " +
                                  String(ESP.getMinFreeHeap()));
@@ -1028,7 +1088,9 @@ void loop() {
               TelnetStream.println(String(CW_FACES[i].key) + " - Install latest '" + CW_FACES[i].name + "' firmware");
             TelnetStream.println("T - Show the birthday screen for a minute (again to stop)");
 #ifdef CW_FOOTBALL_SIM
+#ifdef CW_F1
             TelnetStream.println("S, N - Football simulator of the Formula 1 face");
+#endif
             TelnetStream.println("G - Celebrate a test goal");
             TelnetStream.println("Y - Show a test yellow card");
             TelnetStream.println("D - Show a test red card");
@@ -1136,7 +1198,7 @@ void loop() {
     {
       // Not while a match or an F1 session is live: that is what the clock is for then
       // Not before the time is known either: until the first NTP sync the date reads 1 January 1970
-      const Birthdays::Entry *birthday = (liveEventOn || ezt::timeStatus() != timeSet) ? nullptr
+      const Birthdays::Entry *birthday = (liveEventOn || cwt::timeStatus() != timeSet) ? nullptr
                                          : todaysBirthday(cwDateTime.getYear(), cwDateTime.getMonth(), cwDateTime.getDay());
       if (millis() < birthdayPreviewUntil) birthday = &BIRTHDAY_PREVIEW;
       if (nightMode == true) {
@@ -1178,7 +1240,7 @@ void loop() {
       }
       if (altDisplay != 6) BirthdayAnim::release();
       if (currentTime != lastTime) {
-        TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime() + crashCountText());
+        TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptimeText() + crashCountText());
       }
       lastTime = currentTime;
       loopDue = now + (altDisplay == 6 ? BIRTHDAY_FRAME_MS : CLOCKFACE_UPDATE_MS);

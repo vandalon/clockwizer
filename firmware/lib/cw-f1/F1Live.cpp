@@ -1,11 +1,10 @@
 #include "F1Live.h"
 
-#include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <TelnetStream.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <ezTime.h>
+#include <CWTime.h>
 
 extern volatile bool firmwareUpdating;  // main.cpp
 
@@ -119,15 +118,22 @@ bool F1Live::negotiate(char *token, size_t size, char *cookie, size_t cookieSize
   strlcpy(cookie, http.header("Set-Cookie").c_str(), cookieSize);
   char *end = strchr(cookie, ';');
   if (end) *end = 0;
-  StaticJsonDocument<32> filter;
-  filter["connectionToken"] = true;
-  StaticJsonDocument<192> doc;
-  DeserializationError err = deserializeJson(doc, http.getString(), DeserializationOption::Filter(filter));
+  String body = http.getString();
   http.end();
-  const char *value = doc["connectionToken"];
-  if (err || !value) return false;
-  strlcpy(token, value, size);
-  return true;
+  // {"negotiateVersion":1,"connectionId":"...","connectionToken":"...","availableTransports":[...]}: the token is
+  // longer than JsonScan keeps of a value, and the answer is short, so just cut it out
+  int at = body.indexOf("\"connectionToken\"");
+  if (at < 0) return false;
+  at = body.indexOf('"', at + 17);  // after the key and its colon: the value's opening quote
+  if (at < 0) return false;
+  size_t n = 0;
+  for (int i = at + 1; i < (int)body.length() && body[i] != '"'; i++) {
+    char c = body[i];
+    if (c == '\\' && i + 1 < (int)body.length()) c = body[++i];  // \/ and the like: the character itself
+    if (n + 1 < size) token[n++] = c;
+  }
+  token[n] = 0;
+  return n > 0;
 }
 
 // A WebSocket's messages as one stream of text: frames come and go underneath, a SignalR
@@ -282,7 +288,7 @@ void F1Live::run() {
         if (negotiate(token, sizeof(token), cookie, sizeof(cookie))) {
           f1At("live connect");
           client.setInsecure();
-          client.setTimeout(10);
+          client.setTimeout(10000);  // Arduino 3 Stream timeouts are milliseconds: allow 10 seconds for the upgrade
           ok = client.connect(HOST, 443);
           if (!ok) liveLog("[F1 live] connect failed (heap free %u, largest block %u)\n", (unsigned)dataFree(), (unsigned)dataBlock());
         }
@@ -309,7 +315,7 @@ void F1Live::run() {
                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nUser-Agent: BestHTTP\r\n\r\n");
   String status = client.readStringUntil('\n');
   if (!status.startsWith("HTTP/1.1 101")) {
-    liveLog("[F1 live] upgrade: %s\n", status.c_str());
+    liveLog("[F1 live] upgrade: %s\n", status.length() ? status.c_str() : "no HTTP response before timeout");
     return;
   }
   while (client.connected()) {  // the rest of the headers
@@ -349,7 +355,7 @@ void F1Live::run() {
       }
       if (_state.clockMessages() != clockSeen) {
         clockSeen = _state.clockMessages();
-        liveLog("[F1 live] session clock: %d s left, %s\n", _state.clockSecs((long)ezt::now()), _state.clockRunning() ? "running" : "stopped");
+        liveLog("[F1 live] session clock: %d s left, %s\n", _state.clockSecs((long)cwt::now()), _state.clockRunning() ? "running" : "stopped");
       }
     }
     if (firmwareUpdating) break;  // hand the connection's memory to the update

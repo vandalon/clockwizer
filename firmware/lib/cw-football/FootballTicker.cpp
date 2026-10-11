@@ -3,14 +3,15 @@
 #include "TeamColors.h"
 
 #include <algorithm>
-#include <ArduinoJson.h>
+#include <esp_heap_caps.h>
+#include "EspnParse.h"
 #include <Fonts/Picopixel.h>
 #include <HTTPClient.h>
 #include <TelnetStream.h>
 #include <mutex>
 #include <WiFi.h>
 #include <Preferences.h>
-#include <ezTime.h>
+#include <CWTime.h>
 
 #include <CWPreferences.h>
 #include <EspnFeed.h>
@@ -132,7 +133,10 @@ static const unsigned long STAGGER_MS = 15 * 1000UL;
 static const unsigned long FIRST_STAGGER_MS = 2 * 1000UL;  // leagues or teams that have no data yet follow each other quickly
 extern volatile bool firmwareUpdating;  // main.cpp
 static const uint32_t TASK_STACK_BYTES = 14336;  // a busy evening needs more than a quiet one (the retry without events)
-static const uint32_t MIN_FREE_BLOCK = 10000;    // below this largest free block a refresh is skipped: an out of memory aborts the chip
+static const uint32_t MIN_FREE_BLOCK = 10000;    // below this largest free block of data memory a refresh is skipped: an out of memory aborts the chip
+// Data memory only: ESP.getFreeHeap() and getMaxAllocHeap() include 45 KB of instruction RAM that no data can use
+static size_t dataFree() { return heap_caps_get_free_size(MALLOC_CAP_8BIT); }
+static size_t dataBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
 static const size_t MAX_UPCOMING = 24;  // a Champions League evening kicks off nine at once
 
 // The debug messages go to the serial port and the telnet server. One lock: the ticker task and the clock loop
@@ -163,7 +167,6 @@ void FootballTicker::begin(CWDateTime *dateTime, bool withRace, bool extras, uin
   _resultWindowSecs = resultWindowSecs;
   _dateTime = dateTime;
   loadConfig();
-  _doc = new DynamicJsonDocument(16384);  // a full Champions League evening needs ~7KB, a Formula 1 weekend ~10KB
   // Core 0, so fetching never stalls the display loop on core 1
   xTaskCreatePinnedToCore(task, "football", TASK_STACK_BYTES, this, 1, &_task, 0);
 }
@@ -171,13 +174,8 @@ void FootballTicker::begin(CWDateTime *dateTime, bool withRace, bool extras, uin
 // After an update check the task is gone (see task()): start it again once the update is over
 void FootballTicker::resume() {
   if (!_started || _task || firmwareUpdating) return;
-  _doc = new (std::nothrow) DynamicJsonDocument(16384);
-  if (!_doc || _doc->capacity() == 0) {
-    delete _doc;
-    _doc = nullptr;
-    return;  // the heap has not recovered yet: try again at the next frame
-  }
-  xTaskCreatePinnedToCore(task, "football", TASK_STACK_BYTES, this, 1, &_task, 0);
+  // No task when the heap has not recovered yet (the stack does not fit): try again at the next frame
+  if (xTaskCreatePinnedToCore(task, "football", TASK_STACK_BYTES, this, 1, &_task, 0) != pdPASS) _task = nullptr;
 }
 
 extern volatile bool liveEventOn;       // main.cpp: no automatic update while true
@@ -186,27 +184,27 @@ void FootballTicker::task(void *self) {
   FootballTicker *ticker = static_cast<FootballTicker *>(self);
   for (;;) {
     if (firmwareUpdating) {  // the update has the network and the heap to itself
-      // The TLS handshake needs big free blocks: hand back the parse buffer and the task stack.
+      // The TLS handshake needs big free blocks: hand back the task stack.
       // The scores stay in the ticker; resume() starts the task again after the update.
-      delete ticker->_doc;
-      ticker->_doc = nullptr;
       ticker->_fetching = false;
       ticker->_task = nullptr;
       vTaskDelete(nullptr);
     }
     unsigned long wait = RETRY_MS;
-    if (ESP.getMaxAllocHeap() < MIN_FREE_BLOCK) {
+    if (dataBlock() < MIN_FREE_BLOCK) {
       // C++ exceptions are on: a failed allocation that nobody catches restarts the clock. Wait for the heap to recover.
-      logf("[Football] heap too low, skipping a refresh (free %u, largest block %u)\n", ESP.getFreeHeap(),
-           ESP.getMaxAllocHeap());
+      logf("[Football] heap too low, skipping a refresh (data free %u, largest block %u)\n", (unsigned)dataFree(),
+           (unsigned)dataBlock());
     } else {
       try {
         ticker->dropOldDay();
         wait = ticker->refresh();
+#ifdef CW_FOOTBALL_RACE
         if (ticker->_withRace) wait = std::min(wait, ticker->refreshRace());
+#endif
       } catch (const std::exception &e) {  // std::bad_alloc: keep the data of the last round
-        logf("[Football] out of memory in a refresh (%s), heap free %u, largest block %u\n", e.what(), ESP.getFreeHeap(),
-             ESP.getMaxAllocHeap());
+        logf("[Football] out of memory in a refresh (%s), data free %u, largest block %u\n", e.what(), (unsigned)dataFree(),
+             (unsigned)dataBlock());
         ticker->_fetching = false;
         ticker->_footballNextAt = millis() + RETRY_MS;
         wait = RETRY_MS;
@@ -231,7 +229,7 @@ static unsigned long untilMidnightMs(time_t localNow) {
 // F1 results included, so the clock shows its date until today's matches are
 // known. Wiped even if the new downloads fail, so yesterday never lingers.
 void FootballTicker::dropOldDay() {
-  if (ezt::timeStatus() == timeNotSet) return;
+  if (cwt::timeStatus() == timeNotSet) return;
   uint32_t todayNr = _dateTime->localNow() / SECS_PER_DAY;
   if (todayNr == _day) return;
   _day = todayNr;
@@ -246,7 +244,7 @@ void FootballTicker::dropOldDay() {
 // Returns how long to wait before the next refresh.
 unsigned long FootballTicker::refresh() {
   if (WiFi.status() != WL_CONNECTED) setStatus(FAILED);
-  if (WiFi.status() != WL_CONNECTED || ezt::timeStatus() != timeSet)
+  if (WiFi.status() != WL_CONNECTED || cwt::timeStatus() != timeSet)
     return 10 * 1000UL;
   // Other leagues or favourites chosen: start over with what is followed now
   if (loadConfig()) {
@@ -310,7 +308,7 @@ unsigned long FootballTicker::refresh() {
     }
   }
 
-  time_t nowUtc = ezt::now();
+  time_t nowUtc = cwt::now();
   trackEndTimes(matches, nowUtc);
   detectGoals(matches);
   detectCards(matches);
@@ -378,7 +376,7 @@ unsigned long FootballTicker::refresh() {
   else if (laterToday) wait = TODAY_REFRESH_MS;
   wait = std::min(wait, untilMidnightMs(today));  // yesterday's scores go at midnight
   if (_deferred) wait = std::min(wait, _deferredFirst ? FIRST_STAGGER_MS : STAGGER_MS);
-  logf("[Football] refreshed, heap free %u, largest block %u, stack left %u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+  logf("[Football] refreshed, data free %u, largest block %u, stack left %u\n", (unsigned)dataFree(), (unsigned)dataBlock(),
        (unsigned)uxTaskGetStackHighWaterMark(nullptr));
   setStatus(OK);
   _footballNextAt = millis() + wait;
@@ -387,8 +385,9 @@ unsigned long FootballTicker::refresh() {
 
 // Downloads the Formula 1 scoreboard when due. Returns how long until the next
 // download is due.
+#ifdef CW_FOOTBALL_RACE  // only the faces that show the Formula 1 top 3 (Tetris) carry the race code
 unsigned long FootballTicker::refreshRace() {
-  if (WiFi.status() != WL_CONNECTED || ezt::timeStatus() != timeSet) return 10 * 1000UL;
+  if (WiFi.status() != WL_CONNECTED || cwt::timeStatus() != timeSet) return 10 * 1000UL;
   unsigned long now = millis();
   if (_raceNextAt && (long)(now - _raceNextAt) < 0) return _raceNextAt - now;
   unsigned long wait = fetchRace();
@@ -400,29 +399,21 @@ unsigned long FootballTicker::refreshRace() {
 // flag, and the top three of every session that finished today. Returns how
 // long to wait before the next download.
 unsigned long FootballTicker::fetchRace() {
-  StaticJsonDocument<512> filter;
-  JsonObject competition = filter["events"][0]["competitions"].createNestedObject();
-  filter["events"][0]["id"] = true;
-  competition["id"] = true;
-  competition["type"]["abbreviation"] = true;
-  competition["date"] = true;
-  competition["status"]["type"]["state"] = true;
-  JsonObject driver = competition["competitors"].createNestedObject();
-  driver["order"] = true;
-  driver["athlete"]["shortName"] = true;
+  espn::Weekend weekend;
+  if (!getScan("http://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard",
+               [&](JsonScan::Next read, void *source) { return espn::parseRace(read, source, weekend); }))
+    return RETRY_MS;
 
-  if (!getJson("http://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard", filter)) return RETRY_MS;
-
-  time_t nowUtc = ezt::now();
+  time_t nowUtc = cwt::now();
   time_t localNow = _dateTime->localNow();
   Race live;                  // the session being run
   std::vector<Race> results;  // the sessions finished today, in order
   time_t nextStart = 0;
-  String eventId = (*_doc)["events"][0]["id"] | "", liveId;
+  String eventId = weekend.eventId.c_str(), liveId;
 
-  for (JsonObject c : (*_doc)["events"][0]["competitions"].as<JsonArray>()) {
-    String state = c["status"]["type"]["state"] | "";
-    time_t date = parseEspnDate(c["date"] | "");
+  for (const espn::RaceSession &c : weekend.sessions) {
+    String state = c.state.c_str();
+    time_t date = parseEspnDate(c.date.c_str());
     if (state == "pre") {
       if (date > nowUtc && (nextStart == 0 || date < nextStart)) nextStart = date;
       continue;
@@ -433,16 +424,16 @@ unsigned long FootballTicker::fetchRace() {
 
     Race r;
     r.live = running;
-    String type = c["type"]["abbreviation"] | "";
+    String type = c.type.c_str();
     if (type.startsWith("FP")) r.tag = 'P';
     else if (type == "Qual" || type == "SS") r.tag = 'Q';  // SS: sprint qualifying
     else if (type == "SR") r.tag = 'S';
     for (int i = 0; i < 3; i++) r.color[i] = 0xFFFF;
-    for (JsonObject d : c["competitors"].as<JsonArray>()) {
-      int order = d["order"] | 0;
+    for (const espn::RaceDriver &d : c.drivers) {
+      int order = d.order;
       if (order < 1 || order > 3) continue;
       // "M. Verstappen" -> "VER", in the team's colour; unknown drivers white
-      String name = d["athlete"]["shortName"] | "";
+      String name = d.shortName.c_str();
       name = name.substring(name.lastIndexOf(' ') + 1, name.length());
       String code = name.substring(0, 3);
       code.toUpperCase();
@@ -454,7 +445,7 @@ unsigned long FootballTicker::fetchRace() {
     }
     if (running) {
       live = r;
-      liveId = c["id"] | "";
+      liveId = c.id.c_str();
     } else {
       results.push_back(r);
     }
@@ -466,10 +457,9 @@ unsigned long FootballTicker::fetchRace() {
     snprintf(url, sizeof(url),
              "http://sports.core.api.espn.com/v2/sports/racing/leagues/f1/events/%s/competitions/%s/status",
              eventId.c_str(), liveId.c_str());
-    StaticJsonDocument<64> flagFilter;
-    flagFilter["flag"] = true;
-    if (getJson(url, flagFilter)) {
-      String name = (*_doc)["flag"] | "";
+    std::string flag;
+    if (getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseFlag(read, source, flag); })) {
+      String name = flag.c_str();
       name.toUpperCase();
       if (name.indexOf("RED") >= 0) live.flag = 'r';
       else if (name.indexOf("YELLOW") >= 0 || name.indexOf("SAFETY") >= 0 || name.indexOf("CAUTION") >= 0 ||
@@ -498,6 +488,7 @@ unsigned long FootballTicker::fetchRace() {
   }
   return std::min(wait, untilMidnightMs(localNow));
 }
+#endif  // CW_FOOTBALL_RACE
 
 // Reads the followed leagues and favourite teams from the settings. Returns true when they changed.
 bool FootballTicker::loadConfig() {
@@ -585,15 +576,10 @@ bool FootballTicker::fetchNextMatch(const char *teamId, String &league, time_t &
   char url[96];
   snprintf(url, sizeof(url), "http://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/%s", teamId);
 
-  StaticJsonDocument<256> filter;
-  JsonObject event = filter["team"]["nextEvent"].createNestedObject();
-  event["date"] = true;
-  event["league"]["slug"] = true;
-
-  if (!getJson(url, filter)) return false;
-  JsonObject next = (*_doc)["team"]["nextEvent"][0];
-  league = next["league"]["slug"] | "";
-  kickoff = parseEspnDate(next["date"] | "");
+  espn::NextMatch next;
+  if (!getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseNextMatch(read, source, next); })) return false;
+  league = next.league.c_str();
+  kickoff = parseEspnDate(next.date.c_str());
   return true;
 }
 
@@ -604,7 +590,7 @@ bool FootballTicker::updateBoard(const String &key, const char *league, time_t t
                                  uint16_t color, const char *onlyTeam) {
   Board &board = _boards[key];
   uint32_t todayNr = today / SECS_PER_DAY;
-  time_t nowUtc = ezt::now();
+  time_t nowUtc = cwt::now();
 
   bool busy = false;
   for (const Match &m : board.matches)
@@ -723,20 +709,19 @@ void FootballTicker::refreshTables(const MatchList &matches, const std::vector<c
   for (const Match *m : matches) add(*m);
   for (const Match *m : coming) add(*m);
 
-  StaticJsonDocument<256> filter;
-  filter["children"][0]["standings"]["entries"][0]["team"]["abbreviation"] = true;
   for (const String &league : leagues) {
     auto at = _tablesAt.find(league);
     if (at != _tablesAt.end() && millis() - at->second < TABLES_REFRESH_MS) continue;
     _tablesAt[league] = millis();  // also after a failure: a missing table only means no places
     char url[112];
     snprintf(url, sizeof(url), "http://site.api.espn.com/apis/v2/sports/soccer/%s/standings", league.c_str());
-    if (!getJson(url, filter)) continue;
+    espn::Groups table;
+    if (!getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseStandings(read, source, table); })) continue;
     std::vector<std::vector<String>> groups;
-    for (JsonObject child : (*_doc)["children"].as<JsonArray>()) {
+    for (const auto &group : table) {
       std::vector<String> teams;
-      for (JsonObject e : child["standings"]["entries"].as<JsonArray>()) teams.push_back(e["team"]["abbreviation"] | "");
-      if (!teams.empty()) groups.push_back(teams);
+      for (const std::string &abbreviation : group) teams.push_back(abbreviation.c_str());
+      groups.push_back(teams);
     }
     logf("[Football] Table %s: %d groups\n", league.c_str(), groups.size());
     _tables[league].swap(groups);
@@ -794,13 +779,13 @@ static void surname(const char *fullName, char *out) {
 }
 
 // localDay = 0: no date, which gets the coming matchday. withEvents (and extras) also reads
-// the goals and cards; when they don't fit in _doc, the scoreboard is read again without them.
+// the goals and cards.
 bool FootballTicker::fetchScoreboard(const char *league, time_t localDay, const char *label, uint16_t color,
                                      const char *onlyTeam, std::vector<Match> &out, bool withEvents) {
   char url[128];
   if (localDay) {
     tmElements_t day;
-    ezt::breakTime(localDay, day);
+    cwt::breakTime(localDay, day);
     snprintf(url, sizeof(url),
              "http://site.api.espn.com/apis/site/v2/sports/soccer/%s/scoreboard?dates=%04d%02d%02d",
              league, day.Year + 1970, day.Month, day.Day);
@@ -809,81 +794,44 @@ bool FootballTicker::fetchScoreboard(const char *league, time_t localDay, const 
   }
   withEvents &= _extras;
 
-  // A busy evening may not fit in _doc with the goals and cards: then the scoreboard is read again without
-  // them, the scores matter more. A loop, not a recursive call: the filter stays on the stack of the caller.
-  for (;;) {
-    bool ok;
-    {
-      StaticJsonDocument<1024> filter;
-      JsonObject event = filter["events"].createNestedObject();
-      event["id"] = true;
-      event["date"] = true;
-      event["status"]["type"]["state"] = true;
-      event["status"]["type"]["name"] = true;
-      event["status"]["type"]["shortDetail"] = true;
-      JsonObject team = event["competitions"][0]["competitors"].createNestedObject();
-      team["homeAway"] = true;
-      team["score"] = true;
-      team["team"]["abbreviation"] = true;
-      team["team"]["color"] = true;
-      team["team"]["alternateColor"] = true;
-      if (withEvents) {
-        team["id"] = true;
-        JsonObject detail = event["competitions"][0]["details"].createNestedObject();
-        detail["clock"]["value"] = true;
-        detail["team"]["id"] = true;
-        detail["scoringPlay"] = true;
-        detail["yellowCard"] = true;
-        detail["redCard"] = true;
-        JsonObject player = detail["athletesInvolved"].createNestedObject();
-        player["jersey"] = true;
-        player["displayName"] = true;
-      }
-      ok = getJson(url, filter);
-    }
-    if (ok) break;
-    if (!withEvents || !_lastNoMemory) return false;
-    withEvents = false;
-  }
+  std::vector<espn::ScoreEvent> events;
+  if (!getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseScoreboard(read, source, events, withEvents); }))
+    return false;
 
-  for (JsonObject e : (*_doc)["events"].as<JsonArray>()) {
-    String status = e["status"]["type"]["name"] | "";
-    if (status == "STATUS_POSTPONED" || status == "STATUS_CANCELED" || status == "STATUS_ABANDONED")
-      continue;
+  for (const espn::ScoreEvent &e : events) {
+    if (e.name == "STATUS_POSTPONED" || e.name == "STATUS_CANCELED" || e.name == "STATUS_ABANDONED") continue;
 
     Match m;
     m.label = label;
     m.league = league;
     m.competition = competitionCode(league, onlyTeam != nullptr && nationalFavourite(onlyTeam));
     m.color = color;
-    m.kickoff = parseEspnDate(e["date"] | "");
+    m.kickoff = parseEspnDate(e.date.c_str());
     if (m.kickoff == 0) continue;
-    m.id = e["id"] | "";
+    m.id = e.id.c_str();
 
-    String state = e["status"]["type"]["state"] | "";
-    m.state = state == "in" ? 'i' : state == "post" ? 'f' : 'p';
-    m.detail = e["status"]["type"]["shortDetail"] | "";
+    m.state = e.state == "in" ? 'i' : e.state == "post" ? 'f' : 'p';
+    m.detail = e.shortDetail.c_str();
 
     String homeId;
-    for (JsonObject c : e["competitions"][0]["competitors"].as<JsonArray>()) {
-      bool home = strcmp(c["homeAway"] | "", "home") == 0;
-      (home ? m.home : m.away) = c["team"]["abbreviation"] | "?";
-      (home ? m.homeKit : m.awayKit) =
-          clubKit(home ? m.home : m.away, league, c["team"]["color"], c["team"]["alternateColor"]);
-      (home ? m.homeScore : m.awayScore) = atoi(c["score"] | "0");
-      if (home) homeId = c["id"] | "";
+    for (const espn::Competitor &c : e.competitors) {
+      bool home = c.homeAway == "home";
+      (home ? m.home : m.away) = c.hasAbbreviation ? c.abbreviation.c_str() : "?";
+      (home ? m.homeKit : m.awayKit) = clubKit(home ? m.home : m.away, league, c.hasColor ? c.color.c_str() : nullptr,
+                                               c.hasAlternateColor ? c.alternateColor.c_str() : nullptr);
+      (home ? m.homeScore : m.awayScore) = atoi(c.score.c_str());
+      if (home) homeId = c.id.c_str();
     }
 
     // Goals and cards: the clock is in seconds, "6'" is anywhere in the 6th minute
-    for (JsonObject d : e["competitions"][0]["details"].as<JsonArray>()) {
-      char kind = (d["redCard"] | false) ? 'r' : (d["yellowCard"] | false) ? 'y' : (d["scoringPlay"] | false) ? 'g' : 0;
+    for (const espn::Detail &d : e.details) {
+      char kind = d.redCard ? 'r' : d.yellowCard ? 'y' : d.scoringPlay ? 'g' : 0;
       if (!kind) continue;
-      int minute = std::min(120, (int)(d["clock"]["value"] | 0.0f) / 60 + 1);
-      Event event = {(uint8_t)minute, kind, homeId == (d["team"]["id"] | ""), 0, ""};
+      int minute = std::min(120, (int)(float)d.clock / 60 + 1);
+      Event event = {(uint8_t)minute, kind, homeId == d.teamId.c_str(), 0, ""};
       if (kind != 'g') {
-        JsonObject player = d["athletesInvolved"][0];
-        event.number = atoi(player["jersey"] | "0");
-        surname(player["displayName"] | "", event.name);
+        event.number = d.hasJersey ? atoi(d.jersey.c_str()) : 0;
+        surname(d.hasDisplayName ? d.displayName.c_str() : "", event.name);
       }
       m.events.push_back(event);
     }
@@ -894,20 +842,19 @@ bool FootballTicker::fetchScoreboard(const char *league, time_t localDay, const 
   return true;
 }
 
-// Downloads url into _doc, keeping only the fields in filter
 bool FootballTicker::updating() {
   return _fetching || (_fetchEnded && millis() - _fetchEnded < 1500);
 }
 
-bool FootballTicker::getJson(const char *url, JsonDocument &filter) {
+bool FootballTicker::getScan(const char *url, const std::function<bool(JsonScan::Next, void *)> &parse) {
   _fetching = true;
-  bool ok = getJsonNow(url, filter);
+  bool ok = getScanNow(url, parse);
   _fetching = false;
   _fetchEnded = millis();
   return ok;
 }
 
-bool FootballTicker::getJsonNow(const char *url, JsonDocument &filter) {
+bool FootballTicker::getScanNow(const char *url, const std::function<bool(JsonScan::Next, void *)> &parse) {
   // Plain HTTP: public score data, and the ESP32's TLS client sometimes stalls
   // after the first 16KB record of these ~50KB responses
   WiFiClient client;
@@ -924,18 +871,12 @@ bool FootballTicker::getJsonNow(const char *url, JsonDocument &filter) {
   }
 
   YieldingReader reader(http.getStream(), 10000);
-  _doc->clear();
-  // ESPN nests deeper than ArduinoJson's default limit of 10, even in the skipped parts
-  DeserializationError err = deserializeJson(*_doc, reader, DeserializationOption::Filter(filter),
-                                             DeserializationOption::NestingLimit(20));
+  bool ok = parse([](void *r) { return ((YieldingReader *)r)->read(); }, &reader);
   http.end();
-  _lastNoMemory = err == DeserializationError::NoMemory;
-  if (err) {
-    logf("[Football] %s: %s after %u bytes (heap free %u, largest block %u)\n", url, err.c_str(),
-                  reader.count, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    return false;
-  }
-  return true;
+  if (!ok) logf("[Football] %s: %s after %u bytes (data free %u, largest block %u)\n", url,
+                reader.dry ? "the connection stopped sending" : "not valid JSON", (unsigned)reader.count, (unsigned)dataFree(),
+                (unsigned)dataBlock());
+  return ok;
 }
 
 // Remembers when each match ended: when we first see it finished, or, if it
@@ -1063,35 +1004,23 @@ bool FootballTicker::fetchSubstitutions(const Match &match, std::vector<Incident
   char url[128];
   snprintf(url, sizeof(url), "http://site.api.espn.com/apis/site/v2/sports/soccer/%s/summary?event=%s",
            match.league.c_str(), match.id.c_str());
-  StaticJsonDocument<512> filter;
-  JsonObject key = filter["keyEvents"].createNestedObject();
-  key["type"]["type"] = true;
-  key["clock"]["value"] = true;
-  key["team"]["id"] = true;
-  key["participants"][0]["athlete"]["id"] = true;
-  JsonObject squad = filter["rosters"].createNestedObject();
-  squad["homeAway"] = true;
-  squad["team"]["id"] = true;
-  squad["roster"][0]["athlete"]["id"] = true;
-  squad["roster"][0]["jersey"] = true;
-  if (!getJson(url, filter)) return false;
+  espn::Summary summary;
+  if (!getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseSummary(read, source, summary); })) return false;
 
   std::map<String, uint8_t> jerseys;  // athlete id -> shirt number
   String homeTeamId;
-  for (JsonObject squadJson : (*_doc)["rosters"].as<JsonArray>()) {
-    if (strcmp(squadJson["homeAway"] | "", "home") == 0) homeTeamId = squadJson["team"]["id"] | "";
-    for (JsonObject player : squadJson["roster"].as<JsonArray>())
-      jerseys[String(player["athlete"]["id"] | "")] = atoi(player["jersey"] | "0");
+  for (const espn::Squad &squad : summary.squads) {
+    if (squad.homeAway == "home") homeTeamId = squad.teamId.c_str();
+    for (const espn::Player &player : squad.players) jerseys[String(player.athleteId.c_str())] = atoi(player.jersey.c_str());
   }
   total = 0;
-  for (JsonObject e : (*_doc)["keyEvents"].as<JsonArray>()) {
-    if (strcmp(e["type"]["type"] | "", "substitution") != 0) continue;
+  for (const espn::Substitution &s : summary.substitutions) {
     total++;
     // ESPN lists the player coming on first, then the one going off
-    uint8_t on = jerseys[String(e["participants"][0]["athlete"]["id"] | "")];
-    uint8_t off = jerseys[String(e["participants"][1]["athlete"]["id"] | "")];
-    Incident in = {'s', match.home, match.away, match.homeKit, match.awayKit, homeTeamId == (e["team"]["id"] | ""),
-                   (uint8_t)std::min(120, (int)(e["clock"]["value"] | 0.0f) / 60 + 1), "", off, on, millis()};
+    uint8_t on = jerseys[String(s.on.c_str())];
+    uint8_t off = jerseys[String(s.off.c_str())];
+    Incident in = {'s', match.home, match.away, match.homeKit, match.awayKit, homeTeamId == s.teamId.c_str(),
+                   (uint8_t)std::min(120, (int)(float)s.clock / 60 + 1), "", off, on, millis()};
     found.push_back(in);
   }
   return true;
