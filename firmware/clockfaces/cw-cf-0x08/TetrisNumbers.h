@@ -228,4 +228,6 @@ fall_instr getFallinstrByNum(int num, int blockindex)
   {
     return num_9[blockindex];
   }
+  // Unknown digit/letter: nothing to draw (falling off the end was undefined behaviour)
+  return {};
 }

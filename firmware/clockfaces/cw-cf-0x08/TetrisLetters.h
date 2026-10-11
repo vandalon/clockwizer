@@ -1029,31 +1029,6 @@ fall_instr_let getFallinstrByAscii(int num, int blockindex)
         return a90[blockindex];
         break;
   }
-    
+  // Unknown digit/letter: nothing to draw (falling off the end was undefined behaviour)
+  return {};
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
