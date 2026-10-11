@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clockwizer web flasher</title>
+<style>
+  :root { --bg: #fff; --fg: #1b1b1f; --muted: #62626b; --card: #f3f3f6; --line: #d8d8e0; --accent: #2457d6; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #131316; --fg: #ececf1; --muted: #9a9aa6; --card: #1d1d22; --line: #34343c; --accent: #6b94ff; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 1.6rem; }
+  p.lead { color: var(--muted); margin-top: 0; }
+  fieldset { border: 0; padding: 0; margin: 24px 0; }
+  legend { font-weight: 600; margin-bottom: 8px; }
+  .faces { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
+  .faces label { display: block; cursor: pointer; }
+  .faces input { position: absolute; opacity: 0; }
+  .card { background: var(--card); border: 2px solid var(--line); border-radius: 10px; padding: 8px; text-align: center; height: 100%; box-sizing: border-box; }
+  .faces input:checked + .card { border-color: var(--accent); }
+  .faces input:focus-visible + .card { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card img, .card .tile { width: 100%; aspect-ratio: 1; border-radius: 6px; object-fit: cover; display: block; background: #000; image-rendering: pixelated; }
+  .card .tile { display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 1.1rem; padding: 6px; box-sizing: border-box; }
+  .card strong { display: block; margin-top: 6px; }
+  .card small { color: var(--muted); }
+  esp-web-install-button button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 12px 20px; font-size: 1rem; cursor: pointer; }
+  .note { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; color: var(--muted); font-size: .95rem; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Clockwizer web flasher</h1>
+  <p class="lead">Install a clockface on your ESP32 straight from the browser. No tools needed.</p>
+
+  <fieldset>
+    <legend id="chosen">Choose a clockface</legend>
+    <div class="faces" id="faces"></div>
+  </fieldset>
+
+  <esp-web-install-button id="installer">
+    <button slot="activate">Connect and install</button>
+    <span slot="unsupported">This browser can't talk to USB devices. Use Chrome or Edge on a computer.</span>
+    <span slot="not-allowed">Installing needs a secure (HTTPS) page.</span>
+  </esp-web-install-button>
+
+  <h2>How it works</h2>
+  <ol>
+    <li>Plug the ESP32 into your computer with a USB cable.</li>
+    <li>Pick a clockface and press <em>Connect and install</em>. Choose the ESP32's serial port when asked.</li>
+    <li>Wait for the install to finish. When it offers to connect the clock to WiFi, enter your 2.4 GHz network.</li>
+    <li>Open the clock's settings page (<code>http://clockwizer.local</code>, or scan the QR code on the display).</li>
+  </ol>
+  <p class="note">This writes the whole flash, partition table included, so it is also the way to move an older Clockwise to this firmware. After that the clock updates itself over WiFi, and you can switch clockface from its settings page.</p>
+  <p>Sources, wiring and documentation: <a href="https://github.com/vandalon/clockwizer">github.com/vandalon/clockwizer</a>.</p>
+</main>
+
+<script type="module" src="vendor/esp-web-tools/install-button.js"></script>
+<script>
+  const installer = document.getElementById('installer');
+  const grid = document.getElementById('faces');
+  const chosen = document.getElementById('chosen');
+
+  function choose(face) {
+    installer.setAttribute('manifest', 'manifest-cw-cf-' + face.id + '.json');
+    chosen.textContent = 'Clockface: ' + face.name;
+  }
+
+  fetch('faces.json').then(r => r.json()).then(faces => {
+    faces.forEach((face, i) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'face';
+      input.checked = i === 0;
+      input.addEventListener('change', () => choose(face));
+      const card = document.createElement('div');
+      card.className = 'card';
+      if (face.thumb) {
+        const img = document.createElement('img');
+        img.src = face.thumb;
+        img.alt = face.name;
+        card.appendChild(img);
+      } else {
+        const tile = document.createElement('div');
+        tile.className = 'tile';
+        tile.textContent = face.name;
+        card.appendChild(tile);
+      }
+      const name = document.createElement('strong');
+      name.textContent = face.name;
+      const panel = document.createElement('small');
+      panel.textContent = face.panel;
+      card.append(name, panel);
+      label.append(input, card);
+      grid.appendChild(label);
+      if (i === 0) choose(face);
+    });
+  });
+</script>
+</body>
+</html>
