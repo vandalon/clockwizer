@@ -5,7 +5,7 @@
 #include <TelnetStream.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <ezTime.h>
+#include <CWTime.h>
 
 extern volatile bool firmwareUpdating;  // main.cpp
 
@@ -349,7 +349,7 @@ void F1Live::run() {
       }
       if (_state.clockMessages() != clockSeen) {
         clockSeen = _state.clockMessages();
-        liveLog("[F1 live] session clock: %d s left, %s\n", _state.clockSecs((long)ezt::now()), _state.clockRunning() ? "running" : "stopped");
+        liveLog("[F1 live] session clock: %d s left, %s\n", _state.clockSecs((long)cwt::now()), _state.clockRunning() ? "running" : "stopped");
       }
     }
     if (firmwareUpdating) break;  // hand the connection's memory to the update

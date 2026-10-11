@@ -6,7 +6,7 @@
 #include <BackgroundWait.h>
 #include <CWPreferences.h>
 #include <TelnetStream.h>
-#include <ezTime.h>
+#include <CWTime.h>
 #include <Locator.h>
 #include <math.h>
 #include <functional>

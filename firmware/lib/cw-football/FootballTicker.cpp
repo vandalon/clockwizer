@@ -10,7 +10,7 @@
 #include <mutex>
 #include <WiFi.h>
 #include <Preferences.h>
-#include <ezTime.h>
+#include <CWTime.h>
 
 #include <CWPreferences.h>
 #include <EspnFeed.h>
@@ -231,7 +231,7 @@ static unsigned long untilMidnightMs(time_t localNow) {
 // F1 results included, so the clock shows its date until today's matches are
 // known. Wiped even if the new downloads fail, so yesterday never lingers.
 void FootballTicker::dropOldDay() {
-  if (ezt::timeStatus() == timeNotSet) return;
+  if (cwt::timeStatus() == timeNotSet) return;
   uint32_t todayNr = _dateTime->localNow() / SECS_PER_DAY;
   if (todayNr == _day) return;
   _day = todayNr;
@@ -246,7 +246,7 @@ void FootballTicker::dropOldDay() {
 // Returns how long to wait before the next refresh.
 unsigned long FootballTicker::refresh() {
   if (WiFi.status() != WL_CONNECTED) setStatus(FAILED);
-  if (WiFi.status() != WL_CONNECTED || ezt::timeStatus() != timeSet)
+  if (WiFi.status() != WL_CONNECTED || cwt::timeStatus() != timeSet)
     return 10 * 1000UL;
   // Other leagues or favourites chosen: start over with what is followed now
   if (loadConfig()) {
@@ -310,7 +310,7 @@ unsigned long FootballTicker::refresh() {
     }
   }
 
-  time_t nowUtc = ezt::now();
+  time_t nowUtc = cwt::now();
   trackEndTimes(matches, nowUtc);
   detectGoals(matches);
   detectCards(matches);
@@ -388,7 +388,7 @@ unsigned long FootballTicker::refresh() {
 // Downloads the Formula 1 scoreboard when due. Returns how long until the next
 // download is due.
 unsigned long FootballTicker::refreshRace() {
-  if (WiFi.status() != WL_CONNECTED || ezt::timeStatus() != timeSet) return 10 * 1000UL;
+  if (WiFi.status() != WL_CONNECTED || cwt::timeStatus() != timeSet) return 10 * 1000UL;
   unsigned long now = millis();
   if (_raceNextAt && (long)(now - _raceNextAt) < 0) return _raceNextAt - now;
   unsigned long wait = fetchRace();
@@ -413,7 +413,7 @@ unsigned long FootballTicker::fetchRace() {
 
   if (!getJson("http://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard", filter)) return RETRY_MS;
 
-  time_t nowUtc = ezt::now();
+  time_t nowUtc = cwt::now();
   time_t localNow = _dateTime->localNow();
   Race live;                  // the session being run
   std::vector<Race> results;  // the sessions finished today, in order
@@ -604,7 +604,7 @@ bool FootballTicker::updateBoard(const String &key, const char *league, time_t t
                                  uint16_t color, const char *onlyTeam) {
   Board &board = _boards[key];
   uint32_t todayNr = today / SECS_PER_DAY;
-  time_t nowUtc = ezt::now();
+  time_t nowUtc = cwt::now();
 
   bool busy = false;
   for (const Match &m : board.matches)
@@ -800,7 +800,7 @@ bool FootballTicker::fetchScoreboard(const char *league, time_t localDay, const 
   char url[128];
   if (localDay) {
     tmElements_t day;
-    ezt::breakTime(localDay, day);
+    cwt::breakTime(localDay, day);
     snprintf(url, sizeof(url),
              "http://site.api.espn.com/apis/site/v2/sports/soccer/%s/scoreboard?dates=%04d%02d%02d",
              league, day.Year + 1970, day.Month, day.Day);

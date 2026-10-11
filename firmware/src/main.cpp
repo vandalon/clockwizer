@@ -339,7 +339,7 @@ void setup()
   cwBackgroundWork() = []() {
     ClockwiseWebServer::getInstance()->handleHttpRequest();
     notificationServer.handle();
-    ezt::events();
+    cwt::events();
   };
   TelnetStream.println("[Main] Device IP: " + WiFi.localIP().toString());
   
@@ -623,7 +623,7 @@ void checkFirmwareValid(int64_t now) {
 // (web UI, telnet) still works. Without a synced clock the hour is unknown.
 static bool inUpdateQuietHours() {
   int from = ClockwiseParams::getInstance()->updQuietFrom, until = ClockwiseParams::getInstance()->updQuietUntil;
-  if (from == until || ezt::timeStatus() != timeSet) return false;
+  if (from == until || cwt::timeStatus() != timeSet) return false;
   int hour = cwDateTime.getHour24();
   return from < until ? (hour >= from && hour < until) : (hour >= from || hour < until);
 }
@@ -933,7 +933,7 @@ void loop() {
           restartForFace(id);
         }
         ClockPeers::getInstance()->loop();
-        ezt::events();
+        cwt::events();
         // Daily update check, not in the quiet hours and not during a live match or session. The timer
         // only advances when it runs, so a check that comes due during them happens when they end.
         // The first check waits until the clockface has its data: its TLS handshakes need the whole heap
@@ -1136,7 +1136,7 @@ void loop() {
     {
       // Not while a match or an F1 session is live: that is what the clock is for then
       // Not before the time is known either: until the first NTP sync the date reads 1 January 1970
-      const Birthdays::Entry *birthday = (liveEventOn || ezt::timeStatus() != timeSet) ? nullptr
+      const Birthdays::Entry *birthday = (liveEventOn || cwt::timeStatus() != timeSet) ? nullptr
                                          : todaysBirthday(cwDateTime.getYear(), cwDateTime.getMonth(), cwDateTime.getDay());
       if (millis() < birthdayPreviewUntil) birthday = &BIRTHDAY_PREVIEW;
       if (nightMode == true) {

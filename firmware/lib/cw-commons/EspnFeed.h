@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
-#include <ezTime.h>
+#include <CWTime.h>
 
 // What the football and the F1 tickers share for reading ESPN's feeds.
 
@@ -41,5 +41,5 @@ struct YieldingReader {
 static inline time_t parseEspnDate(const char *date) {
   int y, mo, d, h, mi;
   if (sscanf(date, "%d-%d-%dT%d:%d", &y, &mo, &d, &h, &mi) != 5) return 0;
-  return ezt::makeTime(h, mi, 0, d, mo, y);
+  return cwt::makeTime(h, mi, 0, d, mo, y);
 }

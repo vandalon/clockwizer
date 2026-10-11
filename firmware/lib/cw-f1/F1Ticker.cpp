@@ -7,7 +7,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <ezTime.h>
+#include <CWTime.h>
 
 #include <EspnFeed.h>
 #include <F1Drivers.h>
@@ -134,7 +134,7 @@ void F1Ticker::snapshot(Snapshot &out) {
     }
     int part = _live.part();
     if (out.live.tag == 'Q' && part >= 1 && part <= 3) snprintf(out.live.name, sizeof(out.live.name), "%s%d", out.live.name[0] == 'S' ? "SQ" : "Q", part);
-    int left = _live.clockSecs((long)ezt::now());
+    int left = _live.clockSecs((long)cwt::now());
     if (left >= 0 && (out.live.tag == 'P' || out.live.tag == 'Q')) snprintf(out.live.clock, sizeof(out.live.clock), "%d:%02d", left / 60, left % 60);
     std::lock_guard<std::mutex> guard(_lock);
     strlcpy(_saved.name, out.live.name, sizeof(_saved.name));
@@ -201,7 +201,7 @@ void F1Ticker::loadCache() {
   _cacheLoaded = true;
   Preferences prefs;
   if (!prefs.begin("f1cache", true)) return;
-  time_t now = ezt::now();
+  time_t now = cwt::now();
   Standing standings[STANDINGS];
   uint8_t count = prefs.getUChar("standN", 0);
   time_t at = prefs.getUInt("standAt", 0);
@@ -278,7 +278,7 @@ void F1Ticker::logRenewed() {
 
 // Does whatever download is due. Returns how long to wait before looking again.
 unsigned long F1Ticker::refresh() {
-  if (WiFi.status() != WL_CONNECTED || ezt::timeStatus() != timeSet) return 10 * 1000UL;
+  if (WiFi.status() != WL_CONNECTED || cwt::timeStatus() != timeSet) return 10 * 1000UL;
   std::lock_guard<std::mutex> net(f1NetLock);  // the live feed connects between two refreshes, see F1Live.h
   if (!_cacheLoaded) loadCache();
   persistLive();
@@ -502,7 +502,7 @@ unsigned long F1Ticker::fetchWeekend() {
   f1At("fetch weekend");
   std::unique_ptr<WeekendScan> scanHeap(new WeekendScan);  // big: not on the task's stack
   WeekendScan &scan = *scanHeap;
-  scan.nowUtc = ezt::now();
+  scan.nowUtc = cwt::now();
   memcpy(scan.delayed, _delayed, sizeof(_delayed));
   scan.delayedCount = _delayedCount;
   memcpy(scan.seen, _seen, sizeof(_seen));
@@ -631,7 +631,7 @@ unsigned long F1Ticker::fetchWeekend() {
     _version++;
   }
 
-  _renewed.weekend = ezt::now();
+  _renewed.weekend = cwt::now();
 
   // Be there when the next session starts
   unsigned long wait = IDLE_REFRESH_MS;
@@ -693,7 +693,7 @@ unsigned long F1Ticker::fetchStandings() {
   uint8_t count = scan.count;
   f1log("[F1] standings: %d drivers, leader %s\n", count, count ? standings[0].code : "-");
   if (count == 0) return RETRY_MS;
-  _renewed.standings = ezt::now();
+  _renewed.standings = cwt::now();
 
   {
     std::lock_guard<std::mutex> guard(_lock);
@@ -707,7 +707,7 @@ unsigned long F1Ticker::fetchStandings() {
   if (prefs.begin("f1cache", false)) {
     prefs.putBytes("stand", standings, sizeof(scan.standings));  // the whole array: standings is a pointer
     prefs.putUChar("standN", count);
-    prefs.putUInt("standAt", ezt::now());
+    prefs.putUInt("standAt", cwt::now());
     prefs.end();
   }
   return STANDINGS_REFRESH_MS;
@@ -800,7 +800,7 @@ void F1Ticker::fetchTimes(Session &session, int count) {
 
   bool race = session.tag == 'R' || session.tag == 'S';
   session.timeFails = failed ? 1 : 0;
-  if (!failed && ms[0] >= 0) _renewed.times = ezt::now(), _renewed.timesFrom = "ESPN";
+  if (!failed && ms[0] >= 0) _renewed.times = cwt::now(), _renewed.timesFrom = "ESPN";
   if (ms[0] >= 0) {
     strlcpy(session.rows[0].time, race ? (session.live ? "LEAD" : "WINNER") : leader, sizeof(session.rows[0].time));
     for (int i = 1; i < count && i < ROWS; i++) {
@@ -943,7 +943,7 @@ bool F1Ticker::fetchOpenF1(Session &session) {
   for (int i = 1; i < ROWS; i++)
     if (ms[i] >= ms[0]) formatGap(session.rows[i].time, sizeof(session.rows[i].time), ms[i] - ms[0]);
   session.timeFails = 0;
-  _renewed.times = ezt::now(), _renewed.timesFrom = "OpenF1";
+  _renewed.times = cwt::now(), _renewed.timesFrom = "OpenF1";
   f1log("[F1] times %s from OpenF1: leader %ld ms\n", session.name, ms[0]);
   return true;
 }
@@ -1047,7 +1047,7 @@ unsigned long F1Ticker::fetchSeason() {
   upcoming.start = parseEspnDate(start);  // "2026-10-09T08:30:00Z" reads the same way
   f1log("[F1] next race: %s\n", upcoming.city);
   if (!upcoming.city[0] || !upcoming.start) return RETRY_MS;
-  _renewed.season = ezt::now();
+  _renewed.season = cwt::now();
 
   {
     std::lock_guard<std::mutex> guard(_lock);
@@ -1058,7 +1058,7 @@ unsigned long F1Ticker::fetchSeason() {
   Preferences prefs;
   if (prefs.begin("f1cache", false)) {
     prefs.putBytes("race", &upcoming, sizeof(upcoming));
-    prefs.putUInt("raceAt", ezt::now());
+    prefs.putUInt("raceAt", cwt::now());
     prefs.end();
   }
   return SEASON_REFRESH_MS;

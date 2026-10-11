@@ -1,7 +1,7 @@
 #include "Clockface.h"
 #include "F1Ticker.h"
 #include <Locator.h>
-#include <ezTime.h>
+#include <CWTime.h>
 #include <stdio.h>
 #include <string.h>
 #include <CWPreferences.h>
@@ -1364,7 +1364,7 @@ static void drawInfoRow(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, bool idle,
       drawPlace(d, item + 1, snap.last.rows[item], y, snap.last.tag == 'R' || snap.last.tag == 'S');
     }
   } else if (idle) {
-    time_t nowUtc = ezt::now();
+    time_t nowUtc = cwt::now();
     for (int i = 0; i < snap.upcomingCount; i++) {
       if (snap.upcoming[i].start <= nowUtc) continue;
       char when[8];
@@ -1549,7 +1549,7 @@ static void whenText(CWDateTime *dateTime, time_t utc, char *out, size_t size) {
   long days = local / SECS_PER_DAY - dateTime->localNow() / SECS_PER_DAY;
   if (days <= 0) strlcpy(out, "TODAY", size);
   else if (days <= 6) strlcpy(out, DAYS[(local / SECS_PER_DAY + 4) % 7], size);
-  else snprintf(out, size, "%02d/%02d", ezt::day(local), ezt::month(local));
+  else snprintf(out, size, "%02d/%02d", cwt::day(local), cwt::month(local));
 }
 
 // No header: the clock on top, then the championship, and the coming race along the bottom
@@ -1589,7 +1589,7 @@ static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int
   }
   d->drawFastHLine(0, 54, W, RULE);  // a second line, between the list and the bottom bar
   drawBottomChequers(d);
-  time_t nowUtc = ezt::now();
+  time_t nowUtc = cwt::now();
   for (int i = 0; i < snap.upcomingCount; i++) {
     if (snap.upcoming[i].start <= nowUtc) continue;
     char when[8];
@@ -1642,14 +1642,14 @@ static void simSnapshot(F1Ticker::Snapshot &s) {
   strlcpy(s.circuit, "Marina Bay Street Circuit Singapore", sizeof(s.circuit));
   strlcpy(s.upcoming[0].city, "MEXICO CITY", sizeof(s.upcoming[0].city));
   strlcpy(s.upcoming[0].circuit, "Marina Bay Street Circuit", sizeof(s.upcoming[0].circuit));  // the only outline there is yet
-  s.upcoming[0].start = ezt::now() + 17 * SECS_PER_DAY;
+  s.upcoming[0].start = cwt::now() + 17 * SECS_PER_DAY;
   s.upcomingCount = 1;
   switch (simScenario) {
     case 2:
       s.weekend = true;
       simFill(s.last, "QUALI", 'Q', false);
       simFill(s.next, "SPRINT", 'S', false);
-      s.next.start = ezt::now() + 20 * 3600;
+      s.next.start = cwt::now() + 20 * 3600;
       strlcpy(s.coming[0].name, "SPRINT", sizeof(s.coming[0].name));
       s.coming[0].start = s.next.start;
       strlcpy(s.coming[1].name, "RACE", sizeof(s.coming[1].name));
@@ -1660,7 +1660,7 @@ static void simSnapshot(F1Ticker::Snapshot &s) {
       s.weekend = true;
       simFill(s.last, "SQ", 'Q', false);
       simFill(s.next, "SPRINT", 'S', false);
-      s.next.start = ezt::now() + 20 * 3600;
+      s.next.start = cwt::now() + 20 * 3600;
       strlcpy(s.coming[0].name, "SPRINT", sizeof(s.coming[0].name));
       s.coming[0].start = s.next.start;
       strlcpy(s.coming[1].name, "RACE", sizeof(s.coming[1].name));
@@ -1751,7 +1751,7 @@ static void logShown(int view, int page) {
     n_ += snprintf(line + n_, sizeof(line) - n_, " | next");
     for (int i = 0; i < snap.comingCount && n_ < (int)sizeof(line) - 24; i++) {
       const F1Ticker::Snapshot::Coming &c = snap.coming[i];
-      n_ += snprintf(line + n_, sizeof(line) - n_, " %s@%ld%s", c.name, (long)(c.start - ezt::now()) / 60,
+      n_ += snprintf(line + n_, sizeof(line) - n_, " %s@%ld%s", c.name, (long)(c.start - cwt::now()) / 60,
                      c.status == 'd' ? "m DELAYED" : c.status == 'n' ? "m NEWTIME" : "m");
     }
   }
@@ -1814,7 +1814,7 @@ void Clockface::update() {
   static bool wasLive = false;
   static uint32_t endId = 0;
   static time_t endUtc = 0;
-  time_t nowUtc = ezt::now();
+  time_t nowUtc = cwt::now();
   if (snap.live.valid) {
     wasLive = true;
   } else if (snap.last.valid && snap.last.id != endId) {
