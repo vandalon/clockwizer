@@ -42,7 +42,7 @@ Ready-made options: Brian Lough's [ESP32 Trinity](https://github.com/witnessmeno
 
 ### From source (PlatformIO)
 
-The firmware is a [PlatformIO](https://platformio.org) project in `firmware/`. Every clockface is an environment named after its id:
+The firmware is a [PlatformIO](https://platformio.org) project in `firmware/`. On a fresh Linux or macOS machine run `firmware/setup.sh` first: it checks git, Python 3.9+ and disk space (about 8 GB for the first build) and installs PlatformIO 6.2+. Every clockface is an environment named after its id:
 
 ```
 cd firmware
