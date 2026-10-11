@@ -873,8 +873,9 @@ bool FootballTicker::getScanNow(const char *url, const std::function<bool(JsonSc
   YieldingReader reader(http.getStream(), 10000);
   bool ok = parse([](void *r) { return ((YieldingReader *)r)->read(); }, &reader);
   http.end();
-  if (!ok) logf("[Football] %s: cut off or not JSON after %u bytes (heap free %u, largest block %u)\n", url,
-                (unsigned)reader.count, (unsigned)dataFree(), (unsigned)dataBlock());
+  if (!ok) logf("[Football] %s: %s after %u bytes (data free %u, largest block %u)\n", url,
+                reader.dry ? "the connection stopped sending" : "not valid JSON", (unsigned)reader.count, (unsigned)dataFree(),
+                (unsigned)dataBlock());
   return ok;
 }
 

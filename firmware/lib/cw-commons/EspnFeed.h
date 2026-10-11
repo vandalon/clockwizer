@@ -12,6 +12,7 @@ struct YieldingReader {
   Stream &stream;
   unsigned long timeoutMs;
   size_t count = 0;
+  bool dry = false;  // the stream gave nothing for the whole timeout: the server stopped sending or the connection closed
 
   YieldingReader(Stream &s, unsigned long timeout) : stream(s), timeoutMs(timeout) {}
 
@@ -23,6 +24,7 @@ struct YieldingReader {
       if (c >= 0) return c;
       vTaskDelay(1);
     } while (millis() - start < timeoutMs);
+    dry = true;
     return -1;
   }
 
