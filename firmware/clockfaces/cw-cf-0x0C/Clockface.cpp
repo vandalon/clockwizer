@@ -243,7 +243,7 @@ static void drawText(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16
 // The header's text, 6 rows high (y is the top row), same width as the small font
 static void drawHeaderText(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16_t color) {
   const char *dots = strstr(s, "...");
-  for (; *s; s++, x += 4) {
+  for (; *s; x += *s == ' ' ? 2 : 4, s++) {  // a space is 2: with the letter's own gap, 3 blank columns (RED FLAG)
     if (!loadingDotVisible(s, dots)) continue;
     const uint8_t *rows = glyph3x6(*s);
     if (!rows) continue;
@@ -259,7 +259,7 @@ static void drawTextRight(MatrixPanel_I2S_DMA *d, const char *s, int right, int 
 
 // A time or gap ("1:29.412", "+0.123"): the font's dot and colon sit in the middle of a cell, which leaves two empty
 // columns either side; here they take one column and a gap of one, so one column less on each side
-static int timeAdvance(char c) { return c == '.' || c == ':' || c == ' ' ? 2 : 4; }  // a space (the day and the time) is 2 too
+static int timeAdvance(char c) { return c == ' ' ? 1 : c == '.' || c == ':' ? 2 : 4; }  // a space (the day and the time) is 1: with the letter's own gap, 2 blank columns
 static int timeWidth(const char *s) {
   int w = 0;
   for (; *s; s++) w += timeAdvance(*s);
@@ -381,12 +381,13 @@ static bool hasDigit(const char *s) {
 // The letters of the banner are in the text font when they fit; a countdown or lap count stays in the small digits.
 // The countdown is redrawn alone from x 33, so a text in the text font stays left of that when there is one.
 // The banner's text: the 4 wide letters, with the digits of the time in the stretched 4 x 7 ones
+static const int HEADER_SPACE = 2;  // a space in the header: with the letter's own gap, 3 blank columns (RED FLAG)
 static int headerTextWidth(const char *s) {
   int w = 0;
   for (; *s; s++) {
     if (*s >= '0' && *s <= '9') { w += 5; continue; }
     const char *const *rows = narrowGlyph(*s);
-    w += rows ? (int)strlen(rows[0]) + 1 : TALL_SPACE;
+    w += rows ? (int)strlen(rows[0]) + 1 : HEADER_SPACE;
   }
   return w ? w - 1 : 0;
 }
@@ -413,13 +414,17 @@ static void drawHeader(MatrixPanel_I2S_DMA *d, const char *left, const char *rig
   int h = shortPanel() ? 8 : 9;
   d->fillRect(0, 0, W, h, fill);
   if (tab) d->fillRect(0, 0, 2, h, tab);
-  int x = tab ? 4 : 2;
-  if (x + headerTextWidth(left) + 3 + headerTextWidth(right) + 2 + dotShift <= W) {
+  int x = tab ? 3 : 1;  // one pixel after the tab, or from the edge
+  int edge = W - 1 - (dotShift ? dotShift - 1 : 0);  // one pixel from the right edge, or from the red stripe of the failed times
+  if (x + headerTextWidth(left) + 3 + headerTextWidth(right) + (W - edge) <= W) {
     drawHeaderMixed(d, left, x, 1, leftInk);
-    drawHeaderMixed(d, right, W - 2 - dotShift - headerTextWidth(right), 1, rightInk, rightTime, fill);
+    drawHeaderMixed(d, right, edge - headerTextWidth(right), 1, rightInk, rightTime, fill);
+  } else if (x + headerTextWidth(left) + 3 + textWidth(right) + (W - edge) <= W) {  // the left in the larger font, only the right small
+    drawHeaderMixed(d, left, x, 1, leftInk);
+    drawHeaderText(d, right, edge - textWidth(right), 1, rightInk);
   } else {
     drawHeaderText(d, left, x, 1, leftInk);
-    drawHeaderText(d, right, W - 2 - dotShift - textWidth(right), 1, rightInk);
+    drawHeaderText(d, right, edge - textWidth(right), 1, rightInk);
   }
 }
 
@@ -798,7 +803,8 @@ static bool timeOfDay(const F1Ticker::Session &s) { return s.tag != 'R' && s.tag
 static void liveRight(const F1Ticker::Session &s, char *right, size_t size, int hour, int minute) {
   right[0] = 0;
   if (s.tag == 'R' || s.tag == 'S') {
-    if (s.period > 0 && s.totalLaps > 0) snprintf(right, size, "L%d/%d", s.period, s.totalLaps);
+    if (s.period > 0 && s.flag == 'r') snprintf(right, size, "L%d", s.period);  // red flag: the lap only, so RED FLAG and the lap both fit in the larger font
+    else if (s.period > 0 && s.totalLaps > 0) snprintf(right, size, "L%d/%d", s.period, s.totalLaps);
     else if (s.period > 0) snprintf(right, size, "L%d/%s", s.period, loadingDots());
     else strlcpy(right, loadingDots(), size);
   } else if (clockZeroAt && millis() - clockZeroAt > OVER_MS) {
@@ -1419,14 +1425,34 @@ static void drawLoadingCars(MatrixPanel_I2S_DMA *d, int y) {
   if (spacing) drawCar(d, x - spacing, y + secondHeight, secondColor);
 }
 
-// 32 rows: the line under the clock. Idle: the top three of the championship, then the next Grand Prix.
-// Between sessions: the top three of the one that just finished, then the next one.
+// Both clock views use the same upcoming weekend and local date/time.
+static void drawRaceWeekend(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int x, int y, int right) {
+  time_t nowUtc = cwt::now();
+  for (int i = 0; i < snap.upcomingCount; i++) {
+    if (!snap.upcoming[i].city[0] || snap.upcoming[i].start <= nowUtc) continue;
+    char when[12];
+    whenText(dateTime, snap.upcoming[i].start, when, sizeof(when));
+    int room = right - timeWidth(when) - 2;
+    const F1Ticker::Race &race = snap.upcoming[i];
+    // The locality (the circuit's own place) when the Grand Prix's name does not fit but it does
+    const char *name = textWidth(race.city) > room - x && race.place[0] && textWidth(race.place) <= room - x ? race.place : race.city;
+    drawMarquee(d, name, x, y, room, WHITE);
+    drawTimeRight(d, when, right, y, MINUTES);  // one pixel either side of the colon
+    return;
+  }
+  drawLoadingCars(d, y);
+}
+
+// 32 rows: the line under the clock. Idle: the top three of the championship, then the next weekend.
+// Between sessions: the top three of the one that just finished, then the next session or weekend.
 static void drawInfoRow(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, bool idle, int page, int y) {
   dimPlaces = idle ? snap.standingsStale : snap.last.stale;
   loadingTimes = !idle && !snap.last.fromFeed && (!snap.last.rows[0].time[0] || snap.last.timeFails);
   int shown[4];
   int places = idle ? standingsShown(shown) : min(3, filledRows(snap.last));
-  bool next = idle ? snap.upcomingCount > 0 : snap.next.valid;
+  bool nextSession = snap.next.valid && snap.next.name[0] &&
+                     (snap.comingCount || snap.next.status == 'd' || snap.next.start > cwt::now());
+  bool next = idle ? snap.upcomingCount > 0 : true;
   int count = places + (next ? 1 : 0);
   if (count == 0) {
     drawLoadingCars(d, y);
@@ -1446,16 +1472,8 @@ static void drawInfoRow(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, bool idle,
     } else {
       drawPlace(d, item + 1, snap.last.rows[item], y, snap.last.tag == 'R' || snap.last.tag == 'S');
     }
-  } else if (idle) {
-    time_t nowUtc = cwt::now();
-    for (int i = 0; i < snap.upcomingCount; i++) {
-      if (snap.upcoming[i].start <= nowUtc) continue;
-      char when[8];
-      whenText(dateTime, snap.upcoming[i].start, when, sizeof(when));
-      drawMarquee(d, snap.upcoming[i].city, 2, y, W - 2 - textWidth(when) - 2, WHITE);  // a gap before the date
-      drawTextRight(d, when, W - 2, y, MINUTES);
-      break;
-    }
+  } else if (idle || !nextSession) {
+    drawRaceWeekend(d, dateTime, 2, y, W - 2);
   } else {
     LocalTime t = localParts(dateTime, snap.next.start);
     char when[12];
@@ -1475,7 +1493,11 @@ static int delayedIndex() {
   for (int i = 0; i < snap.comingCount; i++) if (snap.coming[i].status == 'd') return i;
   return -1;
 }
-static int comingCount() { return delayedIndex() >= 0 ? 1 : snap.comingCount ? snap.comingCount : snap.next.valid ? 1 : 0; }
+static int comingCount() {
+  if (delayedIndex() >= 0) return 1;
+  if (snap.comingCount) return snap.comingCount;
+  return snap.next.valid && snap.next.name[0] && (snap.next.status == 'd' || snap.next.start > cwt::now()) ? 1 : 0;
+}
 static int comingIndex() {
   int delayed = delayedIndex();
   if (delayed >= 0) return delayed;
@@ -1511,7 +1533,10 @@ static void drawComing(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int index, 
 static void drawNextRow(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime) {
   drawBottomChequers(d);
   int n = comingCount();
-  if (!n) return;
+  if (!n) {
+    drawRaceWeekend(d, dateTime, 1, 57, W - 1);
+    return;
+  }
   int index = comingIndex();
   slideSeen(slideNext, index);
   clipTop = 56;
@@ -1572,10 +1597,10 @@ static void drawResultList(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, i
       flagFill(d, 0, 8, W, 8);
     }
   }
-  const char *name = !strcmp(s.name, "QUALI") ? "Q" : !strcmp(s.name, "SPRINT") ? "SR" : !strcmp(s.name, "RACE") ? "R" : !strncmp(s.name, "FP", 2) ? s.name + 1 : s.name;  // FP1 is P1 here
+  const char *name = !strcmp(s.name, "QUALI") ? "Q" : !strcmp(s.name, "SPRINT") ? "SR" : !strcmp(s.name, "RACE") ? "RACE" : !strncmp(s.name, "FP", 2) ? s.name + 1 : s.name;  // FP1 is P1 here
   drawHeader(d, "", "", HEADER_NAVY, WHITE);
   drawWaitDot(d, s);
-  drawText(d, name, 0, 1, FASTEST, true);  // all the way to the left, in the best-time purple,
+  drawText(d, name, strcmp(name, "RACE") ? 0 : 2, 1, FASTEST, true);  // all the way to the left (RACE with 2 pixels), in the best-time purple,
   drawHeaderTime(d, hour, minute, W - 2 - dotShift, 1, MINUTES, HEADER_NAVY);  // and the time 2 pixels from the right edge and 1 from the top, in the clock's green
   drawPlace(d, 1, s.rows[0], 10, race, 0, isFavourite(s.rows[0].code));
 }
@@ -1628,12 +1653,13 @@ static void drawBetween(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, 
   drawNextRow(d, dateTime);
 }
 
-// When the weekend starts: TODAY, a weekday for the coming six days ("FRI"), a date after that ("24/10")
+// The weekend's local start: TODAY or a weekday within six days, followed by the time, or only the date after that.
 static void whenText(CWDateTime *dateTime, time_t utc, char *out, size_t size) {
   time_t local = dateTime->utcToLocal(utc);
   long days = local / SECS_PER_DAY - dateTime->localNow() / SECS_PER_DAY;
-  if (days <= 0) strlcpy(out, "TODAY", size);
-  else if (days <= 6) strlcpy(out, DAYS[(local / SECS_PER_DAY + 4) % 7], size);
+  LocalTime t = localParts(dateTime, utc);
+  if (days <= 0) snprintf(out, size, "TODAY %02d:%02d", t.hour, t.minute);
+  else if (days <= 6) snprintf(out, size, "%s %02d:%02d", DAYS[t.weekday], t.hour, t.minute);
   else snprintf(out, size, "%02d/%02d", cwt::day(local), cwt::month(local));
 }
 
@@ -1673,16 +1699,7 @@ static void drawIdle(MatrixPanel_I2S_DMA *d, CWDateTime *dateTime, int hour, int
   }
   d->drawFastHLine(0, 54, W, RULE);  // a second line, between the list and the bottom bar
   drawBottomChequers(d);
-  if (places && !snap.upcomingCount) drawLoadingCars(d, 57);
-  time_t nowUtc = cwt::now();
-  for (int i = 0; i < snap.upcomingCount; i++) {
-    if (snap.upcoming[i].start <= nowUtc) continue;
-    char when[8];
-    whenText(dateTime, snap.upcoming[i].start, when, sizeof(when));
-    drawMarquee(d, snap.upcoming[i].city, 1, 57, W - 1 - textWidth(when) - 2, WHITE);  // a gap before the date
-    drawTextRight(d, when, W - 1, 57, MINUTES);
-    break;
-  }
+  drawRaceWeekend(d, dateTime, 1, 57, W - 1);
 }
 
 // Made-up screens for the telnet simulator, so every look can be checked outside a race weekend
@@ -1758,6 +1775,7 @@ static void simSnapshot(F1Ticker::Snapshot &s) {
       s.weekend = true;
       simFill(s.live, "RACE", 'R', true);
       s.live.period = 32;
+      s.live.totalLaps = 57;  // without it the right side reads "L32/..." and the red flag label does not fit in the larger font
       s.live.flag = simScenario == 4 ? 's' : simScenario == 5 ? 'r' : 0;
       s.live.finished = (millis() / 7000) % 3 == 2;  // the chequered flag for the last seconds of each round
       break;
@@ -2009,7 +2027,7 @@ void Clockface::update() {
   int rowPage = view == BETWEEN ? comingIndex() : 0;  // which of the coming sessions the bottom row shows
   int pulse = view != LIVE ? pulseLevel() : 0;  // the colon of the time breathes: drawn again at each step
   if (view == LIVE && timeOfDay(snap.live)) pulse = pulseLevel();  // the time of day's colon breathes
-  if (view == LIVE || view == LIST || view == BETWEEN) marqueeMax = 0;  // only the idle screen has a scrolling text
+  if (view == LIVE || view == LIST) marqueeMax = 0;
   if (marqueeMax) pulse = pulse * 1000 + marqueeOffset(marqueeMax);  // and a scrolling name moves a pixel at a time
   snprintf(key, sizeof(key), "%lu|%d|%d:%d|%d|%lx|%d|%d|%lu|%d", (unsigned long)version, (int)view, tallClock ? 0 : hour, tallClock ? 0 : minute, page, (unsigned long)marks, rowPage, pulse, loadingCarsShown ? millis() / 40 : loadingDotsShown ? (millis() / LOADING_DOT_MS) % 3 + 1 : 0UL, showIntervals);
   char right[12] = "";

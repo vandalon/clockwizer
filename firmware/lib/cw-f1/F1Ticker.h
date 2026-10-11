@@ -62,6 +62,7 @@ class F1Ticker {
 
     struct Race {
       char city[20] = "";  // upper case, ASCII
+      char place[20] = "";  // the circuit's locality, the same way: shown when the city does not fit
       char circuit[48] = "";  // the circuit's name and place, to find its outline
       time_t start = 0;    // UTC, the first practice session
     };

@@ -27,7 +27,7 @@ static const uint32_t TASK_STACK = 9216;  // it uses about 5.5 KB, and every KB 
 static const time_t DELAY_GRACE_SECS = 3 * 60;     // a session this long past its start time and still not running is delayed
 static const time_t MOVED_MIN_SECS = 5 * 60;  // a start this much later than first seen is a new start time
 static const time_t DELAY_MAX_SECS = 6 * 60 * 60;  // and is forgotten this long after
-static const time_t WEEKEND_TAIL_SECS = 3 * 60 * 60;  // the weekend lasts this long after the race started
+static const time_t WEEKEND_TAIL_SECS = 3 * 60 * 60;  // without a clock, the weekend lasts this long after the race started
 
 extern volatile bool firmwareUpdating;  // main.cpp
 extern volatile bool liveEventOn;       // main.cpp: no automatic update while true
@@ -531,7 +531,13 @@ unsigned long F1Ticker::fetchWeekend() {
   String eventId = scan.eventId, liveId = scan.liveId;
   time_t weekendStart = parseEspnDate(scan.eventDate), weekendEnd = parseEspnDate(scan.eventEnd);
   Snapshot &snap = scan.snap;
-  snap.weekend = snap.live.valid || (weekendStart && nowUtc >= weekendStart && nowUtc <= weekendEnd + WEEKEND_TAIL_SECS);
+  // The weekend is over at the end of the race day (local time); without a clock, a few hours after the race
+  time_t weekendOver = weekendEnd + WEEKEND_TAIL_SECS;
+  if (weekendEnd && _dateTime) {
+    time_t local = _dateTime->utcToLocal(weekendEnd);
+    weekendOver = weekendEnd + ((local / 86400 + 1) * 86400 - local);
+  }
+  snap.weekend = snap.live.valid || (weekendStart && nowUtc >= weekendStart && nowUtc <= weekendOver);
 
   // The flag is in the session's own status: keep safety car and virtual safety car distinct
   if (snap.live.valid && !eventId.isEmpty() && !liveId.isEmpty()) {
@@ -707,6 +713,14 @@ unsigned long F1Ticker::fetchStandings() {
   Standing *standings = scan.standings;
   uint8_t count = scan.count;
   f1log("[F1] standings: %d drivers, leader %s\n", count, count ? standings[0].code : "-");
+  // What was just downloaded (not the snapshot or the flash copy), to compare with the Jolpica answer
+  char top[96] = "";
+  for (int i = 0; i < count && i < 6; i++) {
+    char entry[16];
+    snprintf(entry, sizeof(entry), "%s%d.%s %d", i ? ", " : "", i + 1, standings[i].code, standings[i].points);
+    strlcat(top, entry, sizeof(top));
+  }
+  f1log("[F1] standings downloaded: %s\n", top);
   if (count == 0) return RETRY_MS;
   _renewed.standings = cwt::now();
 
@@ -1053,38 +1067,66 @@ static void cityName(char *to, size_t size, const char *city) {
   to[n] = 0;
 }
 
-// The coming Grand Prix from Jolpica: one race, under a kilobyte (ESPN's season calendar is ~650KB)
+// Stream the calendar and keep the nearest weekend whose first practice has not started.
+// Jolpica's "next" race can still be the current weekend until its results are published.
 struct SeasonScan {
-  char name[32] = "", date[16] = "", time[16] = "", circuit[48] = "";
+  char name[32] = "", date[16] = "", time[16] = "", circuit[48] = "", locality[32] = "";
+  int index = -1;
+  time_t nowUtc = 0;
+  F1Ticker::Race upcoming;
+
+  void flush() {
+    char start[48];
+    snprintf(start, sizeof(start), "%sT%s", date, time);
+    time_t when = parseEspnDate(start);
+    if (name[0] && date[0] && time[0] && when > nowUtc && (!upcoming.start || when < upcoming.start)) {
+      String city = name;
+      city.replace(" Grand Prix", "");
+      city.replace(" City", "");
+      cityName(upcoming.city, sizeof(upcoming.city), city.c_str());
+      cityName(upcoming.place, sizeof(upcoming.place), locality);
+      strlcpy(upcoming.circuit, circuit, sizeof(upcoming.circuit));
+      upcoming.start = when;
+    }
+    name[0] = date[0] = time[0] = circuit[0] = locality[0] = 0;
+    index = -1;
+  }
 
   static void leaf(void *sink, const char (*p)[JsonScan::KEY], int n, const char *v, bool) {
     SeasonScan &s = *(SeasonScan *)sink;
-    if (jsonPathIs(p, n, "MRData.RaceTable.Races.0.raceName")) strlcpy(s.name, v, sizeof(s.name));
-    else if (jsonPathIs(p, n, "MRData.RaceTable.Races.0.FirstPractice.date")) strlcpy(s.date, v, sizeof(s.date));
-    else if (jsonPathIs(p, n, "MRData.RaceTable.Races.0.FirstPractice.time")) strlcpy(s.time, v, sizeof(s.time));
-    else if (jsonPathIs(p, n, "MRData.RaceTable.Races.0.Circuit.circuitName") || jsonPathIs(p, n, "MRData.RaceTable.Races.0.Circuit.Location.locality")) {
+    if (n < 5 || strcmp(p[0], "MRData") || strcmp(p[1], "RaceTable") || strcmp(p[2], "Races")) return;
+    int index = atoi(p[3]);
+    if (index != s.index) {
+      s.flush();
+      s.index = index;
+    }
+    if (jsonPathIs(p, n, "MRData.RaceTable.Races.*.raceName")) strlcpy(s.name, v, sizeof(s.name));
+    else if (jsonPathIs(p, n, "MRData.RaceTable.Races.*.FirstPractice.date")) strlcpy(s.date, v, sizeof(s.date));
+    else if (jsonPathIs(p, n, "MRData.RaceTable.Races.*.FirstPractice.time")) strlcpy(s.time, v, sizeof(s.time));
+    else if (jsonPathIs(p, n, "MRData.RaceTable.Races.*.Circuit.circuitName") || jsonPathIs(p, n, "MRData.RaceTable.Races.*.Circuit.Location.locality")) {
       if (s.circuit[0]) strlcat(s.circuit, " ", sizeof(s.circuit));
       strlcat(s.circuit, v, sizeof(s.circuit));
+      if (p[n - 1][0] == 'l') strlcpy(s.locality, v, sizeof(s.locality));  // "locality"
     }
   }
 };
 
 unsigned long F1Ticker::fetchSeason() {
   f1At("fetch season");
+  time_t now = cwt::now();
+  struct tm today;
+  gmtime_r(&now, &today);
   SeasonScan scan;
-  if (!getScan("https://api.jolpi.ca/ergast/f1/current/next.json", SeasonScan::leaf, &scan)) return RETRY_MS;
-
-  Race upcoming;
-  // "Mexico City Grand Prix" -> "MEXICO"
-  String name = scan.name;
-  name.replace(" Grand Prix", "");
-  name.replace(" City", "");  // Mexico City -> MEXICO
-  cityName(upcoming.city, sizeof(upcoming.city), name.c_str());  // longer than the screen: it scrolls
-  strlcpy(upcoming.circuit, scan.circuit, sizeof(upcoming.circuit));
-  char start[48];
-  snprintf(start, sizeof(start), "%sT%s", scan.date, scan.time);
-  upcoming.start = parseEspnDate(start);  // "2026-10-09T08:30:00Z" reads the same way
-  f1log("[F1] next race: %s\n", upcoming.city);
+  scan.nowUtc = now;
+  for (int year = today.tm_year + 1900; year <= today.tm_year + 1901; year++) {
+    char url[80];
+    snprintf(url, sizeof(url), "https://api.jolpi.ca/ergast/f1/%d.json?limit=100", year);
+    if (!getScan(url, SeasonScan::leaf, &scan)) return RETRY_MS;
+    scan.flush();
+    if (scan.upcoming.start) break;
+  }
+  Race upcoming = scan.upcoming;
+  f1log("[F1] next weekend: %s, first practice UTC %ld\n", upcoming.city, (long)upcoming.start);
   if (!upcoming.city[0] || !upcoming.start) return RETRY_MS;
   _renewed.season = cwt::now();
 
