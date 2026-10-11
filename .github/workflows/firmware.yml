@@ -73,7 +73,9 @@ jobs:
   # Only a push to main (never a pull request or another branch) and only when every face built
   publish:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'vandalon/clockwizer'
+    # PAGES_PUBLISH is a repository variable (Settings > Secrets and variables > Actions > Variables): publishing
+    # stays off until it is set to true, because every publish replaces the firmware the clocks download
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'vandalon/clockwizer' && vars.PAGES_PUBLISH == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write  # the push to gh-pages
