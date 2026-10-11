@@ -11,8 +11,33 @@ on:
 permissions:
   contents: read
 
+# Runs on main go one after the other, so each one sees the version the one before it published
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
+  # The firmware version is the build date and a number that counts up during the day: 2026.10.11.1, 2026.10.11.2...
+  # It continues from what is published on the gh-pages branch.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Work out the version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          today=$(TZ=Europe/Amsterdam date +%Y.%m.%d)
+          published=$(gh api "repos/$GITHUB_REPOSITORY/contents/manifest-cw-cf-0x0C.json?ref=gh-pages" -q .content 2>/dev/null | base64 -d | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' 2>/dev/null || true)
+          number=1
+          if [[ "$published" == "$today".* ]]; then number=$(( ${published##*.} + 1 )); fi
+          echo "Published: ${published:-none}, this build: $today.$number"
+          echo "version=$today.$number" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: version
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false  # a broken face should not hide the others
@@ -51,6 +76,10 @@ jobs:
           key: platformio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
           restore-keys: platformio-${{ runner.os }}-
 
+      # The version in platformio.ini is for builds on your own machine; GitHub's builds get the date and number
+      - name: Set the firmware version
+        run: sed -i 's/CW_FW_VERSION="\\"[^\\]*\\""/CW_FW_VERSION="\\"${{ needs.version.outputs.version }}\\""/' firmware/platformio.ini
+
       - name: Build ${{ matrix.env }}
         working-directory: firmware
         # The first build on a new platform folder sometimes fails once: run it again
@@ -72,7 +101,7 @@ jobs:
 
   # Only a push to main (never a pull request or another branch) and only when every face built
   publish:
-    needs: build
+    needs: [version, build]
     # PAGES_PUBLISH is a repository variable (Settings > Secrets and variables > Actions > Variables): publishing
     # stays off until it is set to true, because every publish replaces the firmware the clocks download
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'vandalon/clockwizer' && vars.PAGES_PUBLISH == 'true'
@@ -100,7 +129,7 @@ jobs:
         run: |
           set -euo pipefail
           git clone -q --depth 1 -b gh-pages "https://github.com/$GITHUB_REPOSITORY.git" pages
-          python3 source/firmware/tools/make_pages.py builds pages
+          python3 source/firmware/tools/make_pages.py builds pages ${{ needs.version.outputs.version }}
           cd pages
           git add -A
           if git diff --cached --quiet; then

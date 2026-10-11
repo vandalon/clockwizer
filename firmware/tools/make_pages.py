@@ -5,7 +5,7 @@
 #   manifest-cw-cf-0xNN.json, flash/*.bin, index.html, faces.json, images/, vendor/   the web flasher
 #   .nojekyll
 #
-#   python3 tools/make_pages.py <builds> <pages>
+#   python3 tools/make_pages.py <builds> <pages> [version]
 #
 # <builds> holds one folder per face (cw-cf-0xNN) with firmware.bin, bootloader.bin, partitions.bin and
 # boot_app0.bin; <pages> is the folder to fill (an existing checkout of the gh-pages branch works: files are replaced).
@@ -21,8 +21,9 @@ firmware = os.path.dirname(here)
 docs = os.path.join(os.path.dirname(firmware), "docs")
 
 builds, pages = sys.argv[1:3]
+version_given = sys.argv[3] if len(sys.argv) > 3 else None
 faces = json.load(open(os.path.join(docs, "faces.json")))
-version = re.search(r'CW_FW_VERSION="\\"([^\\]*)\\"', open(os.path.join(firmware, "platformio.ini")).read()).group(1)
+version = version_given or re.search(r'CW_FW_VERSION="\\"([^\\]*)\\"', open(os.path.join(firmware, "platformio.ini")).read()).group(1)
 
 shutil.copytree(docs, pages, dirs_exist_ok=True)
 open(os.path.join(pages, ".nojekyll"), "w").close()
