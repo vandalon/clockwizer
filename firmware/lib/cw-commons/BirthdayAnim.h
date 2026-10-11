@@ -130,7 +130,7 @@ static void bigText(const char *s, int y, float t, int cx = 32) {
         }
     }
   }
-  const int8_t sp[6][2] = {{-5, 1}, {w + 3, 9}, {w / 2 - 3, -3}, {3, 14}, {w - 6, -2}, {-2, 7}};
+  const int sp[6][2] = {{-5, 1}, {w + 3, 9}, {w / 2 - 3, -3}, {3, 14}, {w - 6, -2}, {-2, 7}};
   for (int i = 0; i < 6; i++) {
     float a = fmaxf(0.0f, sinf(t * 2.2f + i * 2.1f));
     a = a * a * a;

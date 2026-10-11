@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Sets up what is needed to build the firmware on a clean Ubuntu/Debian or macOS machine.
-# It checks git, Python 3.9+ (with venv) and free disk space, then installs PlatformIO 6.2+
-# into its own virtualenv and links `pio` into ~/.local/bin. It never uses sudo: if something
-# is missing it tells you the command to run. Safe to run again.
+# Sets up what is needed to build the firmware on a clean Linux or macOS machine.
+# It checks that git, Python 3.9+ with venv and pip, and enough free disk space are there, then
+# installs PlatformIO 6.2+ into its own virtualenv and links `pio` into ~/.local/bin.
+# It installs no system packages itself (no sudo): if something is missing it says what, which
+# version, and the command for your distro to install it. Safe to run again.
 #
 #   ./setup.sh
 set -euo pipefail
@@ -17,24 +18,49 @@ CORE_DIR=${PLATFORMIO_CORE_DIR:-$HOME/.platformio}
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
+# Group that owns serial ports (Arch and derivatives use uucp), and the install command to suggest
+SERIAL_GROUP=dialout
 if [ "$(uname)" = Darwin ]; then
-	HINT_PKGS="brew install git python"
+	PKG_CMD="brew install git python"
 else
-	HINT_PKGS="sudo apt update && sudo apt install -y git python3 python3-venv python3-pip curl"
+	os_id=$(. /etc/os-release 2> /dev/null && echo "${ID:-} ${ID_LIKE:-}")
+	case " $os_id " in
+		*" arch "* | *" manjaro "*)
+			PKG_CMD="sudo pacman -S --needed git python python-pip"
+			SERIAL_GROUP=uucp ;;
+		*" fedora "* | *" rhel "* | *" centos "*)
+			PKG_CMD="sudo dnf install -y git python3 python3-pip" ;;
+		*" suse "* | *" opensuse"*)
+			PKG_CMD="sudo zypper install -y git python3 python3-pip" ;;
+		*" alpine "*)
+			PKG_CMD="sudo apk add bash git python3 py3-pip" ;;
+		*" debian "* | *" ubuntu "*)
+			PKG_CMD="sudo apt update && sudo apt install -y git python3 python3-venv python3-pip" ;;
+		*)
+			PKG_CMD="" ;;
+	esac
 fi
+# What to append to a "missing" message
+hint() {
+	if [ -n "$PKG_CMD" ]; then echo "Install it with: $PKG_CMD"; else echo "Install it with your package manager."; fi
+}
 
-command -v git > /dev/null || fail "git is missing. Run: $HINT_PKGS"
+command -v git > /dev/null || fail "git is missing. $(hint)"
 
-# Newest python3 on PATH that is new enough and can make a venv with pip
+# Newest python3 on PATH that is new enough
 PY=
+found=
 for c in python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
 	command -v "$c" > /dev/null || continue
+	found=$c
 	"$c" -c "import sys; sys.exit(sys.version_info < tuple(map(int, '$MIN_PY'.split('.'))))" 2> /dev/null || continue
 	PY=$c
 	break
 done
-[ -n "$PY" ] || fail "Python $MIN_PY or newer is missing. Run: $HINT_PKGS"
-"$PY" -c "import venv, ensurepip" 2> /dev/null || fail "$PY has no venv/pip support. Run: $HINT_PKGS"
+[ -n "$found" ] || fail "python3 is missing (Python $MIN_PY or newer is needed). $(hint)"
+[ -n "$PY" ] || fail "Python $MIN_PY or newer is needed, but the newest found is $($found --version 2>&1). $(hint)"
+"$PY" -c "import venv" 2> /dev/null || fail "$PY is missing the venv module (a separate package on some distros, e.g. python3-venv). $(hint)"
+"$PY" -c "import ensurepip" 2> /dev/null || fail "$PY is missing pip/ensurepip (a separate package on some distros, e.g. python3-pip). $(hint)"
 echo "Python:   $($PY --version) ($(command -v "$PY"))"
 
 # The first build unpacks the framework (about 3.5 GB) next to a temporary copy of it
@@ -65,8 +91,8 @@ if grep -qE '^platform *=.*/55\.03\.31[01]/' platformio.ini; then
 	echo "         with \"No module named 'SCons.Tool.FortranCommon'\". Use 55.03.312-1 or newer." >&2
 fi
 
-if [ "$(uname)" = Linux ] && ! id -nG | grep -qw dialout; then
-	echo "NOTE: to flash over USB add yourself to the dialout group: sudo usermod -aG dialout \$USER (then log out and in)"
+if [ "$(uname)" = Linux ] && ! id -nG | grep -qw "$SERIAL_GROUP"; then
+	echo "NOTE: to flash over USB add yourself to the $SERIAL_GROUP group: sudo usermod -aG $SERIAL_GROUP \$USER (then log out and in)"
 fi
 
 echo

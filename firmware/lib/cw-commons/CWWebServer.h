@@ -162,7 +162,7 @@ struct ClockwiseWebServer
       StatusController::getInstance()->userRestart();
 
 
-    WiFiClient client = server.available();
+    WiFiClient client = server.accept();
     if (client)
     {
       if (!accessAllowed(client.remoteIP()))

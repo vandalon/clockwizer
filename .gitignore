@@ -15,3 +15,8 @@ dependencies.lock
 
 # Generated from settings.html by tools/gzip_page.py at build time
 firmware/lib/cw-commons/SettingsWebPage.h
+
+# Made by the Arduino 3.x (pioarduino) build from custom_sdkconfig in platformio.ini: not sources
+firmware/.dummy/
+firmware/managed_components/
+firmware/sdkconfig.defaults
