@@ -5,7 +5,9 @@
 #   manifest-cw-cf-0xNN.json, flash/*.bin, index.html, faces.json, images/, vendor/   the web flasher
 #   .nojekyll
 #
-#   python3 tools/make_pages.py <builds> <pages> [version]
+#   python3 tools/make_pages.py <builds> <pages> [version] [--no-docs]
+#
+# --no-docs: only the builds, flash files and manifests (the beta channel, which lives in a folder of its own)
 #
 # <builds> holds one folder per face (cw-cf-0xNN) with firmware.bin, bootloader.bin, partitions.bin and
 # boot_app0.bin; <pages> is the folder to fill (an existing checkout of the gh-pages branch works: files are replaced).
@@ -20,13 +22,17 @@ here = os.path.dirname(os.path.abspath(__file__))
 firmware = os.path.dirname(here)
 docs = os.path.join(os.path.dirname(firmware), "docs")
 
-builds, pages = sys.argv[1:3]
-version_given = sys.argv[3] if len(sys.argv) > 3 else None
+args = [a for a in sys.argv[1:] if a != "--no-docs"]
+no_docs = "--no-docs" in sys.argv
+builds, pages = args[:2]
+version_given = args[2] if len(args) > 2 else None
 faces = json.load(open(os.path.join(docs, "faces.json")))
 version = version_given or re.search(r'CW_FW_VERSION="\\"([^\\]*)\\"', open(os.path.join(firmware, "platformio.ini")).read()).group(1)
 
-shutil.copytree(docs, pages, dirs_exist_ok=True)
-open(os.path.join(pages, ".nojekyll"), "w").close()
+os.makedirs(pages, exist_ok=True)
+if not no_docs:
+    shutil.copytree(docs, pages, dirs_exist_ok=True)
+    open(os.path.join(pages, ".nojekyll"), "w").close()
 
 built = []
 for face in faces:

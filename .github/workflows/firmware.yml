@@ -1,10 +1,13 @@
 # Builds every clockface on each push and pull request (no secrets, nothing uploaded).
 #
-# A release is a tag: push a tag that starts with v on a commit of main (git tag v1 && git push origin v1, or
-# "Create release" on GitHub) and the builds of that commit are published to the gh-pages branch, which GitHub
-# Pages serves. That is where the clocks download their firmware (https://vandalon.github.io/clockwizer/cw-cf-0xNN.bin
-# and .md5) and where the web flasher lives. The firmware version is made by the workflow: the build date and a
-# number that counts up during the day. Publishing to your own update server stays with firmware/update-fw.sh.
+# A release is a tag on a commit of main, and its name picks the channel:
+#   v...      stable: published at the root of the gh-pages branch (https://vandalon.github.io/clockwizer/), which is
+#             where the clocks download their firmware by default (cw-cf-0xNN.bin and .md5) and where the web flasher lives
+#   beta...   beta: published in the beta/ folder (https://vandalon.github.io/clockwizer/beta/); a clock gets those builds
+#             when its firmware location setting points there. Stable is not touched.
+# Example: git tag v1 && git push origin v1, or git tag beta1 && git push origin beta1 (or "Create release" on GitHub).
+# The firmware version is made by the workflow: the build date and a number that counts up during the day, per channel
+# (2026.10.11.1, and 2026.10.11.1-beta for a beta). Publishing to your own update server stays with firmware/update-fw.sh.
 name: Build firmware
 
 on:
@@ -26,6 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.version.outputs.channel }}
     steps:
       - name: Work out the version
         id: version
@@ -33,11 +37,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           today=$(TZ=Europe/Amsterdam date +%Y.%m.%d)
-          published=$(gh api "repos/$GITHUB_REPOSITORY/contents/manifest-cw-cf-0x0C.json?ref=gh-pages" -q .content 2>/dev/null | base64 -d | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' 2>/dev/null || true)
+          channel=stable; suffix=""; manifest=manifest-cw-cf-0x0C.json
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" == beta* ]]; then
+            channel=beta; suffix=-beta; manifest=beta/manifest-cw-cf-0x0C.json
+          fi
+          published=$(gh api "repos/$GITHUB_REPOSITORY/contents/$manifest?ref=gh-pages" -q .content 2>/dev/null | base64 -d | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' 2>/dev/null || true)
+          published=${published%-beta}
           number=1
           if [[ "$published" == "$today".* ]]; then number=$(( ${published##*.} + 1 )); fi
-          echo "Published: ${published:-none}, this build: $today.$number"
-          echo "version=$today.$number" >> "$GITHUB_OUTPUT"
+          echo "Channel: $channel, published: ${published:-none}, this build: $today.$number$suffix"
+          echo "version=$today.$number$suffix" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
@@ -102,10 +112,11 @@ jobs:
             firmware/.pio/build/${{ matrix.env }}/boot_app0.bin
           retention-days: 14
 
-  # Only a tag starting with v, on a commit of main, and only when every face built: never a pull request or a branch
+  # Only a tag starting with v (stable) or beta (beta), on a commit of main, and only when every face built:
+  # never a pull request or a branch
   publish:
     needs: [version, build]
-    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && github.repository == 'vandalon/clockwizer'
+    if: github.ref_type == 'tag' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'beta')) && github.repository == 'vandalon/clockwizer'
     runs-on: ubuntu-latest
     permissions:
       contents: write  # the push to gh-pages
@@ -138,7 +149,12 @@ jobs:
         run: |
           set -euo pipefail
           git clone -q --depth 1 -b gh-pages "https://github.com/$GITHUB_REPOSITORY.git" pages
-          python3 source/firmware/tools/make_pages.py builds pages ${{ needs.version.outputs.version }}
+          if [ "${{ needs.version.outputs.channel }}" = beta ]; then
+            # the beta channel only needs the builds, not a second copy of the web flasher
+            python3 source/firmware/tools/make_pages.py builds pages/beta ${{ needs.version.outputs.version }} --no-docs
+          else
+            python3 source/firmware/tools/make_pages.py builds pages ${{ needs.version.outputs.version }}
+          fi
           cd pages
           git add -A
           if git diff --cached --quiet; then
@@ -149,7 +165,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # A single commit each time: Pages only needs the latest files, and the history would only grow
           git checkout -q --orphan publish
-          git commit -q -m "Firmware $(date -u '+%Y-%m-%d %H:%M') ($(echo "$GITHUB_SHA" | cut -c1-7))"
+          git commit -q -m "Firmware ${{ needs.version.outputs.version }} ($(echo "$GITHUB_SHA" | cut -c1-7))"
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push -q --force origin publish:gh-pages
           echo "Published to the gh-pages branch"
