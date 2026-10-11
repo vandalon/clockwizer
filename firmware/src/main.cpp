@@ -18,7 +18,6 @@
 #include <WiFiClientSecure.h>
 #include <Preferences.h>
 #include <esp_ota_ops.h>
-#include <uptime_formatter.h>
 #include "NotificationServer.h"
 #include "BackgroundWait.h"
 
@@ -869,6 +868,13 @@ static void crashGuard() {
   prefs.end();
 }
 
+// Time since boot as "x days, y hours, z minutes, s seconds" (esp_timer does not wrap after 49 days like millis())
+static String uptimeText() {
+  uint32_t secs = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+  return String(secs / 86400) + " days, " + String(secs / 3600 % 24) + " hours, " + String(secs / 60 % 60) +
+         " minutes, " + String(secs % 60) + " seconds";
+}
+
 // For the uptime lines: the crashes still counted against this build
 static String crashCountText() {
   Preferences prefs;
@@ -967,7 +973,7 @@ void loop() {
             }
             break;
           case 'U':
-            TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime() + crashCountText() + ", reset reason " +
+            TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptimeText() + crashCountText() + ", reset reason " +
                                  String((int)esp_reset_reason()) + " (1 power on, 3 software, 4 panic/exception, 5-7 watchdog, 9 brownout), heap free " +
                                  String(ESP.getFreeHeap()) + ", largest block " + String(ESP.getMaxAllocHeap()) + ", lowest ever " +
                                  String(ESP.getMinFreeHeap()));
@@ -1178,7 +1184,7 @@ void loop() {
       }
       if (altDisplay != 6) BirthdayAnim::release();
       if (currentTime != lastTime) {
-        TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptime_formatter::getUptime() + crashCountText());
+        TelnetStream.println(currentTimeWithSeconds + " [INFO] Uptime: " + uptimeText() + crashCountText());
       }
       lastTime = currentTime;
       loopDue = now + (altDisplay == 6 ? BIRTHDAY_FRAME_MS : CLOCKFACE_UPDATE_MS);
