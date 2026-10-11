@@ -27,7 +27,7 @@ jobs:
           - cw-cf-0x0B  # Football
           - cw-cf-0x0C  # Formula 1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The first build unpacks about 3.5 GB of framework next to a temporary copy of it
       - name: Free disk space
@@ -35,7 +35,7 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h /
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -43,7 +43,7 @@ jobs:
         run: pip install "platformio>=6.2"
 
       - name: Cache PlatformIO (framework, toolchain, libraries)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.platformio
           key: platformio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
@@ -55,7 +55,7 @@ jobs:
         run: pio run -e ${{ matrix.env }} || pio run -e ${{ matrix.env }}
 
       - name: Keep the firmware
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.env }}
           path: firmware/.pio/build/${{ matrix.env }}/firmware.bin
