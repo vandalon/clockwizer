@@ -5,7 +5,7 @@
 
 // What the football and the F1 tickers share for reading ESPN's feeds.
 
-// Feeds the HTTP stream to ArduinoJson without busy-waiting. Stream's own
+// Feeds the HTTP stream to the JSON reader (JsonScan) without busy-waiting. Stream's own
 // timed read spins while waiting for data, which starves the idle task on
 // core 0 and trips the task watchdog during a slow download.
 struct YieldingReader {

@@ -3,7 +3,6 @@
 #include "TeamColors.h"
 
 #include <algorithm>
-#include <ArduinoJson.h>
 #include "EspnParse.h"
 #include <Fonts/Picopixel.h>
 #include <HTTPClient.h>
@@ -164,7 +163,6 @@ void FootballTicker::begin(CWDateTime *dateTime, bool withRace, bool extras, uin
   _resultWindowSecs = resultWindowSecs;
   _dateTime = dateTime;
   loadConfig();
-  _doc = new DynamicJsonDocument(16384);  // a full Champions League evening needs ~7KB, a Formula 1 weekend ~10KB
   // Core 0, so fetching never stalls the display loop on core 1
   xTaskCreatePinnedToCore(task, "football", TASK_STACK_BYTES, this, 1, &_task, 0);
 }
@@ -172,13 +170,8 @@ void FootballTicker::begin(CWDateTime *dateTime, bool withRace, bool extras, uin
 // After an update check the task is gone (see task()): start it again once the update is over
 void FootballTicker::resume() {
   if (!_started || _task || firmwareUpdating) return;
-  _doc = new (std::nothrow) DynamicJsonDocument(16384);
-  if (!_doc || _doc->capacity() == 0) {
-    delete _doc;
-    _doc = nullptr;
-    return;  // the heap has not recovered yet: try again at the next frame
-  }
-  xTaskCreatePinnedToCore(task, "football", TASK_STACK_BYTES, this, 1, &_task, 0);
+  // No task when the heap has not recovered yet (the stack does not fit): try again at the next frame
+  if (xTaskCreatePinnedToCore(task, "football", TASK_STACK_BYTES, this, 1, &_task, 0) != pdPASS) _task = nullptr;
 }
 
 extern volatile bool liveEventOn;       // main.cpp: no automatic update while true
@@ -187,10 +180,8 @@ void FootballTicker::task(void *self) {
   FootballTicker *ticker = static_cast<FootballTicker *>(self);
   for (;;) {
     if (firmwareUpdating) {  // the update has the network and the heap to itself
-      // The TLS handshake needs big free blocks: hand back the parse buffer and the task stack.
+      // The TLS handshake needs big free blocks: hand back the task stack.
       // The scores stay in the ticker; resume() starts the task again after the update.
-      delete ticker->_doc;
-      ticker->_doc = nullptr;
       ticker->_fetching = false;
       ticker->_task = nullptr;
       vTaskDelete(nullptr);
@@ -843,7 +834,6 @@ bool FootballTicker::fetchScoreboard(const char *league, time_t localDay, const 
   return true;
 }
 
-// Downloads url into _doc, keeping only the fields in filter
 bool FootballTicker::updating() {
   return _fetching || (_fetchEnded && millis() - _fetchEnded < 1500);
 }
@@ -878,45 +868,6 @@ bool FootballTicker::getScanNow(const char *url, const std::function<bool(JsonSc
   if (!ok) logf("[Football] %s: cut off or not JSON after %u bytes (heap free %u, largest block %u)\n", url,
                 (unsigned)reader.count, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   return ok;
-}
-
-bool FootballTicker::getJson(const char *url, JsonDocument &filter) {
-  _fetching = true;
-  bool ok = getJsonNow(url, filter);
-  _fetching = false;
-  _fetchEnded = millis();
-  return ok;
-}
-
-bool FootballTicker::getJsonNow(const char *url, JsonDocument &filter) {
-  // Plain HTTP: public score data, and the ESP32's TLS client sometimes stalls
-  // after the first 16KB record of these ~50KB responses
-  WiFiClient client;
-  HTTPClient http;
-  http.useHTTP10(true);  // no chunked encoding, so the JSON can be streamed
-  http.setTimeout(10000);
-  if (!http.begin(client, url)) return false;
-
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) {
-    logf("[Football] %s: HTTP %d\n", url, code);
-    http.end();
-    return false;
-  }
-
-  YieldingReader reader(http.getStream(), 10000);
-  _doc->clear();
-  // ESPN nests deeper than ArduinoJson's default limit of 10, even in the skipped parts
-  DeserializationError err = deserializeJson(*_doc, reader, DeserializationOption::Filter(filter),
-                                             DeserializationOption::NestingLimit(20));
-  http.end();
-  _lastNoMemory = err == DeserializationError::NoMemory;
-  if (err) {
-    logf("[Football] %s: %s after %u bytes (heap free %u, largest block %u)\n", url, err.c_str(),
-                  reader.count, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    return false;
-  }
-  return true;
 }
 
 // Remembers when each match ended: when we first see it finished, or, if it
