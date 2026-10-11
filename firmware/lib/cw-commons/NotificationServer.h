@@ -22,7 +22,7 @@ public:
     void handle() {
         if (WiFi.status() != WL_CONNECTED) return;
         
-        WiFiClient client = server.available();
+        WiFiClient client = server.accept();
         if (client) {
             TelnetStream.println("[Notification] New client connected");
             
