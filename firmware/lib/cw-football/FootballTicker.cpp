@@ -401,29 +401,21 @@ unsigned long FootballTicker::refreshRace() {
 // flag, and the top three of every session that finished today. Returns how
 // long to wait before the next download.
 unsigned long FootballTicker::fetchRace() {
-  StaticJsonDocument<512> filter;
-  JsonObject competition = filter["events"][0]["competitions"].createNestedObject();
-  filter["events"][0]["id"] = true;
-  competition["id"] = true;
-  competition["type"]["abbreviation"] = true;
-  competition["date"] = true;
-  competition["status"]["type"]["state"] = true;
-  JsonObject driver = competition["competitors"].createNestedObject();
-  driver["order"] = true;
-  driver["athlete"]["shortName"] = true;
-
-  if (!getJson("http://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard", filter)) return RETRY_MS;
+  espn::Weekend weekend;
+  if (!getScan("http://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard",
+               [&](JsonScan::Next read, void *source) { return espn::parseRace(read, source, weekend); }))
+    return RETRY_MS;
 
   time_t nowUtc = cwt::now();
   time_t localNow = _dateTime->localNow();
   Race live;                  // the session being run
   std::vector<Race> results;  // the sessions finished today, in order
   time_t nextStart = 0;
-  String eventId = (*_doc)["events"][0]["id"] | "", liveId;
+  String eventId = weekend.eventId.c_str(), liveId;
 
-  for (JsonObject c : (*_doc)["events"][0]["competitions"].as<JsonArray>()) {
-    String state = c["status"]["type"]["state"] | "";
-    time_t date = parseEspnDate(c["date"] | "");
+  for (const espn::RaceSession &c : weekend.sessions) {
+    String state = c.state.c_str();
+    time_t date = parseEspnDate(c.date.c_str());
     if (state == "pre") {
       if (date > nowUtc && (nextStart == 0 || date < nextStart)) nextStart = date;
       continue;
@@ -434,16 +426,16 @@ unsigned long FootballTicker::fetchRace() {
 
     Race r;
     r.live = running;
-    String type = c["type"]["abbreviation"] | "";
+    String type = c.type.c_str();
     if (type.startsWith("FP")) r.tag = 'P';
     else if (type == "Qual" || type == "SS") r.tag = 'Q';  // SS: sprint qualifying
     else if (type == "SR") r.tag = 'S';
     for (int i = 0; i < 3; i++) r.color[i] = 0xFFFF;
-    for (JsonObject d : c["competitors"].as<JsonArray>()) {
-      int order = d["order"] | 0;
+    for (const espn::RaceDriver &d : c.drivers) {
+      int order = d.order;
       if (order < 1 || order > 3) continue;
       // "M. Verstappen" -> "VER", in the team's colour; unknown drivers white
-      String name = d["athlete"]["shortName"] | "";
+      String name = d.shortName.c_str();
       name = name.substring(name.lastIndexOf(' ') + 1, name.length());
       String code = name.substring(0, 3);
       code.toUpperCase();
@@ -455,7 +447,7 @@ unsigned long FootballTicker::fetchRace() {
     }
     if (running) {
       live = r;
-      liveId = c["id"] | "";
+      liveId = c.id.c_str();
     } else {
       results.push_back(r);
     }
@@ -467,10 +459,9 @@ unsigned long FootballTicker::fetchRace() {
     snprintf(url, sizeof(url),
              "http://sports.core.api.espn.com/v2/sports/racing/leagues/f1/events/%s/competitions/%s/status",
              eventId.c_str(), liveId.c_str());
-    StaticJsonDocument<64> flagFilter;
-    flagFilter["flag"] = true;
-    if (getJson(url, flagFilter)) {
-      String name = (*_doc)["flag"] | "";
+    std::string flag;
+    if (getScan(url, [&](JsonScan::Next read, void *source) { return espn::parseFlag(read, source, flag); })) {
+      String name = flag.c_str();
       name.toUpperCase();
       if (name.indexOf("RED") >= 0) live.flag = 'r';
       else if (name.indexOf("YELLOW") >= 0 || name.indexOf("SAFETY") >= 0 || name.indexOf("CAUTION") >= 0 ||

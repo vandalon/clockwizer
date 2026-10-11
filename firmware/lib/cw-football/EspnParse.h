@@ -24,4 +24,22 @@ bool parseNextMatch(JsonScan::Next next, void *source, NextMatch &out);
 typedef std::vector<std::vector<std::string>> Groups;
 bool parseStandings(JsonScan::Next next, void *source, Groups &out);
 
+// racing/f1/scoreboard: the Grand Prix weekend, its sessions in the order ESPN lists them
+struct RaceDriver {
+  int order = 0;          // the place in the session, 0 when not there
+  std::string shortName;  // "M. Verstappen"
+};
+struct RaceSession {
+  std::string id, type, date, state;  // type: "FP1", "Qual", "SR"...; state: "pre", "in" or "post"
+  std::vector<RaceDriver> drivers;
+};
+struct Weekend {
+  std::string eventId;
+  std::vector<RaceSession> sessions;
+};
+bool parseRace(JsonScan::Next next, void *source, Weekend &out);
+
+// racing/f1/events/<event>/competitions/<session>/status: the flag being shown ("Yellow"), "" when there is none
+bool parseFlag(JsonScan::Next next, void *source, std::string &flag);
+
 }  // namespace espn

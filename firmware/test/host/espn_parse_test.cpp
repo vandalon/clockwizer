@@ -89,6 +89,57 @@ static std::string mineStandings(const std::string &text) {
   return out;
 }
 
+// ---- racing/f1/scoreboard and the flag --------------------------------------------------------------------------
+static std::string oracleRace(const std::string &text) {
+  StaticJsonDocument<4096> filter;  // the firmware has 512 on a 32-bit chip: the 64-bit host needs more room for the same filter
+  JsonObject competition = filter["events"][0]["competitions"].createNestedObject();
+  filter["events"][0]["id"] = true;
+  competition["id"] = true;
+  competition["type"]["abbreviation"] = true;
+  competition["date"] = true;
+  competition["status"]["type"]["state"] = true;
+  JsonObject driver = competition["competitors"].createNestedObject();
+  driver["order"] = true;
+  driver["athlete"]["shortName"] = true;
+  DynamicJsonDocument doc(65536);
+  if (deserializeJson(doc, text, DeserializationOption::Filter(filter), DeserializationOption::NestingLimit(20))) return "ERROR";
+  std::string out = std::string("event=") + (const char *)(doc["events"][0]["id"] | "") + "\n";
+  for (JsonObject c : doc["events"][0]["competitions"].as<JsonArray>()) {
+    out += std::string("session id=") + (const char *)(c["id"] | "") + " type=" + (const char *)(c["type"]["abbreviation"] | "") +
+           " date=" + (const char *)(c["date"] | "") + " state=" + (const char *)(c["status"]["type"]["state"] | "") + "\n";
+    for (JsonObject d : c["competitors"].as<JsonArray>())
+      out += "  order=" + std::to_string((int)(d["order"] | 0)) + " name=" + (const char *)(d["athlete"]["shortName"] | "") + "\n";
+  }
+  return out;
+}
+
+static std::string mineRace(const std::string &text) {
+  Text t(text);
+  espn::Weekend w;
+  if (!espn::parseRace(Text::next, &t, w)) return "ERROR";
+  std::string out = "event=" + w.eventId + "\n";
+  for (auto &c : w.sessions) {
+    out += "session id=" + c.id + " type=" + c.type + " date=" + c.date + " state=" + c.state + "\n";
+    for (auto &d : c.drivers) out += "  order=" + std::to_string(d.order) + " name=" + d.shortName + "\n";
+  }
+  return out;
+}
+
+static std::string oracleFlag(const std::string &text) {
+  StaticJsonDocument<64> filter;
+  filter["flag"] = true;
+  StaticJsonDocument<256> doc;
+  if (deserializeJson(doc, text, DeserializationOption::Filter(filter), DeserializationOption::NestingLimit(20))) return "ERROR";
+  return std::string("flag=") + (const char *)(doc["flag"] | "");
+}
+
+static std::string mineFlag(const std::string &text) {
+  Text t(text);
+  std::string flag;
+  if (!espn::parseFlag(Text::next, &t, flag)) return "ERROR";
+  return "flag=" + flag;
+}
+
 static std::vector<std::string> files(const std::string &dir, const std::string &prefix) {
   std::vector<std::string> out;
   std::string cmd = "ls " + dir + " 2>/dev/null";
@@ -107,6 +158,8 @@ int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : "espn-samples";
   for (auto &f : files(dir, "team-")) { std::string t = slurp(f); same(f, oracleNextMatch(t), mineNextMatch(t)); }
   for (auto &f : files(dir, "standings-")) { std::string t = slurp(f); same(f, oracleStandings(t), mineStandings(t)); }
+  for (auto &f : files(dir, "f1-scoreboard")) { std::string t = slurp(f); same(f, oracleRace(t), mineRace(t)); }
+  for (auto &f : files(dir, "flag-")) { std::string t = slurp(f); same(f, oracleFlag(t), mineFlag(t)); }
   printf("%d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }
