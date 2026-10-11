@@ -1,0 +1,62 @@
+# Builds every clockface on each push and pull request. Build only: nothing is uploaded or published, and the
+# workflow uses no secrets (publishing to the update server and GitHub Pages stays with firmware/update-fw.sh).
+name: Build firmware
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false  # a broken face should not hide the others
+      matrix:
+        env:
+          - cw-cf-0x01  # Mario
+          - cw-cf-0x02  # Time in Words
+          - cw-cf-0x03  # World Map
+          - cw-cf-0x04  # Castlevania
+          - cw-cf-0x05  # Pacman
+          - cw-cf-0x06  # Pokemon
+          - cw-cf-0x08  # Tetris
+          - cw-cf-0x09  # Luigi
+          - cw-cf-0x0B  # Football
+          - cw-cf-0x0C  # Formula 1
+    steps:
+      - uses: actions/checkout@v4
+
+      # The first build unpacks about 3.5 GB of framework next to a temporary copy of it
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: pip install "platformio>=6.2"
+
+      - name: Cache PlatformIO (framework, toolchain, libraries)
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: platformio-${{ runner.os }}-
+
+      - name: Build ${{ matrix.env }}
+        working-directory: firmware
+        # The first build on a new platform folder sometimes fails once: run it again
+        run: pio run -e ${{ matrix.env }} || pio run -e ${{ matrix.env }}
+
+      - name: Keep the firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.env }}
+          path: firmware/.pio/build/${{ matrix.env }}/firmware.bin
+          retention-days: 14
