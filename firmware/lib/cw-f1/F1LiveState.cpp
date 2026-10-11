@@ -95,7 +95,7 @@ void F1LiveState::leaf(const char (*path)[JsonScan::KEY], int n, const char *val
       } else {
         // 1 clear, 2 yellow, 4 safety car, 5 red, 6 and 7 virtual safety car
         int status = atoi(value);
-        _flag = status == 5 ? 'r' : (status == 2 || status == 4 || status == 6 || status == 7) ? 'y' : 0;
+        _flag = status == 5 ? 'r' : status == 4 ? 's' : (status == 6 || status == 7) ? 'v' : status == 2 ? 'y' : 0;
       }
     } else if (!strcmp(key, "Remaining") && text) {  // the session clock: the time left at a moment, ticking or stopped
       int h = 0, m = 0, sec = 0;
@@ -112,9 +112,12 @@ void F1LiveState::leaf(const char (*path)[JsonScan::KEY], int n, const char *val
     if (rn == 3) {
       if (!strcmp(field, "Position")) d->position = atoi(value);
       else if (!strcmp(field, "InPit")) d->inPit = !strcmp(value, "true");
+      else if (!strcmp(field, "Status")) d->finished = atoi(value) == 1088;  // individual chequered flag, including lapped finishers
       else if (!text) return;
       else if (!strcmp(field, "GapToLeader")) setText(d->gap, sizeof(d->gap), value);
       else if (!strcmp(field, "TimeDiffToFastest")) setText(d->diff, sizeof(d->diff), value);
+    } else if (rn == 4 && text && !strcmp(field, "IntervalToPositionAhead") && !strcmp(r[3], "Value")) {
+      setText(d->interval, sizeof(d->interval), value);
     } else if (rn == 4 && text && !strcmp(field, "BestLapTime") && !strcmp(r[3], "Value")) {
       setText(d->best, sizeof(d->best), value);
     } else if (rn == 5 && text) {
@@ -177,8 +180,8 @@ uint32_t F1LiveState::displayHash() const {
     if (!d.number) continue;
     h = hashText(h, d.code);
     h = (h ^ d.position) * 16777619u;
-    h = (h ^ (d.inPit ? 1u : 0u)) * 16777619u;
-    h = hashText(hashText(hashText(h, d.gap), d.diff), d.best);
+    h = (h ^ (d.inPit ? 1u : 0u) ^ (d.finished ? 2u : 0u)) * 16777619u;
+    h = hashText(hashText(hashText(hashText(h, d.gap), d.interval), d.diff), d.best);
     for (int p = 0; p < 3; p++) h = hashText(hashText(h, d.bestQ[p]), d.diffQ[p]);
   }
   return (((h ^ _lap) * 16777619u ^ _totalLaps) * 16777619u ^ (uint32_t)_flag) * 16777619u ^ (uint32_t)_part ^ (_finished ? 0x80000000u : 0);
@@ -199,9 +202,9 @@ static long lapMs(const char *text) {
 
 static const unsigned long IMPROVED_MS = 6000;  // a better lap is marked this long
 
-int F1LiveState::top(char tag, Row *rows) const {
+int F1LiveState::top(char tag, Row *rows, bool intervals) const {
   int count = 0;
-  for (int i = 0; i < ROWS; i++) rows[i] = Row{"", 0xFFFF, "", false, false, false};
+  for (int i = 0; i < ROWS; i++) rows[i] = Row{"", 0xFFFF, "", false, false, false, false};
   const Driver *fastest = nullptr;  // a race: whoever has the best lap of all
   long fastestMs = 0;
   if (tag == 'R' || tag == 'S')
@@ -221,7 +224,7 @@ int F1LiveState::top(char tag, Row *rows) const {
     const char *text = "";
     bool leader = d.position == 1;
     if (tag == 'R' || tag == 'S') {
-      text = leader ? "LEAD" : d.gap;
+      text = leader ? "LEAD" : intervals && !_finished ? d.interval : d.gap;
     } else if (tag == 'P') {
       text = leader ? d.best : d.diff;
     } else {  // qualifying: the latest part that has a time
@@ -236,6 +239,7 @@ int F1LiveState::top(char tag, Row *rows) const {
       if (part >= 0 && d.bestQ[part][0]) text = leader ? d.bestQ[part] : d.diffQ[part];
     }
     row.pit = d.inPit;
+    row.finished = (tag == 'R' || tag == 'S') && d.finished;
     if (tag == 'Q' && d.improvedAt && (long)(millis() - d.improvedAt) < IMPROVED_MS && _part >= 1 && d.improvedPart == _part - 1) row.improved = true;
     strncpy(row.time, text, sizeof(row.time) - 1);
     row.time[sizeof(row.time) - 1] = 0;

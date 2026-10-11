@@ -20,6 +20,7 @@ class F1LiveState {
       bool fastest;  // a race: the driver with the fastest lap so far
       bool improved;  // qualifying: his own best lap of the part just got better
       bool pit;       // in the pit lane now
+      bool finished;  // the driver has taken the chequered flag
     };
 
     void reset();
@@ -32,13 +33,13 @@ class F1LiveState {
 
     // The first places. tag: 'R' race, 'S' sprint, 'P' practice, 'Q' qualifying. Returns how many rows are filled
     // (the highest place known, 0 when there are none yet).
-    int top(char tag, Row *rows) const;
+    int top(char tag, Row *rows, bool intervals = false) const;
 
     int lap() const { return _lap; }
     int totalLaps() const { return _totalLaps; }
     int part() const { return _part; }  // qualifying: which part, 0 when not known
     bool finished() const { return _finished; }  // the session's own status says it is over: the chequered flag is out
-    char flag() const { return _flag; }  // 'y' safety car or yellow flag, 'r' red flag, 0 clear
+    char flag() const { return _flag; }  // 'y' yellow, 's' safety car, 'v' virtual safety car, 'r' red, 0 clear
     bool hasOrder() const;
 
     // Seconds left of a practice or qualifying session, counted on from the last clock message; -1 when unknown
@@ -54,7 +55,8 @@ class F1LiveState {
       char code[4] = "";
       uint16_t color = 0xFFFF;
       uint8_t position = 0;
-      char gap[10] = "";   // race: gap to the leader
+      char gap[10] = "";   // race result: gap to the leader
+      char interval[10] = "";  // live race: interval to the car in the position immediately ahead
       char diff[10] = "";  // practice: gap to the fastest
       char best[10] = "";  // best lap
       char bestQ[3][10] = {"", "", ""};  // qualifying: best lap and gap to the fastest per part
@@ -62,6 +64,7 @@ class F1LiveState {
       unsigned long improvedAt = 0;  // millis() of the last better lap in qualifying, 0 = none
       uint8_t improvedPart = 0;
       bool inPit = false;
+      bool finished = false;
     };
 
     struct Feed;

@@ -16,8 +16,8 @@ extern std::mutex f1NetLock;
 extern std::atomic<bool> f1Park;
 extern std::atomic<bool> f1TaskUp;
 
-// Stops (true) or starts (false) mDNS, set by main.cpp: the live feed stops it when its connection doesn't fit otherwise
-extern void (*f1PauseMdns)(bool pause);
+// main.cpp counts failed allocations; its guard sheds optional services after a failure.
+extern std::atomic<uint32_t> memoryAllocationFailures;
 
 // Where the F1 code was last, kept in RTC memory: it survives a panic restart and is logged at the next boot
 extern char f1Phase[16];
@@ -35,7 +35,7 @@ class F1Live {
     bool fresh();
 
     // The first places with their times, when the feed is up to date. Returns false when it isn't.
-    bool get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &totalLaps, char &flag, bool &finished);
+    bool get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &totalLaps, char &flag, bool &finished, bool intervals = false);
 
     // Seconds left on the session clock, -1 when not known
     int clockSecs(long nowUtc);

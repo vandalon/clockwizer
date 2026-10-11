@@ -25,6 +25,7 @@ class F1Ticker {
     struct Row {
       char code[4] = "";  // "VER"
       uint16_t color = 0xFFFF;  // the team's colour
+      bool finished = false;   // live race: this driver has taken the chequered flag
       uint32_t athleteId = 0;   // ESPN's, for the times
       char time[9] = "";        // first place: the best lap or "LEAD"; others: the gap, "+.088" or "+12.3"
       bool fastest = false;     // a race: the fastest lap of all
@@ -37,7 +38,7 @@ class F1Ticker {
       bool live = false;
       char tag = 'R';         // 'P' practice, 'Q' qualifying, 'S' sprint race, 'R' race
       char name[8] = "";      // FP1, QUALI, SQ, SPRINT, RACE
-      char flag = 0;          // while live: 'y' safety car or yellow flag, 'r' red flag
+      char flag = 0;          // while live: 'y' yellow, 's' safety car, 'v' virtual safety car, 'r' red
       bool fromFeed = false;  // while live: the rows are from the live feed, so a row without a time has none yet
       bool finished = false;  // while live: the feed says the session is over (a race: the leader took the chequered flag)
       int period = 0;         // the lap, for races
@@ -81,7 +82,7 @@ class F1Ticker {
     };
 
     void begin(CWDateTime *dateTime);
-    void snapshot(Snapshot &out);
+    void snapshot(Snapshot &out, bool intervals = false);
     // Changes whenever a download changed anything
     uint32_t version();
     void resume();  // restarts the task after a firmware update; version() does it

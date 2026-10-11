@@ -23,8 +23,14 @@ static F1Ticker::Snapshot snap;
 static uint32_t snapVersion = 0;
 static bool snapKnown = false;
 static char lastKey[96];
+static const unsigned long LOADING_DOT_MS = 300;
+static bool loadingDotVisible(const char *at, const char *dots) {
+  if (!dots || at < dots || at >= dots + 3) return true;
+  return (unsigned long)(at - dots) <= (millis() / LOADING_DOT_MS) % 3;
+}
 static char lastRight[12];
 static unsigned long snapSecond = 0;
+static bool snapIntervals = false, showIntervals = false;
 
 static const int W = 64;
 // How long a page of the results (or, on 32 rows, a line of the rotating information) stays: the football setting
@@ -57,7 +63,6 @@ static const uint16_t NEW_TIME = rgb(80, 205, 255);  // its new start time
 static const uint16_t GOLD = rgb(255, 214, 0);
 static const uint16_t F1_RED = rgb(225, 6, 0);
 static const uint16_t LIVE_GREEN = rgb(60, 230, 90);
-static const uint16_t LIVE_GREEN_ON_YELLOW = rgb(0, 85, 20);
 static const uint16_t HEADER_NAVY = rgb(14, 22, MIN_LIT > 52 ? MIN_LIT : 52);  // the header bar: dark, with a small coloured tab on its left edge
 static const uint16_t TAB_QUIET = rgb(90, 110, 150);  // the tab when it is not a race or qualifying
 static const uint16_t RED_FLAG_BAR = rgb(150, 8, 6);
@@ -237,7 +242,9 @@ static void drawText(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16
 
 // The header's text, 6 rows high (y is the top row), same width as the small font
 static void drawHeaderText(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16_t color) {
+  const char *dots = strstr(s, "...");
   for (; *s; s++, x += 4) {
+    if (!loadingDotVisible(s, dots)) continue;
     const uint8_t *rows = glyph3x6(*s);
     if (!rows) continue;
     for (int j = 0; j < 6; j++)
@@ -260,7 +267,9 @@ static int timeWidth(const char *s) {
 }
 static void drawTimeRight(MatrixPanel_I2S_DMA *d, const char *s, int right, int y, uint16_t color) {
   int x = right - timeWidth(s);
+  const char *dots = strstr(s, "...");
   for (; *s; x += timeAdvance(*s), s++) {
+    if (!loadingDotVisible(s, dots)) continue;
     char one[2] = {*s, 0};
     drawText(d, one, *s == '.' || *s == ':' ? x - 1 : x, y, color);  // the dot is in the middle column of its cell
   }
@@ -383,13 +392,14 @@ static int headerTextWidth(const char *s) {
 }
 // pulseColon: the text is the time of day, whose colon breathes like the clock's, down to bg (the header's fill)
 static void drawHeaderMixed(MatrixPanel_I2S_DMA *d, const char *s, int x, int y, uint16_t color, bool pulseColon = false, uint16_t bg = 0) {
+  const char *dots = strstr(s, "...");
   for (; *s; s++) {
     char one[2] = {*s, 0};
     if (*s >= '0' && *s <= '9') {
       drawStretchedDigits(d, one, x, y, color);
       x += 5;
     } else {
-      drawNarrowText(d, one, x, y, pulseColon && *s == ':' ? pulsed(color, bg) : color);
+      if (loadingDotVisible(s, dots)) drawNarrowText(d, one, x, y, pulseColon && *s == ':' ? pulsed(color, bg) : color);
       x += headerTextWidth(one) + 1;
     }
   }
@@ -680,6 +690,11 @@ static const uint16_t IN_PIT = rgb(80, 200, 255);  // cyan: the driver is in the
 static const uint16_t FAV_IN_PIT = rgb(70, 120, 255);  // a favourite in the pit lane: a deeper blue than the others
 static bool tintKnockedOut = false;
 static bool loadingTimes = false;  // show an ellipsis in an empty time column while data is still pending
+static bool loadingDotsShown = false;
+static const char *loadingDots() {
+  loadingDotsShown = true;
+  return "...";  // measure all three dots; the text renderers animate visibility without changing width
+}
 static bool dimPlaces = false;  // the places shown are the ones kept in flash from before the boot: dimmed until new data is in
 static uint16_t placeInk(uint16_t c) { return dimPlaces ? scaleColor(c, 12) : c; }
 static bool showPit = true;  // off while the list of a finished part is drawn: everybody is in the pit lane  // set while the list after a qualifying part is drawn
@@ -702,8 +717,8 @@ static void drawPlace(MatrixPanel_I2S_DMA *d, int place, const F1Ticker::Row &ro
     d->drawFastHLine(27, top + dy, 3, color);
     d->drawFastHLine(26, top + 2 * dy, 5, color);
   }
-  if (!row.time[0] && loadingTimes) drawTimeRight(d, "...", W - 2, y, TIME_GREY);
-  else drawTimeRight(d, row.time, W - 2, y, placeInk(row.improved ? rgb(60, 230, 90) : place > 1 || !strcmp(row.time, "NO TIME") ? TIME_GREY : race ? MINUTES : FASTEST));  // green: a better lap just now
+  if (!row.time[0] && loadingTimes) drawTimeRight(d, loadingDots(), W - 2, y, TIME_GREY);
+  else drawTimeRight(d, row.time, W - 2, y, placeInk(race && row.finished ? MINUTES : row.improved ? rgb(60, 230, 90) : place > 1 || !strcmp(row.time, "NO TIME") ? TIME_GREY : race ? MINUTES : FASTEST));  // green: a better lap just now
 }
 
 // Who moved up or down at the last change of the order, and until when it is shown
@@ -784,12 +799,12 @@ static void liveRight(const F1Ticker::Session &s, char *right, size_t size, int 
   right[0] = 0;
   if (s.tag == 'R' || s.tag == 'S') {
     if (s.period > 0 && s.totalLaps > 0) snprintf(right, size, "L%d/%d", s.period, s.totalLaps);
-    else if (s.period > 0) snprintf(right, size, "L%d/...", s.period);
-    else strlcpy(right, "...", size);
+    else if (s.period > 0) snprintf(right, size, "L%d/%s", s.period, loadingDots());
+    else strlcpy(right, loadingDots(), size);
   } else if (clockZeroAt && millis() - clockZeroAt > OVER_MS) {
     snprintf(right, size, "%d:%02d", hour, minute);
   } else {
-    strlcpy(right, s.clock[0] ? s.clock : "...", size);
+    strlcpy(right, s.clock[0] ? s.clock : loadingDots(), size);
   }
 }
 
@@ -1097,12 +1112,17 @@ static int slideShift(const PageSlide &s, int total) { return slideActive(s) ? (
 static bool glideActive() { return glideToN && millis() - glideAt < GLIDE_MS + 60; }
 
 // The flag shown: a yellow one that is still out when the session is over (the leader has finished) is not shown
-static char shownFlag(const F1Ticker::Session &s) { return s.flag == 'y' && s.finished ? 0 : s.flag; }
+static char shownFlag(const F1Ticker::Session &s) { return s.finished && (s.flag == 'y' || s.flag == 's' || s.flag == 'v') ? 0 : s.flag; }
+
+static const char *liveLabel(const F1Ticker::Session &s) {
+  char flag = shownFlag(s);
+  return flag == 'r' ? "RED FLAG" : flag == 's' ? "SC" : flag == 'v' ? "VSC" : s.name;
+}
 
 static void liveColors(const F1Ticker::Session &s, uint16_t &fill, uint16_t &ink, uint16_t &tab) {
   tab = 0;
   char flag = shownFlag(s);
-  if (flag == 'y') { fill = GOLD; ink = BLACK; }
+  if (flag == 'y' || flag == 's' || flag == 'v') { fill = GOLD; ink = BLACK; }
   else if (flag == 'r') { fill = RED_FLAG_BAR; ink = WHITE; }
   else { fill = HEADER_NAVY; ink = WHITE; tab = s.tag == 'P' ? TAB_QUIET : F1_RED; }
 }
@@ -1145,11 +1165,27 @@ static bool anyFavourite(const F1Ticker::Session &s) {
 
 // Which places to show on `slots` lines: the top three, every favourite, then the places around the best placed
 // favourite (or just on from the top when there is none, or when that favourite is in the top three anyway).
+// A favourite outside the top nine is kept with its immediate neighbours, as a complete group.
 // Returns how many, in order, in `out`.
 static int pickPlaces(const F1Ticker::Session &s, int slots, int *out) {
   bool chosen[F1Ticker::ROWS] = {false};
   int n = shownRows(s), count = 0, best = -1;
-  auto take = [&](int i) { if (i >= 0 && i < n && !chosen[i] && count < slots) { chosen[i] = true; count++; } };
+  auto take = [&](int i) {
+    if (i < 0 || i >= n || chosen[i] || count >= slots) return;
+    int first = i, last = i;
+    if (i >= 9 && isFavourite(s.rows[i].code)) {
+      first = i - 1;
+      last = min(i + 1, n - 1);
+      // Adjacent favourites need their neighbours too; extend the group rather than cutting one off.
+      while (first >= 9 && isFavourite(s.rows[first].code)) first--;
+      while (last < n - 1 && isFavourite(s.rows[last].code)) last++;
+    }
+    int needed = 0;
+    for (int j = first; j <= last; j++) if (!chosen[j]) needed++;
+    if (count + needed > slots) return;
+    for (int j = first; j <= last; j++)
+      if (!chosen[j]) { chosen[j] = true; count++; }
+  };
   for (int i = 0; i < 3; i++) take(i);
   for (int i = 0; i < n; i++)
     if (isFavourite(s.rows[i].code)) {
@@ -1172,6 +1208,9 @@ static int pickPlaces(const F1Ticker::Session &s, int slots, int *out) {
 // A row of the live list as it is drawn: practice and qualifying say so when a driver has no time yet
 static F1Ticker::Row liveRow(const F1Ticker::Session &s, int i) {
   F1Ticker::Row row = s.rows[i];
+  row.finished = s.fromFeed && row.finished;  // cached rows cannot confirm an individual finish
+  if (i == 0 && s.live && !s.finished && (s.tag == 'R' || s.tag == 'S'))
+    strlcpy(row.time, showIntervals ? "INT" : "GAP", sizeof(row.time));
   bool answered = s.fromFeed || (!s.timeFails && s.rows[0].time[0]);  // the feed, or ESPN's download that went through
   if (answered && (s.tag == 'P' || s.tag == 'Q') && row.code[0] && !row.time[0]) strlcpy(row.time, "NO TIME", sizeof(row.time));
   return row;
@@ -1245,7 +1284,7 @@ static void drawLiveScroll(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, c
     if (flag) flagFill(d, 0, 8, W, TOP + 3 * 6 - 9);
     else drawLiveBackdrop(d, 8, TOP + 3 * 6 - 1);
   }
-  drawHeader(d, s.name, right, fill, ink, tab, rightInk, rightInk != 0, s.live ? (fill == GOLD ? LIVE_GREEN_ON_YELLOW : LIVE_GREEN) : 0);  // a right side in its own colour is the time of day
+  drawHeader(d, liveLabel(s), right, fill, ink, tab, rightInk, rightInk != 0, s.live && !shownFlag(s) ? LIVE_GREEN : 0);  // a right side in its own colour is the time of day
   drawWaitDot(d, s);
   for (int k = 0; k < 3; k++) drawPlace(d, k + 1, liveRow(s, k), TOP + k * 6, false, 0, isFavourite(s.rows[k].code));
   showPit = true;
@@ -1269,7 +1308,7 @@ static void drawLive(MatrixPanel_I2S_DMA *d, const F1Ticker::Session &s, int hou
     drawLiveScroll(d, s, right, fill, ink, tab, page, timeOfDay(s) ? MINUTES : 0);
     return;
   }
-  drawHeader(d, shownFlag(s) == 'r' ? "RED FLAG" : s.name, right, fill, ink, tab, 0, timeOfDay(s), s.live && shownFlag(s) != 'r' ? (fill == GOLD ? LIVE_GREEN_ON_YELLOW : LIVE_GREEN) : 0);
+  drawHeader(d, liveLabel(s), right, fill, ink, tab, 0, timeOfDay(s), s.live && !shownFlag(s) ? LIVE_GREEN : 0);
   drawWaitDot(d, s);
   bool flag = flagOn(s);
   if (flag) flagFill(d, 0, shortPanel() ? 8 : 9, W, shortPanel() ? 56 : 55);  // below the header
@@ -1716,7 +1755,7 @@ static void simSnapshot(F1Ticker::Snapshot &s) {
       s.weekend = true;
       simFill(s.live, "RACE", 'R', true);
       s.live.period = 32;
-      s.live.flag = simScenario == 4 ? 'y' : simScenario == 5 ? 'r' : 0;
+      s.live.flag = simScenario == 4 ? 's' : simScenario == 5 ? 'r' : 0;
       s.live.finished = (millis() / 7000) % 3 == 2;  // the chequered flag for the last seconds of each round
       break;
     case 6:
@@ -1853,13 +1892,15 @@ void Clockface::update() {
     syncingTime = false;
   }
   int hour = _dateTime->getHour(), minute = _dateTime->getMinute();
+  bool intervals = (millis() / pageMs()) % 2 != 0;  // alternate at the results-page setting
   uint32_t version = f1Ticker.version();
   if (simScenario) {
     simSnapshot(snap);
     snapVersion = version - 1;  // the real data comes back when the simulator stops
     version = 0x80000000UL + simScenario + ((millis() / 7000) % 3) * 16;  // the sim order changes every 7 s
-  } else if (!snapKnown || version != snapVersion || (snap.live.valid && millis() / 1000 != snapSecond)) {
-    f1Ticker.snapshot(snap);  // while live also every second, for the countdown
+  } else if (!snapKnown || version != snapVersion || intervals != snapIntervals || (snap.live.valid && millis() / 1000 != snapSecond)) {
+    f1Ticker.snapshot(snap, intervals);  // while live also every second, for the countdown
+    snapIntervals = intervals;
     snapVersion = version;
     snapKnown = true;
     snapSecond = millis() / 1000;
@@ -1937,6 +1978,7 @@ void Clockface::update() {
   } else {
     clockZeroAt = 0;
   }
+  showIntervals = view == LIVE && !snap.live.finished && (snap.live.tag == 'R' || snap.live.tag == 'S') && intervals;
   logShown((int)view, page);
   updateClockDigits(hour, minute);
   // Where the soft clock is: on the idle and result screens, and on the one of a delayed start. Its digits change on
@@ -1963,7 +2005,7 @@ void Clockface::update() {
   if (view == LIVE && timeOfDay(snap.live)) pulse = pulseLevel();  // the time of day's colon breathes
   if (view == LIVE || view == LIST || view == BETWEEN) marqueeMax = 0;  // only the idle screen has a scrolling text
   if (marqueeMax) pulse = pulse * 1000 + marqueeOffset(marqueeMax);  // and a scrolling name moves a pixel at a time
-  snprintf(key, sizeof(key), "%lu|%d|%d:%d|%d|%lx|%d|%d|%lu", (unsigned long)version, (int)view, tallClock ? 0 : hour, tallClock ? 0 : minute, page, (unsigned long)marks, rowPage, pulse, loadingCarsShown ? millis() / 40 : 0UL);
+  snprintf(key, sizeof(key), "%lu|%d|%d:%d|%d|%lx|%d|%d|%lu|%d", (unsigned long)version, (int)view, tallClock ? 0 : hour, tallClock ? 0 : minute, page, (unsigned long)marks, rowPage, pulse, loadingCarsShown ? millis() / 40 : loadingDotsShown ? (millis() / LOADING_DOT_MS) % 3 + 1 : 0UL, showIntervals);
   char right[12] = "";
   if (view == LIVE) liveRight(snap.live, right, sizeof(right), hour, minute);
   // Two buffers are drawn in turn and the one drawn on is the frame from two flips ago, so a change is never a patch on
@@ -1984,6 +2026,7 @@ void Clockface::update() {
   backdropShown = false;  // until the view draws it
   tileRows = 0;
   loadingCarsShown = false;
+  loadingDotsShown = false;
   switch (view) {
     case LIVE: drawLive(_display, snap.live, hour, minute, page); break;
     case LIST: drawResultList(_display, snap.last, hour, minute, page); break;

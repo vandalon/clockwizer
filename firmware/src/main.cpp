@@ -18,6 +18,7 @@
 #include <WiFiClientSecure.h>
 #include <Preferences.h>
 #include <esp_heap_caps.h>
+#include <atomic>
 #include <esp_ota_ops.h>
 #include "NotificationServer.h"
 #include "BackgroundWait.h"
@@ -53,6 +54,12 @@ bool updateInProgress = false;
 volatile bool liveEventOn = false;      // set by the football/F1 tickers while a match or session is live: no automatic update then
 volatile bool faceBootDone = false;     // set by a clockface once its downloads after the boot are done: the first update check waits for it
 volatile bool firmwareUpdating = false;  // from the start of a firmware update: the football downloads wait (FootballTicker)
+// The allocator callback runs on either core and must not allocate or log.
+std::atomic<uint32_t> memoryAllocationFailures{0};
+static void allocationFailed(size_t, uint32_t, const char *) {
+  memoryAllocationFailures.fetch_add(1, std::memory_order_relaxed);
+}
+
 bool logLDR = false;
 int64_t lastNow;
 int64_t ldrCheckDue = 0;
@@ -250,22 +257,16 @@ static void bootUpdateCheck();
 static bool inBootCheck = false;  // the check right after a restart: a failure there doesn't restart again
 static void crashGuard();
 
-#ifdef CW_F1  // the Formula 1 face: F1Live.cpp holds the definition
-extern void (*f1PauseMdns)(bool pause);
-#endif
-
 void setup()
 {
   Serial.begin(115200);
+  heap_caps_register_failed_alloc_callback(allocationFailed);
   pinMode(ESP32_LED_BUILTIN, INPUT);
   // Filled in by the update check's task while its stack holds the heap: reserved now, so they don't land
   // in the middle of the free heap and split it once the task is gone (String keeps a big enough buffer)
   md5Result.reserve(32);
   md5Failure.reserve(384);
   crashGuard();
-#ifdef CW_F1
-  f1PauseMdns = [](bool pause) { ClockwiseWebServer::getInstance()->pauseMdns(pause); };
-#endif
 
   ClockwiseParams::getInstance()->load();
 
@@ -888,35 +889,36 @@ static String crashCountText() {
   return String(", crash count ") + crashes + "/" + CRASH_LIMIT;
 }
 
-// Memory guard: when the clock is short of memory, whatever face it runs, the optional services give theirs back:
+// Memory guard: after an allocation fails, the optional services give their memory back:
 // first mDNS (the clock is then no longer found as clockwizer.local, the IP address keeps working), then the telnet log.
-// They start again when there has been room for a while. Two marks, so it does not flap. Data memory only: free heap
+// They start again when there has been room for a while. Free memory alone never triggers shedding. Data memory: free heap
 // and largest block as ESP reports them include 45 KB of instruction RAM that nothing can allocate data in.
-static const size_t GUARD_LOW_BLOCK = 16000, GUARD_LOW_FREE = 26000;   // below one of these: shed
 static const size_t GUARD_OK_BLOCK = 24000, GUARD_OK_FREE = 34000;    // above both for GUARD_OK_MS: start again
 static const unsigned long GUARD_OK_MS = 30000;
+static uint32_t guardHandledFailures = 0;
 static int guardShed = 0;  // 0 nothing stopped, 1 mDNS stopped, 2 mDNS and telnet stopped
 static unsigned long guardNextCheck = 0, guardOkSince = 0, guardNextLog = 0;
 
 static void memoryGuard(unsigned long now) {
   if ((long)(now - guardNextCheck) < 0) return;
-  guardNextCheck = now + 2000;
+  guardNextCheck = now + 500;
   size_t free8 = heap_caps_get_free_size(MALLOC_CAP_8BIT), block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  bool low = block < GUARD_LOW_BLOCK || free8 < GUARD_LOW_FREE;
+  uint32_t failures = memoryAllocationFailures.load(std::memory_order_relaxed);
+  bool failed = failures != guardHandledFailures;
   bool roomy = block > GUARD_OK_BLOCK && free8 > GUARD_OK_FREE;
   if ((long)(now - guardNextLog) >= 0) {  // a line a minute: the numbers to pick the marks from
     guardNextLog = now + 60000;
     Serial.printf("[Memory] data free %u, largest block %u, services stopped: %d\n", (unsigned)free8, (unsigned)block, guardShed);
   }
-  if (low) {
+  if (failed) {
+    guardHandledFailures = failures;
     guardOkSince = 0;
     if (guardShed < 2) {
       guardShed++;
       if (guardShed == 1) ClockwiseWebServer::getInstance()->shedMdns(true);
       else TelnetStream.stop();
-      Serial.printf("[Memory] low (data free %u, largest block %u): %s stopped\n", (unsigned)free8, (unsigned)block,
+      Serial.printf("[Memory] allocation failed (data free %u, largest block %u): %s stopped\n", (unsigned)free8, (unsigned)block,
                     guardShed == 1 ? "mDNS" : "telnet");
-      guardNextCheck = now + 5000;  // give the memory a moment to come back before stopping more
     }
   } else if (guardShed > 0 && roomy) {
     if (!guardOkSince) guardOkSince = now;

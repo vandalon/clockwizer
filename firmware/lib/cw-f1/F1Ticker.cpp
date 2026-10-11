@@ -95,7 +95,7 @@ static void keepTimes(F1Ticker::Session &now, const F1Ticker::Session &old) {
   }
 }
 
-void F1Ticker::snapshot(Snapshot &out) {
+void F1Ticker::snapshot(Snapshot &out, bool intervals) {
   {
     std::lock_guard<std::mutex> guard(_lock);
     out = _snap;
@@ -104,7 +104,7 @@ void F1Ticker::snapshot(Snapshot &out) {
   int count = 0, lap = 0, totalLaps = 0;
   char flag = 0;
   bool finished = false;
-  if (out.live.valid && _live.get(out.live.tag, rows, count, lap, totalLaps, flag, finished)) {
+  if (out.live.valid && _live.get(out.live.tag, rows, count, lap, totalLaps, flag, finished, intervals)) {
     for (int i = 0; i < ROWS; i++) {
       strlcpy(out.live.rows[i].code, rows[i].code, sizeof(out.live.rows[i].code));
       strlcpy(out.live.rows[i].time, rows[i].time, sizeof(out.live.rows[i].time));
@@ -117,7 +117,8 @@ void F1Ticker::snapshot(Snapshot &out) {
     out.live.totalLaps = totalLaps;
     out.live.flag = flag;
     out.live.finished = finished;
-    if (out.live.id) {  // remember it, for the next boot and for when the feed has nothing new
+    bool intervalView = intervals && !finished && (out.live.tag == 'R' || out.live.tag == 'S');
+    if (out.live.id && !intervalView) {  // save only gaps to leader, so cached and final results keep their meaning
       std::lock_guard<std::mutex> guard(_lock);
       if (_saved.id != out.live.id || memcmp(_saved.rows, out.live.rows, sizeof(_saved.rows)) != 0 || _saved.flag != flag) {
         _saved.id = out.live.id;
@@ -131,6 +132,7 @@ void F1Ticker::snapshot(Snapshot &out) {
     for (int i = 0; i < ROWS; i++) {  // after the saving: these come and go within seconds
       out.live.rows[i].improved = rows[i].improved;
       out.live.rows[i].pit = rows[i].pit;
+      out.live.rows[i].finished = rows[i].finished;
     }
     int part = _live.part();
     if (out.live.tag == 'Q' && part >= 1 && part <= 3) snprintf(out.live.name, sizeof(out.live.name), "%s%d", out.live.name[0] == 'S' ? "SQ" : "Q", part);
@@ -154,6 +156,11 @@ void F1Ticker::snapshot(Snapshot &out) {
           if (_saved.name[0]) strlcpy(session->name, _saved.name, sizeof(session->name));
         }
       }
+  }
+  if (intervals && out.live.valid && !out.live.finished && !out.live.fromFeed &&
+      (out.live.tag == 'R' || out.live.tag == 'S')) {
+    // The fallback and flash hold gaps to leader, not direct intervals. Wait for the feed's interval values.
+    for (int i = 1; i < ROWS; i++) out.live.rows[i].time[0] = 0;
   }
 }
 
@@ -520,7 +527,7 @@ unsigned long F1Ticker::fetchWeekend() {
   Snapshot &snap = scan.snap;
   snap.weekend = snap.live.valid || (weekendStart && nowUtc >= weekendStart && nowUtc <= weekendEnd + WEEKEND_TAIL_SECS);
 
-  // The flag is in the session's own status: a safety car shows as yellow, a red flag as red
+  // The flag is in the session's own status: keep safety car and virtual safety car distinct
   if (snap.live.valid && !eventId.isEmpty() && !liveId.isEmpty()) {
     char url[160];
     snprintf(url, sizeof(url),
@@ -533,8 +540,9 @@ unsigned long F1Ticker::fetchWeekend() {
       String name = flagText;
       name.toUpperCase();
       if (name.indexOf("RED") >= 0) snap.live.flag = 'r';
-      else if (name.indexOf("YELLOW") >= 0 || name.indexOf("SAFETY") >= 0 || name.indexOf("CAUTION") >= 0 ||
-               name == "SC" || name == "VSC") snap.live.flag = 'y';
+      else if (name == "VSC" || name.indexOf("VIRTUAL") >= 0) snap.live.flag = 'v';
+      else if (name == "SC" || name.indexOf("SAFETY") >= 0) snap.live.flag = 's';
+      else if (name.indexOf("YELLOW") >= 0 || name.indexOf("CAUTION") >= 0) snap.live.flag = 'y';
       f1log("[F1] flag: %s\n", name.c_str());
     }
   }
@@ -572,7 +580,7 @@ unsigned long F1Ticker::fetchWeekend() {
   if (snap.last.valid) {
     if (_lastTimed.valid && _lastTimed.id == snap.last.id) {
       snap.last = _lastTimed;
-    } else {
+    } else if (!snap.live.valid) {  // leave historical results downloads until the live session ends
       // Everyone: the result lists show them all. Practice and qualifying come in a few requests from OpenF1, the rest
       // (or when it has nothing yet) one request per driver from ESPN
       if (!((snap.last.tag == 'P' || snap.last.tag == 'Q') && fetchOpenF1(snap.last))) fetchTimes(snap.last, ROWS);
@@ -610,7 +618,7 @@ unsigned long F1Ticker::fetchWeekend() {
     bool race = snap.last.tag == 'R' || snap.last.tag == 'S';
     bool have = false;
     for (const Row &row : snap.last.rows) have = have || row.fastest;
-    if (race && !have && (_fastestId != snap.last.id || millis() - _fastestAt > 10 * 60 * 1000UL)) {
+    if (!snap.live.valid && race && !have && (_fastestId != snap.last.id || millis() - _fastestAt > 10 * 60 * 1000UL)) {
       _fastestId = snap.last.id;
       _fastestAt = millis();
       if (fetchFastest(snap.last) && _lastTimed.valid && _lastTimed.id == snap.last.id) _lastTimed = snap.last;
@@ -1077,17 +1085,12 @@ bool F1Ticker::getScan(const char *url, JsonScan::Leaf leaf, void *sink) {
   http.useHTTP10(true);  // no chunked encoding, so the JSON can be streamed
   http.setTimeout(10000);
   if (!http.begin(client, url)) return false;
+  uint32_t failures = memoryAllocationFailures.load(std::memory_order_relaxed);
   int code = http.GET();
-  bool mdnsOff = false;  // started again when this returns, as the live feed does
-  struct MdnsBack { bool &off; ~MdnsBack() { if (off && f1PauseMdns) f1PauseMdns(false); } } mdnsBack{mdnsOff};
-  if (code < 0 && secure) {  // no connection, mostly a handshake that ran out of memory: once more, with mDNS stopped for its memory
-    f1log("[F1] %s: HTTP %d, trying again without mDNS (largest block %u)\n", url, code, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  if (code < 0 && memoryAllocationFailures.load(std::memory_order_relaxed) != failures) {
+    f1log("[F1] allocation failed: trying again after the memory guard\n");
     http.end();
-    if (f1PauseMdns) {
-      f1PauseMdns(true);
-      mdnsOff = true;
-    }
-    vTaskDelay(pdMS_TO_TICKS(1000));  // its task frees its stack, the failed handshake its memory
+    vTaskDelay(pdMS_TO_TICKS(1000));
     if (!http.begin(client, url)) return false;
     code = http.GET();
   }

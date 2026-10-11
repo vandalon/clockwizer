@@ -10,7 +10,7 @@
 class JsonScan {
   public:
     static const int MAX_DEPTH = 10;  // deeper values are read over and not reported
-    static const int KEY = 20;
+    static const int KEY = 24;  // includes F1's IntervalToPositionAhead and its terminator
     static const int VALUE = 32;
 
     // The next character of the text, -1 at its end

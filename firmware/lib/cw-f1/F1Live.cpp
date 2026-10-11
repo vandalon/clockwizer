@@ -12,7 +12,6 @@ std::mutex f1TlsLock;
 std::mutex f1NetLock;
 std::atomic<bool> f1Park{false};
 std::atomic<bool> f1TaskUp{false};
-void (*f1PauseMdns)(bool pause) = nullptr;
 RTC_NOINIT_ATTR char f1Phase[16];
 
 static const char HOST[] = "livetiming.formula1.com";
@@ -26,12 +25,7 @@ static const unsigned long RETRY_MS = 15 * 1000UL;
 static size_t dataFree() { return heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 static size_t dataBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
 
-// A TLS handshake needs about 55 KB of data RAM when it starts (measured: it works with 64 KB and fails with 49 KB) and
-// the connection keeps about 45 KB. Below that the feed stays off rather than starve the clock: a failed handshake
-// fragments the heap and the other downloads fail too.
 static const uint32_t TASK_STACK = 7168;     // it uses 4.6 KB
-static const size_t TLS_MIN_FREE = 56000;
-static const size_t TLS_MIN_BLOCK = 17500;   // one of the connection's two 16 KB buffers
 static const size_t LOW_HEAP = 5000;         // data RAM under which a running connection is dropped
 static const char RS = 0x1E;  // SignalR ends every message with this
 
@@ -60,10 +54,10 @@ bool F1Live::fresh() {
   return _lastData && millis() - _lastData <= FRESH_MS && _state.hasOrder();
 }
 
-bool F1Live::get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &totalLaps, char &flag, bool &finished) {
+bool F1Live::get(char tag, F1LiveState::Row *rows, int &count, int &lap, int &totalLaps, char &flag, bool &finished, bool intervals) {
   std::lock_guard<std::mutex> guard(_lock);
   if (!_lastData || millis() - _lastData > FRESH_MS || !_state.hasOrder()) return false;
-  count = _state.top(tag, rows);
+  count = _state.top(tag, rows, intervals);
   lap = _state.lap();
   totalLaps = _state.totalLaps();
   flag = _state.flag();
@@ -269,37 +263,32 @@ struct WsStream {
 void F1Live::run() {
   char token[96], cookie[200];
   WiFiClientSecure client;
-  bool mdnsOff = false;
-  struct MdnsBack { bool &off; ~MdnsBack() { if (off && f1PauseMdns) { f1PauseMdns(false); liveLog("[F1 live] mDNS started again\n"); } } } mdnsBack{mdnsOff};
   {
     std::lock_guard<std::mutex> net(f1NetLock);  // the ticker is idle meanwhile: its downloads take heap the handshake needs
     f1Park = true;  // the ticker hands its stack back, see F1Live.h
     struct Unpark { ~Unpark() { f1Park = false; } } unpark;
     for (int i = 0; i < 30 && f1TaskUp; i++) vTaskDelay(pdMS_TO_TICKS(100));
     vTaskDelay(pdMS_TO_TICKS(300));  // the idle task frees a deleted task's memory
-    // A connection that fails for lack of memory is tried once more with mDNS stopped: its task and records cost several KB
+    // Try the connection first. Only a real allocation failure asks the guard to free services.
     for (int attempt = 0;; attempt++) {
+      uint32_t failures = memoryAllocationFailures.load(std::memory_order_relaxed);
       bool ok = false;
-      if (dataFree() < TLS_MIN_FREE || dataBlock() < TLS_MIN_BLOCK) {
-        liveLog("[F1 live] not enough memory to connect (heap free %u, largest block %u)\n", (unsigned)dataFree(), (unsigned)dataBlock());
-      } else {
-        std::lock_guard<std::mutex> tls(f1TlsLock);  // negotiate and connect each do a handshake, one after the other
+      {
+        std::lock_guard<std::mutex> tls(f1TlsLock);
         f1At("live negotiate");
         if (negotiate(token, sizeof(token), cookie, sizeof(cookie))) {
           f1At("live connect");
           client.setInsecure();
-          client.setTimeout(10000);  // Arduino 3 Stream timeouts are milliseconds: allow 10 seconds for the upgrade
+          client.setTimeout(10000);  // Arduino 3 Stream timeouts are milliseconds
           ok = client.connect(HOST, 443);
           if (!ok) liveLog("[F1 live] connect failed (heap free %u, largest block %u)\n", (unsigned)dataFree(), (unsigned)dataBlock());
         }
       }
       if (ok) break;
-      bool memory = dataFree() < TLS_MIN_FREE || dataBlock() < TLS_MIN_BLOCK;
-      if (attempt > 0 || !memory || !f1PauseMdns) return;
-      liveLog("[F1 live] short of memory: stopping mDNS and trying again\n");
-      f1PauseMdns(true);
-      mdnsOff = true;
-      vTaskDelay(pdMS_TO_TICKS(300));  // its task frees its stack
+      if (attempt > 0 || memoryAllocationFailures.load(std::memory_order_relaxed) == failures) return;
+      client.stop();
+      liveLog("[F1 live] allocation failed: trying again after the memory guard\n");
+      vTaskDelay(pdMS_TO_TICKS(1000));  // let the main loop shed services and their tasks release memory
     }
   }
 
