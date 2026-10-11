@@ -1,6 +1,5 @@
 #include "F1Live.h"
 
-#include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <TelnetStream.h>
 #include <WiFi.h>
@@ -119,15 +118,22 @@ bool F1Live::negotiate(char *token, size_t size, char *cookie, size_t cookieSize
   strlcpy(cookie, http.header("Set-Cookie").c_str(), cookieSize);
   char *end = strchr(cookie, ';');
   if (end) *end = 0;
-  StaticJsonDocument<32> filter;
-  filter["connectionToken"] = true;
-  StaticJsonDocument<192> doc;
-  DeserializationError err = deserializeJson(doc, http.getString(), DeserializationOption::Filter(filter));
+  String body = http.getString();
   http.end();
-  const char *value = doc["connectionToken"];
-  if (err || !value) return false;
-  strlcpy(token, value, size);
-  return true;
+  // {"negotiateVersion":1,"connectionId":"...","connectionToken":"...","availableTransports":[...]}: the token is
+  // longer than JsonScan keeps of a value, and the answer is short, so just cut it out
+  int at = body.indexOf("\"connectionToken\"");
+  if (at < 0) return false;
+  at = body.indexOf('"', at + 17);  // after the key and its colon: the value's opening quote
+  if (at < 0) return false;
+  size_t n = 0;
+  for (int i = at + 1; i < (int)body.length() && body[i] != '"'; i++) {
+    char c = body[i];
+    if (c == '\\' && i + 1 < (int)body.length()) c = body[++i];  // \/ and the like: the character itself
+    if (n + 1 < size) token[n++] = c;
+  }
+  token[n] = 0;
+  return n > 0;
 }
 
 // A WebSocket's messages as one stream of text: frames come and go underneath, a SignalR
